@@ -47,6 +47,9 @@ contract.
    an Ironic power command, Nova migration, Nova evacuation or VM state change.
 9. Secrets are not logged and are not embedded in generated patches or
    documentation.
+10. Every PowerOps action rejects callers whose authenticated Mistral project
+    name or user name is absent from the configured exact-match allowlists.
+    Empty allowlists deny all action execution.
 
 ## Component Responsibilities
 
@@ -128,6 +131,13 @@ Mistral owns planned operations only. It provides OpenStack actions and the
 - `power_ops.planned_power_off`;
 - `power_ops.planned_reboot`;
 - `power_ops.power_on_and_return`.
+
+Before reading or mutating infrastructure, every action checks the caller's
+`ActionContext.security.project_name` and `user_name` against exact configured
+allowlists. This check is implemented in action code because the actions use
+service credentials internally and therefore must not rely only on workbook
+visibility. Kolla defaults the allowlists to its administrative OpenStack
+identity, and operators may replace them with dedicated PowerOps identities.
 
 Each uninterrupted state transition invokes one composite PowerOps action.
 The action starts one `tooz` coordinator session, obtains the per-host
@@ -281,6 +291,7 @@ Kolla-Ansible exposes PowerOps variables for:
 - Ironic power timeout, polling interval and stable observation count;
 - evacuation pacing interval;
 - planned graceful-shutdown timeout and explicit hard-off policy;
+- exact allowed Mistral caller project and user names;
 - patched image repository and tag values;
 - workbook reconciliation and validation toggles.
 
