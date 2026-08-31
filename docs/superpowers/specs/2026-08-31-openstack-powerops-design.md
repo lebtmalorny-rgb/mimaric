@@ -129,19 +129,20 @@ Mistral owns planned operations only. It provides OpenStack actions and the
 - `power_ops.planned_reboot`;
 - `power_ops.power_on_and_return`.
 
-Each mutating workflow invokes one composite PowerOps action. The action starts
-one `tooz` coordinator session, obtains the per-host PowerOps lock before
-changing Nova, Masakari, VM or Ironic state, retains the lock through the
-entire internal state machine, then releases it and stops the coordinator.
-This is required because consecutive Mistral workflow tasks can run on
-different Executor processes and a `tooz` lock cannot be transferred safely
-between coordinator sessions. `evacuate` is not a valid planned instance
-policy.
+Each uninterrupted state transition invokes one composite PowerOps action.
+The action starts one `tooz` coordinator session, obtains the per-host
+PowerOps lock before changing Nova, Masakari, VM or Ironic state, retains the
+lock through its entire internal state machine, then releases it and stops the
+coordinator. This is required because consecutive Mistral workflow tasks can
+run on different Executor processes and a `tooz` lock cannot be transferred
+safely between coordinator sessions. A workflow may use a second composite
+action only after the first action has reached a documented safe state and
+released its lock. `evacuate` is not a valid planned instance policy.
 
 The workbook remains the stable operator-facing API and exposes workflow
-inputs, outputs and task status. Detailed internal transitions are recorded in
-structured action logs and audit events rather than represented as separate
-lock-owning workflow tasks.
+inputs, outputs and task status. Detailed uninterrupted transitions are
+recorded in structured action logs and audit events rather than represented as
+separate lock-owning workflow tasks.
 
 Supported instance policies are:
 
@@ -166,9 +167,18 @@ Graceful power-off is the default for planned operations. Escalation to hard
 power-off requires an explicit workflow input and occurs only after the
 graceful timeout.
 
-`power_on_and_return` also requires the explicit operator assertion
-`stale_domains_checked=true`. Mistral does not use SSH or `virsh` to make that
-physical-host safety decision on behalf of the operator.
+`power_on_and_return` has two safe phases. `power_on_for_inspection` powers on
+the host and waits for compute-service visibility while deliberately retaining
+Nova disabled and Masakari maintenance. The workflow then pauses before
+`return_to_service`. After checking the host, the operator resumes the
+workflow; `return_to_service` obtains a new per-host lock and requires the
+explicit assertion `stale_domains_checked=true` before enabling the scheduler.
+Mistral does not use SSH or `virsh` to make that physical-host safety decision
+on behalf of the operator.
+
+Planned reboot does not require a stale-domain assertion because no evacuated
+copy is created on another compute host. It still validates power and compute
+service health before restarting workflow-stopped instances and enabling Nova.
 
 ## Coordination Through etcd
 
@@ -220,7 +230,6 @@ acquire host lock
   -> power off and prove stable off
   -> power on and prove stable on
   -> wait for OS-facing Nova service health
-  -> require stale_domains_checked=true
   -> restart only workflow-stopped VMs sequentially
   -> Nova service enable
   -> Masakari maintenance=false
@@ -231,10 +240,15 @@ acquire host lock
 ### Power On and Return
 
 ```text
-acquire host lock
+acquire host lock for power_on_for_inspection
   -> Ironic power on
   -> prove stable on
   -> wait for Nova compute health
+  -> retain Nova disabled and Masakari maintenance
+  -> release lock
+  -> pause workflow for operator inspection
+  -> operator verifies stale domains and resumes workflow
+  -> acquire host lock for return_to_service
   -> require stale_domains_checked=true
   -> restart explicitly supplied VM UUIDs sequentially
   -> Nova service enable
@@ -286,10 +300,12 @@ revert.
 ### Mistral
 
 Unit tests prove action registration, host resolution, policy validation,
-single-session lock ownership across every composite operation, safe failure
+single-session lock ownership across every composite action, safe failure
 state, graceful-to-hard escalation rules, explicit restart manifests and
-sequential VM restart. Workbook contract tests prove that every mutating
-workflow has exactly one state-changing composite action task.
+sequential VM restart. Workbook contract tests prove that lock ownership is
+never transferred between tasks and that the two return actions are separated
+by an operator pause while Nova remains disabled and Masakari remains in
+maintenance.
 
 ### Kolla-Ansible
 
