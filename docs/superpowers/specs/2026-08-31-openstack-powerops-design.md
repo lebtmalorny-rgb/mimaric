@@ -129,9 +129,19 @@ Mistral owns planned operations only. It provides OpenStack actions and the
 - `power_ops.planned_reboot`;
 - `power_ops.power_on_and_return`.
 
-Every mutating workflow obtains the per-host PowerOps lock before changing
-Nova, Masakari, VM or Ironic state. `evacuate` is not a valid planned instance
+Each mutating workflow invokes one composite PowerOps action. The action starts
+one `tooz` coordinator session, obtains the per-host PowerOps lock before
+changing Nova, Masakari, VM or Ironic state, retains the lock through the
+entire internal state machine, then releases it and stops the coordinator.
+This is required because consecutive Mistral workflow tasks can run on
+different Executor processes and a `tooz` lock cannot be transferred safely
+between coordinator sessions. `evacuate` is not a valid planned instance
 policy.
+
+The workbook remains the stable operator-facing API and exposes workflow
+inputs, outputs and task status. Detailed internal transitions are recorded in
+structured action logs and audit events rather than represented as separate
+lock-owning workflow tasks.
 
 Supported instance policies are:
 
@@ -141,15 +151,16 @@ Supported instance policies are:
 - `stop`: stop instances in deterministic sequence and remember their UUIDs
   for controlled restart.
 
-`planned_power_off` returns the stopped-instance UUID list as workflow output.
-The later `power_on_and_return` workflow requires that list as explicit input
-when those instances must be restarted. It does not infer or start every
-SHUTOFF instance on the host.
+The composite `planned_power_off` action returns the stopped-instance UUID list
+as workflow output. The later `power_on_and_return` workflow requires that
+list as explicit input when those instances must be restarted. It does not
+infer or start every SHUTOFF instance on the host.
 
-`planned_reboot` retains the stopped-instance list inside the same execution
-and restarts only those instances, sequentially, after the compute services
-are healthy. It uses controlled `power off`, verified stable off, then
-`power on`; a single opaque reboot operation is not used.
+The composite `planned_reboot` action retains the stopped-instance list inside
+the same action execution and restarts only those instances, sequentially,
+after the compute services are healthy. It uses controlled `power off`,
+verified stable off, then `power on`; a single opaque reboot operation is not
+used.
 
 Graceful power-off is the default for planned operations. Escalation to hard
 power-off requires an explicit workflow input and occurs only after the
@@ -180,7 +191,7 @@ The global lock covers Nova's evacuation request, its completion check and the
 configured pacing delay. Consequently two engines cannot overlap VM recovery,
 even when different compute hosts fail at the same time.
 
-## Planned Workflow State Transitions
+## Planned Composite Action State Transitions
 
 ### Planned Power Off
 
@@ -275,8 +286,10 @@ revert.
 ### Mistral
 
 Unit tests prove action registration, host resolution, policy validation,
-owner-safe locks, safe failure state, graceful-to-hard escalation rules,
-explicit restart manifests and sequential VM restart.
+single-session lock ownership across every composite operation, safe failure
+state, graceful-to-hard escalation rules, explicit restart manifests and
+sequential VM restart. Workbook contract tests prove that every mutating
+workflow has exactly one state-changing composite action task.
 
 ### Kolla-Ansible
 
