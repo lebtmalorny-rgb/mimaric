@@ -1,0 +1,327 @@
+# OpenStack PowerOps Design
+
+## Purpose
+
+Implement safe physical power control and host fencing for OpenStack Epoxy
+2025.1 using three independent patch series for Kolla-Ansible, Masakari and
+Mistral.
+
+The implementation covers planned power operations through Mistral and
+emergency fencing and evacuation through Masakari. Ironic remains a
+power-only registry and backend for the existing Nova compute hosts.
+
+## Source Baselines and Deliverables
+
+- Kolla-Ansible starts from
+  `kolla-ansible-enroll-ironic-patch-3.zip`, SHA-256
+  `df27628ce641fefee30114ebeb3651490655aacb0930ad5bc30a298c88c3e08d`.
+- Masakari starts from the vanilla `stable/2025.1` branch.
+- Mistral starts from the vanilla `stable/2025.1` branch.
+- Each source tree has its own numbered Git commits and `git format-patch`
+  output.
+- `docs/powerops/POWEROPS-ARCHITECTURE.md` is the Russian operator-facing
+  description of component interaction, workflows, failure states,
+  configuration and verification.
+
+The Kolla baseline first receives a hygiene commit that removes rejected and
+backup artifacts from the deliverable and restores secret-safe Ansible
+logging. This commit does not change the existing power-only enrollment
+contract.
+
+## Safety Invariants
+
+1. `Nova hostname`, `Masakari host.name` and `Ironic Node.name` are exactly
+   equal after canonical validation. Aliases and fuzzy matches are rejected.
+2. One and only one Ironic Node must match a compute host.
+3. Ironic Nodes remain in `manageable` state with `network_interface=noop`.
+   PowerOps never provisions, cleans, inspects or moves them to `available`.
+4. Emergency evacuation cannot begin until physical `power off` has been
+   observed repeatedly and no conflicting target power state or `last_error`
+   exists.
+5. Failure to resolve a host, acquire required coordination, contact Ironic,
+   or prove a stable power state is fail-closed.
+6. TaskFlow revert logic never powers on a fenced host.
+7. Planned-operation failure leaves the Nova compute service disabled and the
+   Masakari host in maintenance.
+8. Deployment and reconfiguration register code and workflows but never issue
+   an Ironic power command, Nova migration, Nova evacuation or VM state change.
+9. Secrets are not logged and are not embedded in generated patches or
+   documentation.
+
+## Component Responsibilities
+
+### Kolla-Ansible
+
+Kolla-Ansible deploys patched Masakari and Mistral images, renders their
+PowerOps configuration, validates prerequisites and reconciles the Mistral
+action catalogue and workbook.
+
+Deployment uses explicit image repository and tag variables for the patched
+Masakari Engine and Mistral API, Engine and Executor images. Image building and
+registry publication remain separate, operator-controlled steps.
+
+The deploy/reconfigure path is idempotent:
+
+1. validate that Ironic, Masakari, Mistral and the selected etcd coordination
+   endpoint are configured;
+2. render Masakari and Mistral PowerOps options;
+3. start or reconfigure service containers using patched images;
+4. verify the expected Python entry points inside the relevant containers;
+5. run `mistral-db-manage populate` to reconcile custom actions;
+6. create or update the `power_ops` workbook through the Mistral API;
+7. verify all expected action and workflow names.
+
+No custom Horizon code is added. When the vanilla Mistral dashboard is
+enabled, operators can discover and start the registered workflows there; the
+same workflows remain callable through the Mistral API and CLI.
+
+### Masakari
+
+Masakari owns the emergency path. A custom TaskFlow task performs Ironic
+fencing directly, without calling Mistral. The recovery chain is:
+
+```text
+disable_compute_service_task
+  -> ironic_fence
+  -> prepare_HA_enabled_instances_task
+  -> evacuate_instances_task
+```
+
+The reserved-host flow retains the upstream reserved-host preparation and
+retry semantics; fencing is inserted before its existing prepare/evacuate
+sequence rather than moving those tasks between phases.
+
+The fence task:
+
+1. runs only while the enclosing host-failure flow owns the per-host PowerOps
+   coordination lock;
+2. resolves exactly one Ironic Node by the canonical host name;
+3. rejects a non-empty `last_error` or a target state that conflicts with
+   `power off`;
+4. requests hard `power off` when the node is not already stably off;
+5. waits for a configurable number of consecutive `power off` observations;
+6. raises a fatal TaskFlow error when any invariant is not met.
+
+The enclosing emergency recovery obtains the per-host lock before disabling
+Nova and retains it until the TaskFlow has terminated after evacuation or
+failure. This prevents a concurrent planned workflow from powering on the
+source host while evacuation is still running. Normal completion releases the
+lock explicitly; coordinator loss relies on the backend session or lease
+cleanup.
+
+The evacuation implementation sorts instance move records deterministically
+and serializes the complete recovery of each VM across the cluster. For every
+VM it acquires the global evacuation lock, calls Nova evacuation, waits for
+the upstream confirmation condition, holds a configurable pacing interval,
+then releases the lock. A VM that was not running before failure is not
+forcibly started merely to satisfy serialization.
+
+If a VM evacuation fails, Masakari records the failure using its existing
+recovery semantics and does not start the next VM in that host workflow.
+
+### Mistral
+
+Mistral owns planned operations only. It provides OpenStack actions and the
+`power_ops` workbook with these workflows:
+
+- `power_ops.host_power_status`;
+- `power_ops.planned_power_off`;
+- `power_ops.planned_reboot`;
+- `power_ops.power_on_and_return`.
+
+Every mutating workflow obtains the per-host PowerOps lock before changing
+Nova, Masakari, VM or Ironic state. `evacuate` is not a valid planned instance
+policy.
+
+Supported instance policies are:
+
+- `require_empty`: fail unless the host contains no instances;
+- `live_migrate`: live-migrate instances in deterministic sequence and wait
+  for each migration before continuing;
+- `stop`: stop instances in deterministic sequence and remember their UUIDs
+  for controlled restart.
+
+`planned_power_off` returns the stopped-instance UUID list as workflow output.
+The later `power_on_and_return` workflow requires that list as explicit input
+when those instances must be restarted. It does not infer or start every
+SHUTOFF instance on the host.
+
+`planned_reboot` retains the stopped-instance list inside the same execution
+and restarts only those instances, sequentially, after the compute services
+are healthy. It uses controlled `power off`, verified stable off, then
+`power on`; a single opaque reboot operation is not used.
+
+Graceful power-off is the default for planned operations. Escalation to hard
+power-off requires an explicit workflow input and occurs only after the
+graceful timeout.
+
+`power_on_and_return` also requires the explicit operator assertion
+`stale_domains_checked=true`. Mistral does not use SSH or `virsh` to make that
+physical-host safety decision on behalf of the operator.
+
+## Coordination Through etcd
+
+Both Masakari and Mistral use `tooz` with an etcd-backed coordination URL.
+Neither project contains a direct etcd client implementation.
+
+Two lock namespaces are mandatory:
+
+- `powerops/host/<host>` serializes all mutating operations for one physical
+  compute host;
+- `powerops/evacuation/global` serializes VM recovery across all Masakari
+  Engine processes and simultaneous host-failure notifications.
+
+Coordinator heartbeats run for the lifetime of an operation. Lock acquisition
+has a bounded timeout. Coordinator startup, heartbeat or lock-acquisition
+failure prevents the protected state transition. Driver-specific lease and
+session cleanup prevents a dead process from owning a lock forever.
+
+The global lock covers Nova's evacuation request, its completion check and the
+configured pacing delay. Consequently two engines cannot overlap VM recovery,
+even when different compute hosts fail at the same time.
+
+## Planned Workflow State Transitions
+
+### Planned Power Off
+
+```text
+acquire host lock
+  -> Masakari maintenance=true
+  -> Nova service disable
+  -> apply instance policy
+  -> assert host safe for power-off
+  -> Ironic graceful power-off
+  -> optional explicit hard-off escalation after timeout
+  -> prove stable power off
+  -> audit
+  -> release lock
+```
+
+Success leaves Nova disabled and Masakari maintenance enabled.
+
+### Planned Reboot
+
+```text
+acquire host lock
+  -> Masakari maintenance=true
+  -> Nova service disable
+  -> apply instance policy
+  -> power off and prove stable off
+  -> power on and prove stable on
+  -> wait for OS-facing Nova service health
+  -> require stale_domains_checked=true
+  -> restart only workflow-stopped VMs sequentially
+  -> Nova service enable
+  -> Masakari maintenance=false
+  -> audit
+  -> release lock
+```
+
+### Power On and Return
+
+```text
+acquire host lock
+  -> Ironic power on
+  -> prove stable on
+  -> wait for Nova compute health
+  -> require stale_domains_checked=true
+  -> restart explicitly supplied VM UUIDs sequentially
+  -> Nova service enable
+  -> Masakari maintenance=false
+  -> audit
+  -> release lock
+```
+
+## Failure Handling
+
+- Errors before Nova disable leave the original scheduler state unchanged.
+- Errors after Nova disable call a fail-safe action that reasserts Nova
+  disabled and Masakari maintenance enabled.
+- A lock is released only by the execution that owns it.
+- Failure to write a success audit record is treated as workflow failure and
+  retains the fail-safe host state.
+- Conflicting Ironic `target_power_state`, a non-empty `last_error`, timeout,
+  duplicate node match or unknown power state is a hard failure.
+- Emergency fencing failures stop TaskFlow before instance preparation and
+  evacuation.
+- Emergency evacuation failures do not power on the source host.
+
+## Configuration Contract
+
+Kolla-Ansible exposes PowerOps variables for:
+
+- enabling PowerOps integration;
+- the `tooz` etcd coordination URL and TLS material paths;
+- host-lock and global-lock acquisition timeouts;
+- Ironic power timeout, polling interval and stable observation count;
+- evacuation pacing interval;
+- planned graceful-shutdown timeout and explicit hard-off policy;
+- patched image repository and tag values;
+- workbook reconciliation and validation toggles.
+
+Secret-bearing values use Kolla passwords or protected configuration files and
+are marked `no_log`. Defaults never contain deployment addresses, passwords or
+certificates.
+
+## Testing and Verification
+
+### Masakari
+
+Unit tests prove exact-node resolution, fencing order, conflicting-target
+rejection, stable-off observation, fail-closed coordination, deterministic VM
+ordering, cluster-wide lock coverage, pacing and no automatic power-on during
+revert.
+
+### Mistral
+
+Unit tests prove action registration, host resolution, policy validation,
+owner-safe locks, safe failure state, graceful-to-hard escalation rules,
+explicit restart manifests and sequential VM restart.
+
+### Kolla-Ansible
+
+Contract and Ansible tests prove baseline hygiene, secret-safe logging,
+configuration rendering, correct image placement, entry-point verification,
+action population, idempotent workbook create/update and absence of power
+actions during deploy/reconfigure.
+
+### Cross-Repository
+
+Contract tests compare the configured TaskFlow names, Mistral entry-point
+names, workbook action references and Kolla validation expectations. Every
+generated patch series is checked by applying it to a clean copy of its
+declared baseline and running the relevant test suite.
+
+Static and unit verification is reported separately from live proof. Container
+build, image push, cloud deployment, BMC commands and real evacuation require
+separate operator authorization and are not implied by passing local tests.
+
+## Documentation
+
+`docs/powerops/POWEROPS-ARCHITECTURE.md` is written in Russian and contains:
+
+- component roles and interaction diagrams in text;
+- planned power-off, planned reboot, power-on/return and emergency fencing
+  scenarios;
+- etcd lock names, scope and failure behavior;
+- VM policy and sequential-recovery rules;
+- deploy/reconfigure behavior;
+- safe operator checks and recovery states;
+- explicit static-versus-live verification boundaries.
+
+## Non-Goals
+
+- automatic power-on or repair of an emergency-fenced host;
+- planned evacuation as a Mistral policy;
+- Ironic provisioning, cleaning, inspection or PXE services;
+- a new custom Horizon plugin;
+- automatic SSH or libvirt stale-domain inspection;
+- image publication, live deployment or physical BMC testing without separate
+  authorization.
+
+## Acceptance Criteria
+
+The implementation is accepted when all three patch series apply cleanly to
+their declared baselines, all repository and cross-contract tests pass, the
+Russian architecture document matches the implemented behavior, and no live
+infrastructure action has been performed implicitly.
