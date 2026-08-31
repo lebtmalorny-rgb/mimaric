@@ -1,0 +1,447 @@
+From 8b19414f9b6f7db2817e2eae3720f90cab4571d4 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Mon, 31 Aug 2026 22:01:32 +0300
+Subject: [PATCH 05/10] feat: lock complete Masakari host recovery
+
+---
+ masakari/engine/drivers/taskflow/driver.py    | 101 +++++++++++----
+ .../engine/drivers/taskflow/host_failure.py   |  27 ++--
+ .../drivers/taskflow/test_taskflow_driver.py  | 116 ++++++++++++++++--
+ 3 files changed, 203 insertions(+), 41 deletions(-)
+
+diff --git a/masakari/engine/drivers/taskflow/driver.py b/masakari/engine/drivers/taskflow/driver.py
+index 618a9d9..2488578 100644
+--- a/masakari/engine/drivers/taskflow/driver.py
++++ b/masakari/engine/drivers/taskflow/driver.py
+@@ -37,6 +37,7 @@ from masakari import exception
+ from masakari.i18n import _
+ from masakari import objects
+ from masakari.objects import fields
++from masakari.powerops import coordination as powerops_coordination
+ 
+ 
+ CONF = masakari.conf.CONF
+@@ -49,9 +50,12 @@ class TaskFlowDriver(driver.NotificationDriver):
+     def __init__(self):
+         super(TaskFlowDriver, self).__init__()
+ 
+-    def _execute_auto_workflow(self, context, novaclient, process_what):
++    def _execute_auto_workflow(self, context, novaclient, process_what,
++                               powerops_coordinator=None):
+         flow_engine = host_failure.get_auto_flow(context, novaclient,
+-                                                 process_what)
++                                                 process_what,
++                                                 powerops_coordinator=(
++                                                     powerops_coordinator))
+ 
+         # Attaching this listener will capture all of the notifications
+         # that taskflow sends out and redirect them to a more useful
+@@ -60,7 +64,7 @@ class TaskFlowDriver(driver.NotificationDriver):
+             flow_engine.run()
+ 
+     def _execute_rh_workflow(self, context, novaclient, process_what,
+-                             **kwargs):
++                             powerops_coordinator=None, **kwargs):
+         if not kwargs['reserved_host_list']:
+             msg = _('No reserved_hosts available for evacuation.')
+             raise exception.ReservedHostsUnavailable(message=msg)
+@@ -68,6 +72,8 @@ class TaskFlowDriver(driver.NotificationDriver):
+         process_what['reserved_host_list'] = kwargs.pop('reserved_host_list')
+         flow_engine = host_failure.get_rh_flow(context, novaclient,
+                                                process_what,
++                                               powerops_coordinator=(
++                                                   powerops_coordinator),
+                                                **kwargs)
+ 
+         with base.DynamicLogListener(flow_engine, logger=LOG):
+@@ -77,9 +83,13 @@ class TaskFlowDriver(driver.NotificationDriver):
+                 raise exception.HostRecoveryFailureException(ex.message)
+ 
+     def _execute_auto_priority_workflow(self, context, novaclient,
+-                                        process_what, **kwargs):
++                                        process_what,
++                                        powerops_coordinator=None,
++                                        **kwargs):
+         try:
+-            self._execute_auto_workflow(context, novaclient, process_what)
++            self._execute_auto_workflow(
++                context, novaclient, process_what,
++                powerops_coordinator=powerops_coordinator)
+         except Exception as ex:
+             with excutils.save_and_reraise_exception(reraise=False) as ctxt:
+                 if isinstance(ex, exception.SkipHostRecoveryException):
+@@ -100,12 +110,16 @@ class TaskFlowDriver(driver.NotificationDriver):
+                 })
+                 self._execute_rh_workflow(context,
+                                           novaclient, process_what,
++                                          powerops_coordinator=(
++                                              powerops_coordinator),
+                                           **kwargs)
+ 
+     def _execute_rh_priority_workflow(self, context, novaclient, process_what,
+-                                      **kwargs):
++                                      powerops_coordinator=None, **kwargs):
+         try:
+             self._execute_rh_workflow(context, novaclient, process_what,
++                                      powerops_coordinator=(
++                                          powerops_coordinator),
+                                       **kwargs)
+         except Exception as ex:
+             with excutils.save_and_reraise_exception(reraise=False) as ctxt:
+@@ -125,32 +139,69 @@ class TaskFlowDriver(driver.NotificationDriver):
+                         fields.FailoverSegmentRecoveryMethod.RESERVED_HOST,
+                     'auto': fields.FailoverSegmentRecoveryMethod.AUTO
+                 })
+-                self._execute_auto_workflow(context, novaclient, process_what)
++                self._execute_auto_workflow(
++                    context, novaclient, process_what,
++                    powerops_coordinator=powerops_coordinator)
+ 
+-    def execute_host_failure(self, context, host_name, recovery_method,
+-                             notification_uuid, **kwargs):
++    def _dispatch_host_failure(self, context, host_name, recovery_method,
++                               notification_uuid,
++                               powerops_coordinator=None, **kwargs):
+         novaclient = nova.API()
+-        # get flow for host failure
+         process_what = {
+             'host_name': host_name,
+-            'notification_uuid': notification_uuid
++            'notification_uuid': notification_uuid,
+         }
++        if recovery_method == fields.FailoverSegmentRecoveryMethod.AUTO:
++            return self._execute_auto_workflow(
++                context, novaclient, process_what,
++                powerops_coordinator=powerops_coordinator,
++            )
++        if recovery_method == (
++                fields.FailoverSegmentRecoveryMethod.RESERVED_HOST):
++            return self._execute_rh_workflow(
++                context, novaclient, process_what,
++                powerops_coordinator=powerops_coordinator,
++                **kwargs
++            )
++        if recovery_method == (
++                fields.FailoverSegmentRecoveryMethod.AUTO_PRIORITY):
++            return self._execute_auto_priority_workflow(
++                context, novaclient, process_what,
++                powerops_coordinator=powerops_coordinator,
++                **kwargs
++            )
++        return self._execute_rh_priority_workflow(
++            context, novaclient, process_what,
++            powerops_coordinator=powerops_coordinator,
++            **kwargs
++        )
+ 
++    def execute_host_failure(self, context, host_name, recovery_method,
++                             notification_uuid, **kwargs):
+         try:
+-            if recovery_method == fields.FailoverSegmentRecoveryMethod.AUTO:
+-                self._execute_auto_workflow(context, novaclient, process_what)
+-            elif recovery_method == (
+-                    fields.FailoverSegmentRecoveryMethod.RESERVED_HOST):
+-                self._execute_rh_workflow(context, novaclient, process_what,
+-                                          **kwargs)
+-            elif recovery_method == (
+-                    fields.FailoverSegmentRecoveryMethod.AUTO_PRIORITY):
+-                self._execute_auto_priority_workflow(
+-                    context, novaclient,
+-                    process_what, **kwargs)
+-            else:
+-                self._execute_rh_priority_workflow(context, novaclient,
+-                                                   process_what, **kwargs)
++            if not CONF.powerops.enabled:
++                return self._dispatch_host_failure(
++                    context, host_name, recovery_method, notification_uuid,
++                    None, **kwargs
++                )
++
++            flow_started = False
++            try:
++                with powerops_coordination.PowerOpsCoordinator(
++                        notification_uuid) as coord:
++                    with coord.lock(
++                            powerops_coordination.host_lock_name(host_name),
++                            CONF.powerops.host_lock_timeout):
++                        flow_started = True
++                        return self._dispatch_host_failure(
++                            context, host_name, recovery_method,
++                            notification_uuid, coord, **kwargs
++                        )
++            except Exception as exc:
++                if not flow_started:
++                    raise exception.HostRecoveryFailureException(
++                        message=str(exc))
++                raise
+         except Exception as exc:
+             with excutils.save_and_reraise_exception(reraise=False) as ctxt:
+                 if isinstance(exc, (exception.SkipHostRecoveryException,
+diff --git a/masakari/engine/drivers/taskflow/host_failure.py b/masakari/engine/drivers/taskflow/host_failure.py
+index a35aa60..22d6997 100644
+--- a/masakari/engine/drivers/taskflow/host_failure.py
++++ b/masakari/engine/drivers/taskflow/host_failure.py
+@@ -440,7 +440,8 @@ class EvacuateInstancesTask(base.MasakariTask):
+             _do_evacuate(self.context, host_name)
+ 
+ 
+-def get_auto_flow(context, novaclient, process_what):
++def get_auto_flow(context, novaclient, process_what,
++                  powerops_coordinator=None):
+     """Constructs and returns the engine entrypoint flow.
+ 
+     This flow will do the following:
+@@ -459,19 +460,25 @@ def get_auto_flow(context, novaclient, process_what):
+     auto_evacuate_flow_pre = linear_flow.Flow('pre_tasks')
+     for plugin in base.get_recovery_flow(task_dict['pre'], context=context,
+                                          novaclient=novaclient,
+-                                         update_host_method=None):
++                                         update_host_method=None,
++                                         powerops_coordinator=(
++                                             powerops_coordinator)):
+         auto_evacuate_flow_pre.add(plugin)
+ 
+     auto_evacuate_flow_main = linear_flow.Flow('main_tasks')
+     for plugin in base.get_recovery_flow(task_dict['main'], context=context,
+                                          novaclient=novaclient,
+-                                         update_host_method=None):
++                                         update_host_method=None,
++                                         powerops_coordinator=(
++                                             powerops_coordinator)):
+         auto_evacuate_flow_main.add(plugin)
+ 
+     auto_evacuate_flow_post = linear_flow.Flow('post_tasks')
+     for plugin in base.get_recovery_flow(task_dict['post'], context=context,
+                                          novaclient=novaclient,
+-                                         update_host_method=None):
++                                         update_host_method=None,
++                                         powerops_coordinator=(
++                                             powerops_coordinator)):
+         auto_evacuate_flow_post.add(plugin)
+ 
+     nested_flow.add(auto_evacuate_flow_pre)
+@@ -482,7 +489,8 @@ def get_auto_flow(context, novaclient, process_what):
+                                           process_what)
+ 
+ 
+-def get_rh_flow(context, novaclient, process_what, **kwargs):
++def get_rh_flow(context, novaclient, process_what,
++                powerops_coordinator=None, **kwargs):
+     """Constructs and returns the engine entrypoint flow.
+ 
+     This flow will do the following:
+@@ -500,7 +508,8 @@ def get_rh_flow(context, novaclient, process_what, **kwargs):
+     rh_evacuate_flow_pre = linear_flow.Flow('pre_tasks')
+     for plugin in base.get_recovery_flow(
+             task_dict['pre'],
+-            context=context, novaclient=novaclient, **kwargs):
++            context=context, novaclient=novaclient,
++            powerops_coordinator=powerops_coordinator, **kwargs):
+         rh_evacuate_flow_pre.add(plugin)
+ 
+     rh_evacuate_flow_main = linear_flow.Flow(
+@@ -509,13 +518,15 @@ def get_rh_flow(context, novaclient, process_what, **kwargs):
+ 
+     for plugin in base.get_recovery_flow(
+             task_dict['main'],
+-            context=context, novaclient=novaclient, **kwargs):
++            context=context, novaclient=novaclient,
++            powerops_coordinator=powerops_coordinator, **kwargs):
+         rh_evacuate_flow_main.add(plugin)
+ 
+     rh_evacuate_flow_post = linear_flow.Flow('post_tasks')
+     for plugin in base.get_recovery_flow(
+             task_dict['post'],
+-            context=context, novaclient=novaclient, **kwargs):
++            context=context, novaclient=novaclient,
++            powerops_coordinator=powerops_coordinator, **kwargs):
+         rh_evacuate_flow_post.add(plugin)
+ 
+     nested_flow.add(rh_evacuate_flow_pre)
+diff --git a/masakari/tests/unit/engine/drivers/taskflow/test_taskflow_driver.py b/masakari/tests/unit/engine/drivers/taskflow/test_taskflow_driver.py
+index c9439a6..fa9d020 100644
+--- a/masakari/tests/unit/engine/drivers/taskflow/test_taskflow_driver.py
++++ b/masakari/tests/unit/engine/drivers/taskflow/test_taskflow_driver.py
+@@ -25,8 +25,10 @@ from masakari.engine.drivers.taskflow import driver
+ from masakari.engine.drivers.taskflow import host_failure
+ from masakari import exception
+ from masakari.objects import fields
++from masakari.powerops import coordination as powerops_coordination
+ from masakari import test
+-from masakari.tests.unit import fakes
++from masakari.tests.unit import fakes as unit_fakes
++from masakari.tests.unit.powerops import fakes as powerops_fakes
+ from masakari.tests import uuidsentinel
+ 
+ 
+@@ -48,6 +50,104 @@ class TaskflowDriverTestCase(test.TestCase):
+         self.taskflow_driver = driver.TaskFlowDriver()
+         self.ctxt = context.get_admin_context()
+ 
++    def _patch_auto_flow(self, events):
++        class RecordingFlow(object):
++            def run(self):
++                events.append('flow-run')
++
++        def get_auto_flow(*args, **kwargs):
++            self.assertIsNotNone(kwargs.get('powerops_coordinator'))
++            return RecordingFlow()
++
++        flow_patcher = mock.patch.object(
++            host_failure, 'get_auto_flow', side_effect=get_auto_flow)
++        listener_patcher = mock.patch.object(base, 'DynamicLogListener')
++        flow_patcher.start()
++        listener_patcher.start()
++        self.addCleanup(flow_patcher.stop)
++        self.addCleanup(listener_patcher.stop)
++
++    @mock.patch.object(powerops_coordination, 'PowerOpsCoordinator')
++    def test_powerops_host_lock_wraps_complete_auto_flow(
++            self, coordinator_cls):
++        events = []
++        coordinator = powerops_fakes.recording_coordinator(events)
++        coordinator_cls.return_value = coordinator
++        self.override_config('enabled', True, 'powerops')
++        self._patch_auto_flow(events)
++
++        self.taskflow_driver.execute_host_failure(
++            self.ctxt,
++            'compute-01',
++            fields.FailoverSegmentRecoveryMethod.AUTO,
++            uuidsentinel.fake_notification,
++        )
++
++        self.assertEqual(
++            ['coordinator-start', 'host-lock-enter', 'flow-run',
++             'host-lock-exit', 'coordinator-stop'],
++            events,
++        )
++
++    @mock.patch.object(powerops_coordination, 'PowerOpsCoordinator')
++    def test_auto_priority_fallback_keeps_same_host_lock(
++            self, coordinator_cls):
++        events = []
++        coordinator = powerops_fakes.recording_coordinator(events)
++        coordinator_cls.return_value = coordinator
++        self.override_config('enabled', True, 'powerops')
++
++        def execute_auto_workflow(*args, **kwargs):
++            self.assertIs(
++                coordinator, kwargs.get('powerops_coordinator'))
++            events.append('auto-flow')
++            raise RuntimeError('auto failed')
++
++        def execute_rh_workflow(*args, **kwargs):
++            self.assertIs(
++                coordinator, kwargs.get('powerops_coordinator'))
++            events.append('rh-flow')
++
++        with mock.patch.object(
++                self.taskflow_driver, '_execute_auto_workflow',
++                side_effect=execute_auto_workflow), \
++                mock.patch.object(
++                    self.taskflow_driver, '_execute_rh_workflow',
++                    side_effect=execute_rh_workflow):
++            self.taskflow_driver.execute_host_failure(
++                self.ctxt,
++                'compute-01',
++                fields.FailoverSegmentRecoveryMethod.AUTO_PRIORITY,
++                uuidsentinel.fake_notification,
++                reserved_host_list=['compute-02'],
++            )
++
++        self.assertEqual(
++            ['coordinator-start', 'host-lock-enter', 'auto-flow', 'rh-flow',
++             'host-lock-exit', 'coordinator-stop'],
++            events,
++        )
++
++    @mock.patch.object(powerops_coordination, 'PowerOpsCoordinator')
++    def test_powerops_coordination_failure_prevents_flow(
++            self, coordinator_cls):
++        coordinator_cls.return_value.__enter__.side_effect = RuntimeError(
++            'coordination unavailable')
++        self.override_config('enabled', True, 'powerops')
++
++        with mock.patch.object(
++                self.taskflow_driver, '_dispatch_host_failure') as dispatch:
++            self.assertRaises(
++                exception.HostRecoveryFailureException,
++                self.taskflow_driver.execute_host_failure,
++                self.ctxt,
++                'compute-01',
++                fields.FailoverSegmentRecoveryMethod.AUTO,
++                uuidsentinel.fake_notification,
++            )
++
++        dispatch.assert_not_called()
++
+     @mock.patch.object(base, 'DynamicLogListener')
+     @mock.patch.object(host_failure, 'get_auto_flow')
+     @mock.patch.object(host_failure, 'get_rh_flow')
+@@ -229,7 +329,7 @@ class TaskflowDriverTestCase(test.TestCase):
+     def test_get_notification_recovery_workflow_details(
+             self, mock_get_flows_for_book, mock_get_atoms_for_flow):
+ 
+-        notification = fakes.create_fake_notification(
++        notification = unit_fakes.create_fake_notification(
+             payload={
+                 'event': 'LIFECYCLE', 'instance_uuid': uuidsentinel.fake_ins,
+                 'vir_domain_event': 'STOPPED_FAILED'},
+@@ -312,7 +412,7 @@ class TaskflowDriverTestCase(test.TestCase):
+         # list of NotificationProgressDetails object
+         expected_result = []
+         expected_result.append((
+-            fakes.create_fake_notification_progress_details(
++            unit_fakes.create_fake_notification_progress_details(
+                 name=atom1.name,
+                 uuid=atom1.uuid,
+                 progress=atom1.meta['progress'],
+@@ -320,7 +420,7 @@ class TaskflowDriverTestCase(test.TestCase):
+                 progress_details=atom1.meta['progress_details']
+                 ['details']['progress_details'])))
+         expected_result.append((
+-            fakes.create_fake_notification_progress_details(
++            unit_fakes.create_fake_notification_progress_details(
+                 name=atom3.name,
+                 uuid=atom3.uuid,
+                 progress=atom3.meta['progress'],
+@@ -328,7 +428,7 @@ class TaskflowDriverTestCase(test.TestCase):
+                 progress_details=atom3.meta['progress_details']
+                 ['details']['progress_details'])))
+         expected_result.append((
+-            fakes.create_fake_notification_progress_details(
++            unit_fakes.create_fake_notification_progress_details(
+                 name=atom2.name,
+                 uuid=atom2.uuid,
+                 progress=atom2.meta['progress'],
+@@ -347,7 +447,7 @@ class TaskflowDriverTestCase(test.TestCase):
+     def test_get_notification_recovery_workflow_details_raises_keyerror(
+             self, mock_get_flows_for_book, mock_get_atoms_for_flow):
+ 
+-        notification = fakes.create_fake_notification(
++        notification = unit_fakes.create_fake_notification(
+             payload={
+                 'event': 'LIFECYCLE', 'instance_uuid': uuidsentinel.fake_ins,
+                 'vir_domain_event': 'STOPPED_FAILED'},
+@@ -417,7 +517,7 @@ class TaskflowDriverTestCase(test.TestCase):
+         # list of NotificationProgressDetails object
+         expected_result = []
+         expected_result.append((
+-            fakes.create_fake_notification_progress_details(
++            unit_fakes.create_fake_notification_progress_details(
+                 name=atom1.name,
+                 uuid=atom1.uuid,
+                 progress=atom1.meta['progress'],
+@@ -425,7 +525,7 @@ class TaskflowDriverTestCase(test.TestCase):
+                 progress_details=atom1.meta['progress_details']
+                 ['details']['progress_details'])))
+         expected_result.append((
+-            fakes.create_fake_notification_progress_details(
++            unit_fakes.create_fake_notification_progress_details(
+                 name=atom2.name,
+                 uuid=atom2.uuid,
+                 progress=atom2.meta['progress'],
+-- 
+2.49.0
+

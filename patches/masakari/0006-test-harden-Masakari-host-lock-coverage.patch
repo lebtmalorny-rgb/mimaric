@@ -1,0 +1,248 @@
+From 86815a349ec1b1930366dd895a026ccaa0d66038 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Mon, 31 Aug 2026 22:25:21 +0300
+Subject: [PATCH 06/10] test: harden Masakari host lock coverage
+
+---
+ .../taskflow/test_host_failure_flow.py        |  77 +++++++++++++
+ .../drivers/taskflow/test_taskflow_driver.py  | 109 +++++++++++++++++-
+ 2 files changed, 180 insertions(+), 6 deletions(-)
+
+diff --git a/masakari/tests/unit/engine/drivers/taskflow/test_host_failure_flow.py b/masakari/tests/unit/engine/drivers/taskflow/test_host_failure_flow.py
+index 0f102fa..a812123 100644
+--- a/masakari/tests/unit/engine/drivers/taskflow/test_host_failure_flow.py
++++ b/masakari/tests/unit/engine/drivers/taskflow/test_host_failure_flow.py
+@@ -24,7 +24,9 @@ import ddt
+ from masakari.compute import nova
+ from masakari import conf
+ from masakari import context
++from masakari.engine.drivers.taskflow import base
+ from masakari.engine.drivers.taskflow import host_failure
++from masakari.engine.drivers.taskflow import powerops
+ from masakari.engine import manager
+ from masakari import exception
+ from masakari import objects
+@@ -890,3 +892,78 @@ class HostFailureTestCase(test.TestCase):
+         # will not be called.
+         self.assertEqual(0, len(self.fake_client.servers.reset_state_calls))
+         self.assertEqual(0, len(self.fake_client.servers.stop_calls))
++
++
++class HostFailureFlowCoordinatorTestCase(test.TestCase):
++
++    def setUp(self):
++        super(HostFailureFlowCoordinatorTestCase, self).setUp()
++        self.ctxt = context.get_admin_context()
++        self.novaclient = nova.API()
++        self.process_what = {
++            'host_name': 'compute-01',
++            'notification_uuid': uuids.notification,
++        }
++
++    def _assert_coordinator_reaches_all_stages(
++            self, flow_builder, config_name, task_dict, **kwargs):
++        coordinator = object()
++        self.override_config(
++            config_name, task_dict, 'taskflow_driver_recovery_flows')
++
++        with mock.patch.object(
++                base, 'get_recovery_flow',
++                wraps=base.get_recovery_flow) as get_recovery_flow, \
++                mock.patch.object(
++                    base, 'load_taskflow_into_engine',
++                    return_value=mock.sentinel.flow_engine) as load_engine:
++            result = flow_builder(
++                self.ctxt,
++                self.novaclient,
++                self.process_what,
++                powerops_coordinator=coordinator,
++                **kwargs
++            )
++
++        self.assertIs(mock.sentinel.flow_engine, result)
++        self.assertEqual(3, get_recovery_flow.call_count)
++        for stage, call in zip(('pre', 'main', 'post'),
++                               get_recovery_flow.call_args_list):
++            self.assertEqual(task_dict[stage], call.args[0])
++            self.assertIs(
++                coordinator, call.kwargs.get('powerops_coordinator'))
++
++        nested_flow = load_engine.call_args.args[1]
++        tasks = [task for stage_flow in nested_flow for task in stage_flow]
++        ironic_fence_tasks = [
++            task for task in tasks
++            if isinstance(task, powerops.IronicFenceTask)
++        ]
++        self.assertEqual(1, len(ironic_fence_tasks))
++        self.assertIs(
++            coordinator, ironic_fence_tasks[0].powerops_coordinator)
++
++    def test_auto_flow_passes_coordinator_to_every_configured_task(self):
++        self._assert_coordinator_reaches_all_stages(
++            host_failure.get_auto_flow,
++            'host_auto_failure_recovery_tasks',
++            {
++                'pre': ['disable_compute_service_task'],
++                'main': ['ironic_fence',
++                         'prepare_HA_enabled_instances_task'],
++                'post': ['evacuate_instances_task'],
++            },
++        )
++
++    def test_rh_flow_passes_coordinator_to_every_configured_task(self):
++        self._assert_coordinator_reaches_all_stages(
++            host_failure.get_rh_flow,
++            'host_rh_failure_recovery_tasks',
++            {
++                'pre': ['disable_compute_service_task', 'ironic_fence'],
++                'main': ['prepare_HA_enabled_instances_task',
++                         'evacuate_instances_task'],
++                'post': [],
++            },
++            update_host_method=manager.update_host_method,
++        )
+diff --git a/masakari/tests/unit/engine/drivers/taskflow/test_taskflow_driver.py b/masakari/tests/unit/engine/drivers/taskflow/test_taskflow_driver.py
+index fa9d020..90d41be 100644
+--- a/masakari/tests/unit/engine/drivers/taskflow/test_taskflow_driver.py
++++ b/masakari/tests/unit/engine/drivers/taskflow/test_taskflow_driver.py
+@@ -74,20 +74,24 @@ class TaskflowDriverTestCase(test.TestCase):
+         coordinator = powerops_fakes.recording_coordinator(events)
+         coordinator_cls.return_value = coordinator
+         self.override_config('enabled', True, 'powerops')
++        self.override_config('host_lock_timeout', 17.0, 'powerops')
+         self._patch_auto_flow(events)
+ 
+-        self.taskflow_driver.execute_host_failure(
+-            self.ctxt,
+-            'compute-01',
+-            fields.FailoverSegmentRecoveryMethod.AUTO,
+-            uuidsentinel.fake_notification,
+-        )
++        with mock.patch.object(
++                coordinator, 'lock', wraps=coordinator.lock) as host_lock:
++            self.taskflow_driver.execute_host_failure(
++                self.ctxt,
++                'compute-01',
++                fields.FailoverSegmentRecoveryMethod.AUTO,
++                uuidsentinel.fake_notification,
++            )
+ 
+         self.assertEqual(
+             ['coordinator-start', 'host-lock-enter', 'flow-run',
+              'host-lock-exit', 'coordinator-stop'],
+             events,
+         )
++        host_lock.assert_called_once_with('powerops/host/compute-01', 17.0)
+ 
+     @mock.patch.object(powerops_coordination, 'PowerOpsCoordinator')
+     def test_auto_priority_fallback_keeps_same_host_lock(
+@@ -128,6 +132,45 @@ class TaskflowDriverTestCase(test.TestCase):
+             events,
+         )
+ 
++    @mock.patch.object(powerops_coordination, 'PowerOpsCoordinator')
++    def test_rh_priority_fallback_keeps_same_host_lock(
++            self, coordinator_cls):
++        events = []
++        coordinator = powerops_fakes.recording_coordinator(events)
++        coordinator_cls.return_value = coordinator
++        self.override_config('enabled', True, 'powerops')
++
++        def execute_rh_workflow(*args, **kwargs):
++            self.assertIs(
++                coordinator, kwargs.get('powerops_coordinator'))
++            events.append('rh-flow')
++            raise RuntimeError('reserved-host failed')
++
++        def execute_auto_workflow(*args, **kwargs):
++            self.assertIs(
++                coordinator, kwargs.get('powerops_coordinator'))
++            events.append('auto-flow')
++
++        with mock.patch.object(
++                self.taskflow_driver, '_execute_rh_workflow',
++                side_effect=execute_rh_workflow), \
++                mock.patch.object(
++                    self.taskflow_driver, '_execute_auto_workflow',
++                    side_effect=execute_auto_workflow):
++            self.taskflow_driver.execute_host_failure(
++                self.ctxt,
++                'compute-01',
++                fields.FailoverSegmentRecoveryMethod.RH_PRIORITY,
++                uuidsentinel.fake_notification,
++                reserved_host_list=['compute-02'],
++            )
++
++        self.assertEqual(
++            ['coordinator-start', 'host-lock-enter', 'rh-flow', 'auto-flow',
++             'host-lock-exit', 'coordinator-stop'],
++            events,
++        )
++
+     @mock.patch.object(powerops_coordination, 'PowerOpsCoordinator')
+     def test_powerops_coordination_failure_prevents_flow(
+             self, coordinator_cls):
+@@ -148,6 +191,60 @@ class TaskflowDriverTestCase(test.TestCase):
+ 
+         dispatch.assert_not_called()
+ 
++    @mock.patch.object(powerops_coordination, 'PowerOpsCoordinator')
++    def test_powerops_host_lock_failure_prevents_dispatch(
++            self, coordinator_cls):
++        coordinator = coordinator_cls.return_value
++        coordinator.__enter__.return_value = coordinator
++        coordinator.lock.return_value.__enter__.side_effect = RuntimeError(
++            'lock unavailable')
++        self.override_config('enabled', True, 'powerops')
++        self.override_config('host_lock_timeout', 19.0, 'powerops')
++
++        with mock.patch.object(
++                self.taskflow_driver, '_dispatch_host_failure') as dispatch:
++            self.assertRaises(
++                exception.HostRecoveryFailureException,
++                self.taskflow_driver.execute_host_failure,
++                self.ctxt,
++                'compute-01',
++                fields.FailoverSegmentRecoveryMethod.AUTO,
++                uuidsentinel.fake_notification,
++            )
++
++        coordinator.lock.assert_called_once_with(
++            'powerops/host/compute-01', 19.0)
++        dispatch.assert_not_called()
++
++    @mock.patch.object(powerops_coordination, 'PowerOpsCoordinator')
++    def test_post_dispatch_error_is_not_coordination_failure(
++            self, coordinator_cls):
++        coordinator_cls.return_value = (
++            powerops_fakes.recording_coordinator([]))
++        self.override_config('enabled', True, 'powerops')
++
++        with mock.patch.object(
++                self.taskflow_driver, '_dispatch_host_failure',
++                side_effect=ValueError('application failed')) as dispatch:
++            raised = self.assertRaises(
++                exception.MasakariException,
++                self.taskflow_driver.execute_host_failure,
++                self.ctxt,
++                'compute-01',
++                fields.FailoverSegmentRecoveryMethod.AUTO,
++                uuidsentinel.fake_notification,
++            )
++
++        self.assertNotIsInstance(
++            raised, exception.HostRecoveryFailureException)
++        dispatch.assert_called_once_with(
++            self.ctxt,
++            'compute-01',
++            fields.FailoverSegmentRecoveryMethod.AUTO,
++            uuidsentinel.fake_notification,
++            coordinator_cls.return_value,
++        )
++
+     @mock.patch.object(base, 'DynamicLogListener')
+     @mock.patch.object(host_failure, 'get_auto_flow')
+     @mock.patch.object(host_failure, 'get_rh_flow')
+-- 
+2.49.0
+

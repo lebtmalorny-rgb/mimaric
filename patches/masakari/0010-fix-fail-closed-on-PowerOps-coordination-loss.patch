@@ -1,0 +1,1183 @@
+From 9f3cb144958b8e60bba72adefb22edf51387c0ca Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Tue, 1 Sep 2026 02:37:01 +0300
+Subject: [PATCH 10/10] fix: fail closed on PowerOps coordination loss
+
+---
+ masakari/engine/drivers/taskflow/driver.py    |   6 +
+ .../engine/drivers/taskflow/host_failure.py   |  30 +++
+ masakari/engine/drivers/taskflow/powerops.py  |   3 +-
+ masakari/powerops/coordination.py             | 121 ++++++++-
+ masakari/powerops/ironic.py                   |  52 +++-
+ .../taskflow/test_host_failure_flow.py        | 120 +++++++++
+ .../engine/drivers/taskflow/test_powerops.py  |   6 +-
+ .../drivers/taskflow/test_taskflow_driver.py  |  26 ++
+ masakari/tests/unit/powerops/fakes.py         |  11 +
+ .../tests/unit/powerops/test_coordination.py  | 245 +++++++++++++++++-
+ masakari/tests/unit/powerops/test_ironic.py   | 140 +++++++++-
+ .../notes/powerops-ironic-fencing.yaml        |  15 +-
+ 12 files changed, 752 insertions(+), 23 deletions(-)
+
+diff --git a/masakari/engine/drivers/taskflow/driver.py b/masakari/engine/drivers/taskflow/driver.py
+index 2488578..d977171 100644
+--- a/masakari/engine/drivers/taskflow/driver.py
++++ b/masakari/engine/drivers/taskflow/driver.py
+@@ -96,6 +96,9 @@ class TaskFlowDriver(driver.NotificationDriver):
+                     ctxt.reraise = True
+                     return
+ 
++                if powerops_coordinator is not None:
++                    powerops_coordinator.assert_healthy()
++
+                 # Caught generic Exception to make sure that any failure
+                 # should lead to execute 'reserved_host' recovery workflow.
+                 msg = ("Failed to evacuate all instances from "
+@@ -127,6 +130,9 @@ class TaskFlowDriver(driver.NotificationDriver):
+                     ctxt.reraise = True
+                     return
+ 
++                if powerops_coordinator is not None:
++                    powerops_coordinator.assert_healthy()
++
+                 # Caught generic Exception to make sure that any failure
+                 # should lead to execute 'auto' recovery workflow.
+                 msg = ("Failed to evacuate all instances from "
+diff --git a/masakari/engine/drivers/taskflow/host_failure.py b/masakari/engine/drivers/taskflow/host_failure.py
+index 09fa9de..890bbb2 100644
+--- a/masakari/engine/drivers/taskflow/host_failure.py
++++ b/masakari/engine/drivers/taskflow/host_failure.py
+@@ -42,15 +42,26 @@ SHUTDOWN = 4
+ TASKFLOW_CONF = cfg.CONF.taskflow_driver_recovery_flows
+ 
+ 
++def _assert_powerops_healthy(coordinator):
++    if not CONF.powerops.enabled:
++        return
++    if coordinator is None:
++        raise exception.HostRecoveryFailureException(
++            message="PowerOps coordinator is required for host recovery")
++    coordinator.assert_healthy()
++
++
+ class DisableComputeServiceTask(base.MasakariTask):
+     def __init__(self, context, novaclient, **kwargs):
+         kwargs['requires'] = ["host_name"]
++        self.powerops_coordinator = kwargs.pop('powerops_coordinator', None)
+         super(DisableComputeServiceTask, self).__init__(context, novaclient,
+                                                         **kwargs)
+ 
+     def execute(self, host_name):
+         msg = "Disabling compute service on host: '%s'" % host_name
+         self.update_details(msg)
++        _assert_powerops_healthy(self.powerops_coordinator)
+         self.novaclient.enable_disable_service(self.context, host_name,
+             reason=CONF.host_failure.service_disable_reason)
+         # Sleep until nova-compute service is marked as disabled.
+@@ -171,6 +182,7 @@ class EvacuateInstancesTask(base.MasakariTask):
+ 
+     def _stop_after_evacuation(self, context, instance):
+         def _wait_for_stop_confirmation():
++            _assert_powerops_healthy(self.powerops_coordinator)
+             old_vm_state, new_vm_state, instance_host = (
+                 self._get_state_and_host_of_instance(context, instance))
+ 
+@@ -179,6 +191,7 @@ class EvacuateInstancesTask(base.MasakariTask):
+ 
+         try:
+             # confirm instance is stopped after recovery
++            _assert_powerops_healthy(self.powerops_coordinator)
+             self.novaclient.stop_server(context, instance.id)
+             timer = loopingcall.FixedIntervalWithTimeoutLoopingCall(
+                 _wait_for_stop_confirmation)
+@@ -222,9 +235,11 @@ class EvacuateInstancesTask(base.MasakariTask):
+             # lock the instance so that until evacuation and confirmation
+             # is not complete, user won't be able to perform any actions
+             # on the instance.
++            _assert_powerops_healthy(self.powerops_coordinator)
+             self.novaclient.lock_server(context, instance.id)
+ 
+         def _wait_for_evacuation_confirmation():
++            _assert_powerops_healthy(self.powerops_coordinator)
+             old_vm_state, new_vm_state, instance_host = (
+                 self._get_state_and_host_of_instance(context, instance))
+ 
+@@ -266,6 +281,7 @@ class EvacuateInstancesTask(base.MasakariTask):
+             # to *error* so that the instance can be evacuated.
+             stop_instance = True
+             if vm_state not in ['active', 'error', 'stopped']:
++                _assert_powerops_healthy(self.powerops_coordinator)
+                 self.novaclient.reset_instance_state(context, instance.id)
+                 instance = self.novaclient.get_server(context, instance.id)
+                 power_state = getattr(instance, "OS-EXT-STS:power_state")
+@@ -282,6 +298,7 @@ class EvacuateInstancesTask(base.MasakariTask):
+                 # Nova fails evacuation when the instance's task_state is not
+                 # none. In this case, masakari resets the instance's vm_state
+                 # to 'error' and task_state to none.
++                _assert_powerops_healthy(self.powerops_coordinator)
+                 self.novaclient.reset_instance_state(context, instance.id)
+                 instance = self.novaclient.get_server(context, instance.id)
+                 if vm_state == 'active':
+@@ -292,6 +309,7 @@ class EvacuateInstancesTask(base.MasakariTask):
+                 vmove,
+                 status=fields.VMoveStatus.ONGOING,
+                 start_time=timeutils.utcnow())
++            _assert_powerops_healthy(self.powerops_coordinator)
+             self.novaclient.evacuate_instance(context, instance.id,
+                                               target=reserved_host)
+ 
+@@ -303,6 +321,8 @@ class EvacuateInstancesTask(base.MasakariTask):
+                     # If the instance was in 'error' state before failure
+                     # it should be set to 'error' after recovery.
+                     if vm_state == 'error':
++                        _assert_powerops_healthy(
++                            self.powerops_coordinator)
+                         self.novaclient.reset_instance_state(
+                             context, instance.id)
+ 
+@@ -332,6 +352,7 @@ class EvacuateInstancesTask(base.MasakariTask):
+             _update_vmove(vmove, end_time=timeutils.utcnow())
+             if not instance_already_locked:
+                 # Unlock the server after evacuation and confirmation
++                _assert_powerops_healthy(self.powerops_coordinator)
+                 self.novaclient.unlock_server(context, instance.id)
+ 
+     def execute(self, host_name, notification_uuid, reserved_host=None):
+@@ -364,6 +385,8 @@ class EvacuateInstancesTask(base.MasakariTask):
+                                     'aggregate': aggregate.name}
+                                 self.update_details(msg, 0.2)
+ 
++                                _assert_powerops_healthy(
++                                    self.powerops_coordinator)
+                                 self.novaclient.add_host_to_aggregate(
+                                     context, reserved_host, aggregate)
+                                 msg = ("Added host %(reserved_host)s to "
+@@ -380,6 +403,7 @@ class EvacuateInstancesTask(base.MasakariTask):
+                                 self.update_details(msg, 1.0)
+                                 LOG.info(msg)
+ 
++                _assert_powerops_healthy(self.powerops_coordinator)
+                 self.novaclient.enable_disable_service(
+                     context, reserved_host, enable=True)
+ 
+@@ -396,11 +420,17 @@ class EvacuateInstancesTask(base.MasakariTask):
+                     with self.powerops_coordinator.lock(
+                             powerops_coordination.GLOBAL_EVACUATION_LOCK,
+                             CONF.powerops.evacuation_lock_timeout):
++                        _assert_powerops_healthy(
++                            self.powerops_coordinator)
+                         self._evacuate_and_confirm(
+                             self.context, vmove, reserved_host)
+                         if vmove.status == fields.VMoveStatus.FAILED:
+                             break
++                        _assert_powerops_healthy(
++                            self.powerops_coordinator)
+                         eventlet.sleep(CONF.powerops.evacuation_interval)
++                        _assert_powerops_healthy(
++                            self.powerops_coordinator)
+             else:
+                 thread_pool = greenpool.GreenPool(
+                     CONF.host_failure_recovery_threads)
+diff --git a/masakari/engine/drivers/taskflow/powerops.py b/masakari/engine/drivers/taskflow/powerops.py
+index 8472b6f..d15a130 100644
+--- a/masakari/engine/drivers/taskflow/powerops.py
++++ b/masakari/engine/drivers/taskflow/powerops.py
+@@ -38,7 +38,8 @@ class IronicFenceTask(base.MasakariTask):
+                 message="PowerOps coordinator is required for fencing"
+             )
+         return ironic.IronicPowerClient(
+-            ironic.connection_from_conf()
++            ironic.connection_from_conf(),
++            health_check=self.powerops_coordinator.assert_healthy,
+         ).fence(
+             host_name,
+             CONF.powerops.power_timeout,
+diff --git a/masakari/powerops/coordination.py b/masakari/powerops/coordination.py
+index c87fe6d..8e430c4 100644
+--- a/masakari/powerops/coordination.py
++++ b/masakari/powerops/coordination.py
+@@ -16,13 +16,20 @@
+ 
+ import contextlib
+ import re
++import urllib.parse
+ 
+ from oslo_config import cfg
+ from tooz import coordination as tooz_coordination
++from tooz.drivers import etcd3gw as tooz_etcd3gw
+ 
+ 
+ HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+ GLOBAL_EVACUATION_LOCK = "powerops/evacuation/global"
++_ALLOWED_BACKEND_SCHEMES = {"etcd3+http", "etcd3+https"}
++_REQUIRED_CHARACTERISTICS = {
++    tooz_coordination.Characteristics.DISTRIBUTED_ACROSS_PROCESSES,
++    tooz_coordination.Characteristics.LINEARIZABLE,
++}
+ 
+ 
+ def host_lock_name(host):
+@@ -31,6 +38,59 @@ def host_lock_name(host):
+     return "powerops/host/{}".format(host)
+ 
+ 
++class _Etcd3GWLockHealthProbe(object):
++    """Prove ownership using the pinned tooz etcd3gw lock contract."""
++
++    def __init__(self, coordinator, backend_lock):
++        if not isinstance(backend_lock, tooz_etcd3gw.Etcd3Lock):
++            raise RuntimeError("PowerOps requires a tooz etcd3gw lock")
++        if backend_lock._coord is not coordinator:
++            raise RuntimeError("PowerOps lock belongs to another coordinator")
++        if not isinstance(backend_lock._key_b64, str):
++            raise RuntimeError("PowerOps lock has no compatible etcd key")
++        if not isinstance(backend_lock._uuid, str):
++            raise RuntimeError("PowerOps lock has no compatible owner UUID")
++        transaction = getattr(
++            getattr(coordinator, "client", None), "transaction", None
++        )
++        if not callable(transaction):
++            raise RuntimeError("PowerOps coordinator has no etcd transaction")
++        self.lock = backend_lock
++        self.transaction = transaction
++
++    def assert_owned(self):
++        txn = {
++            "compare": [{
++                "key": self.lock._key_b64,
++                "result": "EQUAL",
++                "target": "VALUE",
++                "value": self.lock._uuid,
++            }],
++            "success": [{
++                "request_range": {
++                    "key": self.lock._key_b64,
++                    "serializable": False,
++                },
++            }],
++            "failure": [],
++        }
++        result = self.transaction(txn)
++        if result.get("succeeded") is not True:
++            raise RuntimeError("etcd no longer contains the lock owner UUID")
++
++        responses = result.get("responses")
++        if not isinstance(responses, list) or len(responses) != 1:
++            raise RuntimeError("etcd lock ownership read is incomplete")
++        response_range = responses[0].get("response_range", {})
++        values = response_range.get("kvs")
++        if not isinstance(values, list) or len(values) != 1:
++            raise RuntimeError("etcd lock ownership read is empty")
++        value = values[0]
++        if (value.get("key") != self.lock._key_b64 or
++                value.get("value") != self.lock._uuid):
++            raise RuntimeError("etcd lock ownership read does not match")
++
++
+ class PowerOpsCoordinator(object):
+     """Manage PowerOps locks using the configured tooz backend."""
+ 
+@@ -39,17 +99,39 @@ class PowerOpsCoordinator(object):
+         self.backend_url = backend_url
+         self.coordinator = None
+         self.started = False
++        self._active_locks = []
++        self._health_failure = None
++
++    def _unhealthy(self, reason):
++        if self._health_failure is None:
++            self._health_failure = str(reason)
++        return RuntimeError(
++            "PowerOps coordinator is unhealthy: {}".format(
++                self._health_failure
++            )
++        )
+ 
+     def start(self):
+         if self.started:
+             return
++        if self._health_failure is not None:
++            raise self._unhealthy(self._health_failure)
+ 
+         backend_url = self.backend_url or cfg.CONF.coordination.backend_url
+         if cfg.CONF.powerops.enabled and not backend_url:
+             raise RuntimeError("PowerOps requires coordination backend_url")
++        if cfg.CONF.powerops.enabled:
++            scheme = urllib.parse.urlsplit(backend_url).scheme
++            if scheme not in _ALLOWED_BACKEND_SCHEMES:
++                raise RuntimeError(
++                    "PowerOps requires an etcd3+http or etcd3+https backend"
++                )
+ 
+         self.coordinator = tooz_coordination.get_coordinator(
+-            backend_url, self.member_id.encode("utf-8"))
++            backend_url,
++            self.member_id.encode("utf-8"),
++            characteristics=_REQUIRED_CHARACTERISTICS,
++        )
+         self.coordinator.start(start_heart=True)
+         self.started = True
+ 
+@@ -66,15 +148,50 @@ class PowerOpsCoordinator(object):
+     def __exit__(self, exc_type, exc_value, traceback):
+         self.stop()
+ 
++    def assert_healthy(self):
++        if self._health_failure is not None:
++            raise self._unhealthy(self._health_failure)
++        if not self.started:
++            raise self._unhealthy("coordinator is not started")
++
++        try:
++            if not self.coordinator.heart.is_alive():
++                raise RuntimeError("heartbeat thread is not alive")
++            for backend_lock in list(self._active_locks):
++                _Etcd3GWLockHealthProbe(
++                    self.coordinator, backend_lock
++                ).assert_owned()
++        except Exception as exc:
++            raise self._unhealthy(exc) from exc
++        return True
++
+     @contextlib.contextmanager
+     def lock(self, name, timeout):
+         if not self.started:
+             raise RuntimeError("PowerOps coordinator is not started")
+         backend_lock = self.coordinator.get_lock(name.encode("utf-8"))
++        try:
++            _Etcd3GWLockHealthProbe(self.coordinator, backend_lock)
++        except Exception as exc:
++            raise self._unhealthy(exc) from exc
+         acquired = backend_lock.acquire(blocking=timeout)
+         if not acquired:
+             raise RuntimeError("timed out acquiring lock {}".format(name))
++        self._active_locks.append(backend_lock)
+         try:
++            self.assert_healthy()
+             yield
+         finally:
+-            backend_lock.release()
++            try:
++                try:
++                    released = backend_lock.release()
++                except Exception as exc:
++                    raise self._unhealthy(
++                        "lock release raised: {}".format(exc)
++                    ) from exc
++                if released is not True:
++                    raise self._unhealthy(
++                        "lock release did not confirm ownership"
++                    )
++            finally:
++                self._active_locks.remove(backend_lock)
+diff --git a/masakari/powerops/ironic.py b/masakari/powerops/ironic.py
+index d97fa36..8449a60 100644
+--- a/masakari/powerops/ironic.py
++++ b/masakari/powerops/ironic.py
+@@ -87,10 +87,11 @@ class IronicPowerClient(object):
+     """Fence exact-name, pre-enrolled Ironic nodes."""
+ 
+     def __init__(self, connection, sleep=eventlet.sleep,
+-                 monotonic=time.monotonic):
++                 monotonic=time.monotonic, health_check=None):
+         self.connection = connection
+         self.sleep = sleep
+         self.monotonic = monotonic
++        self.health_check = health_check or (lambda: None)
+ 
+     def _raise_if_timed_out(self, deadline, host):
+         if self.monotonic() >= deadline:
+@@ -98,13 +99,40 @@ class IronicPowerClient(object):
+                 "Timed out waiting for stable power off on {!r}".format(host)
+             )
+ 
++    def _call_with_deadline(self, deadline, host, call):
++        remaining = deadline - self.monotonic()
++        if remaining <= 0:
++            raise FencingError(
++                "Timed out waiting for stable power off on {!r}".format(host)
++            )
++
++        session = self.connection.session
++        previous_timeout = session.timeout
++        session.timeout = remaining
++        try:
++            timeout_error = FencingError(
++                "Timed out waiting for stable power off on {!r}".format(host)
++            )
++            with eventlet.Timeout(remaining, timeout_error):
++                result = call()
++        finally:
++            session.timeout = previous_timeout
++
++        self._raise_if_timed_out(deadline, host)
++        return result
++
+     def fence(self, host, timeout, interval, stable_observations):
+         deadline = self.monotonic() + timeout
+         matches = [
+-            node for node in self.connection.baremetal.nodes(details=True)
++            node for node in self._call_with_deadline(
++                deadline,
++                host,
++                lambda: list(
++                    self.connection.baremetal.nodes(details=True)
++                ),
++            )
+             if node.name == host
+         ]
+-        self._raise_if_timed_out(deadline, host)
+         if len(matches) != 1:
+             raise FencingError(
+                 "Expected exactly one Ironic node named {!r}".format(host)
+@@ -113,21 +141,33 @@ class IronicPowerClient(object):
+         node = matches[0]
+         _validate_node(node)
+         if not _is_compatible_off(node):
+-            self.connection.baremetal.set_node_power_state(
+-                node, "power off", wait=False
++            self.health_check()
++            self._call_with_deadline(
++                deadline,
++                host,
++                lambda: self.connection.baremetal.set_node_power_state(
++                    node, "power off", wait=False
++                ),
+             )
+ 
+         stable = 0
+         while True:
+             self._raise_if_timed_out(deadline, host)
++            self.health_check()
+             _validate_node(node)
+             if _is_compatible_off(node):
+                 stable += 1
+                 if stable >= stable_observations:
++                    self.health_check()
++                    self._raise_if_timed_out(deadline, host)
+                     return _result(node)
+             else:
+                 stable = 0
+ 
+             self.sleep(interval)
+             self._raise_if_timed_out(deadline, host)
+-            node = self.connection.baremetal.get_node(node.id)
++            node = self._call_with_deadline(
++                deadline,
++                host,
++                lambda: self.connection.baremetal.get_node(node.id),
++            )
+diff --git a/masakari/tests/unit/engine/drivers/taskflow/test_host_failure_flow.py b/masakari/tests/unit/engine/drivers/taskflow/test_host_failure_flow.py
+index a468024..6db22e5 100644
+--- a/masakari/tests/unit/engine/drivers/taskflow/test_host_failure_flow.py
++++ b/masakari/tests/unit/engine/drivers/taskflow/test_host_failure_flow.py
+@@ -999,6 +999,126 @@ class EvacuateInstancesPowerOpsTestCase(test.TestCase):
+         self.assertEqual(1, evacuate.call_count)
+         sleep.assert_not_called()
+ 
++    @mock.patch.object(nova.API, 'enable_disable_service')
++    def test_powerops_health_loss_prevents_service_disable(self, disable):
++        coordinator = mock.Mock()
++        coordinator.assert_healthy = mock.Mock(
++            side_effect=RuntimeError('coordination ownership lost'))
++        task = host_failure.DisableComputeServiceTask(
++            self.ctxt,
++            self.novaclient,
++            powerops_coordinator=coordinator,
++        )
++        self.override_config('enabled', True, 'powerops')
++
++        with mock.patch.object(eventlet, 'sleep') as sleep:
++            self.assertRaises(
++                RuntimeError, task.execute, 'compute-01')
++
++        disable.assert_not_called()
++        sleep.assert_not_called()
++
++    @mock.patch.object(nova.API, 'unlock_server')
++    @mock.patch.object(nova.API, 'lock_server')
++    @mock.patch.object(nova.API, 'evacuate_instance')
++    @mock.patch.object(nova.API, 'get_server')
++    def test_powerops_health_loss_in_confirmation_stops_mutations(
++            self, get_server, evacuate, lock, unlock):
++        instance = mock.Mock(id='vm-a', locked=False)
++        setattr(instance, 'OS-EXT-STS:vm_state', 'active')
++        setattr(instance, 'OS-EXT-STS:task_state', None)
++        get_server.side_effect = [instance, instance]
++        vmove = self._pending_vmove('vm-a')
++        vmove.source_host = 'compute-01'
++        coordinator = mock.Mock()
++        health_calls = 0
++
++        def sticky_health_failure():
++            nonlocal health_calls
++            health_calls += 1
++            if health_calls >= 3:
++                raise RuntimeError('coordination ownership lost')
++
++        coordinator.assert_healthy = mock.Mock(
++            side_effect=sticky_health_failure)
++        task = host_failure.EvacuateInstancesTask(
++            self.ctxt,
++            self.novaclient,
++            update_host_method=manager.update_host_method,
++            powerops_coordinator=coordinator,
++        )
++        self.override_config('enabled', True, 'powerops')
++
++        class InvokeCallbackTimer:
++            def __init__(self, callback):
++                self.callback = callback
++
++            def start(self, **kwargs):
++                return self
++
++            def wait(self):
++                self.callback()
++
++            def stop(self):
++                pass
++
++        with mock.patch.object(
++                host_failure.loopingcall,
++                'FixedIntervalWithTimeoutLoopingCall',
++                InvokeCallbackTimer):
++            self.assertRaises(
++                RuntimeError, task._evacuate_and_confirm,
++                self.ctxt, vmove)
++
++        self.assertEqual(4, health_calls)
++        self.assertEqual(2, get_server.call_count)
++        lock.assert_called_once_with(self.ctxt, 'vm-a')
++        evacuate.assert_called_once_with(self.ctxt, 'vm-a', target=None)
++        unlock.assert_not_called()
++
++    def test_powerops_proves_both_locks_and_loss_stops_later_vmoves(self):
++        events = []
++        coordinator = powerops_fakes.recording_coordinator(events)
++        coordinator.fail_health_after = 3
++        task = host_failure.EvacuateInstancesTask(
++            self.ctxt,
++            self.novaclient,
++            update_host_method=manager.update_host_method,
++            powerops_coordinator=coordinator,
++        )
++        self.override_config('enabled', True, 'powerops')
++        self.override_config('evacuation_interval', 7, 'powerops')
++        vm_a = self._pending_vmove('vm-a')
++        vm_b = self._pending_vmove('vm-b')
++
++        def mark_succeeded(_context, vmove, _reserved_host=None):
++            vmove.status = fields.VMoveStatus.SUCCEEDED
++
++        with mock.patch.object(
++                objects.VMoveList, 'get_all_vmoves',
++                return_value=[vm_b, vm_a]), \
++                mock.patch.object(
++                    task, '_evacuate_and_confirm',
++                    side_effect=mark_succeeded) as evacuate, \
++                mock.patch.object(eventlet, 'sleep') as sleep, \
++                coordinator.lock('powerops/host/compute-01', 17.0):
++            self.assertRaises(
++                RuntimeError,
++                task.execute,
++                'compute-01',
++                self.notification_uuid,
++            )
++
++        both_locks = (
++            'powerops/host/compute-01',
++            'powerops/evacuation/global',
++        )
++        self.assertEqual([both_locks, both_locks, both_locks],
++                         coordinator.health_checks)
++        self.assertEqual(1, evacuate.call_count)
++        self.assertEqual('vm-a', evacuate.call_args.args[1].instance_uuid)
++        sleep.assert_called_once_with(7)
++
+     @mock.patch.object(greenpool, 'GreenPool')
+     @mock.patch.object(objects.VMoveList, 'get_all_vmoves', return_value=[])
+     def test_legacy_evacuation_uses_configured_greenpool(
+diff --git a/masakari/tests/unit/engine/drivers/taskflow/test_powerops.py b/masakari/tests/unit/engine/drivers/taskflow/test_powerops.py
+index e25adfb..b65ead4 100644
+--- a/masakari/tests/unit/engine/drivers/taskflow/test_powerops.py
++++ b/masakari/tests/unit/engine/drivers/taskflow/test_powerops.py
+@@ -32,6 +32,7 @@ class IronicFenceTaskTest(test.TestCase):
+         self.novaclient = mock.sentinel.novaclient
+         self.events = []
+         self.coordinator = fakes.recording_coordinator(self.events)
++        self.coordinator.assert_healthy = mock.Mock()
+ 
+     @mock.patch.object(powerops.ironic, "IronicPowerClient")
+     @mock.patch.object(powerops.ironic, "connection_from_conf")
+@@ -51,7 +52,10 @@ class IronicFenceTaskTest(test.TestCase):
+         result = task.execute("compute-01")
+ 
+         self.assertEqual({"power_state": "power off"}, result)
+-        power_client.assert_called_once_with(mock.sentinel.connection)
++        power_client.assert_called_once_with(
++            mock.sentinel.connection,
++            health_check=self.coordinator.assert_healthy,
++        )
+         power_client.return_value.fence.assert_called_once_with(
+             "compute-01", 31, 2, 4
+         )
+diff --git a/masakari/tests/unit/engine/drivers/taskflow/test_taskflow_driver.py b/masakari/tests/unit/engine/drivers/taskflow/test_taskflow_driver.py
+index 90d41be..2f4fad2 100644
+--- a/masakari/tests/unit/engine/drivers/taskflow/test_taskflow_driver.py
++++ b/masakari/tests/unit/engine/drivers/taskflow/test_taskflow_driver.py
+@@ -171,6 +171,32 @@ class TaskflowDriverTestCase(test.TestCase):
+             events,
+         )
+ 
++    @mock.patch.object(powerops_coordination, 'PowerOpsCoordinator')
++    def test_coordination_loss_prevents_priority_fallback(
++            self, coordinator_cls):
++        coordinator = powerops_fakes.recording_coordinator([])
++        coordinator.fail_health_after = 1
++        coordinator_cls.return_value = coordinator
++        self.override_config('enabled', True, 'powerops')
++
++        with mock.patch.object(
++                self.taskflow_driver, '_execute_auto_workflow',
++                side_effect=RuntimeError('auto failed')) as auto, \
++                mock.patch.object(
++                    self.taskflow_driver, '_execute_rh_workflow') as rh:
++            self.assertRaises(
++                exception.MasakariException,
++                self.taskflow_driver.execute_host_failure,
++                self.ctxt,
++                'compute-01',
++                fields.FailoverSegmentRecoveryMethod.AUTO_PRIORITY,
++                uuidsentinel.fake_notification,
++                reserved_host_list=['compute-02'],
++            )
++
++        auto.assert_called_once()
++        rh.assert_not_called()
++
+     @mock.patch.object(powerops_coordination, 'PowerOpsCoordinator')
+     def test_powerops_coordination_failure_prevents_flow(
+             self, coordinator_cls):
+diff --git a/masakari/tests/unit/powerops/fakes.py b/masakari/tests/unit/powerops/fakes.py
+index f074d97..f61327a 100644
+--- a/masakari/tests/unit/powerops/fakes.py
++++ b/masakari/tests/unit/powerops/fakes.py
+@@ -54,6 +54,9 @@ def monotonic(values):
+ class _RecordingCoordinator:
+     def __init__(self, events):
+         self.events = events
++        self.active_locks = []
++        self.health_checks = []
++        self.fail_health_after = None
+ 
+     def __enter__(self):
+         self.events.append("coordinator-start")
+@@ -69,11 +72,19 @@ class _RecordingCoordinator:
+             else "evacuation-lock"
+         )
+         self.events.append(event + "-enter")
++        self.active_locks.append(name)
+         try:
+             yield
+         finally:
++            self.active_locks.remove(name)
+             self.events.append(event + "-exit")
+ 
++    def assert_healthy(self):
++        self.health_checks.append(tuple(self.active_locks))
++        if (self.fail_health_after is not None and
++                len(self.health_checks) >= self.fail_health_after):
++            raise RuntimeError("coordination ownership lost")
++
+     def lock_count(self, name):
+         prefix = (
+             "host-lock" if name.startswith("powerops/host/")
+diff --git a/masakari/tests/unit/powerops/test_coordination.py b/masakari/tests/unit/powerops/test_coordination.py
+index 9f38651..178ef60 100644
+--- a/masakari/tests/unit/powerops/test_coordination.py
++++ b/masakari/tests/unit/powerops/test_coordination.py
+@@ -14,27 +14,76 @@
+ 
+ from unittest import mock
+ 
++import ddt
+ from tooz import coordination as tooz_coordination
++from tooz.drivers import etcd3gw as tooz_etcd3gw
+ 
+ from masakari.powerops import coordination
+ from masakari import test
+ 
+ 
++@ddt.ddt
+ class PowerOpsCoordinatorTest(test.TestCase):
+ 
++    @staticmethod
++    def _use_lock(coordinator, name="powerops/host/compute-01"):
++        with coordinator.lock(name, 30):
++            pass
++
++    def _backend_with_lock(self, name=b"powerops/host/compute-01",
++                           release=True):
++        backend = mock.Mock()
++        backend.heart.is_alive.return_value = True
++        lock = tooz_etcd3gw.Etcd3Lock(backend, name, timeout=30)
++        lock.acquire = mock.Mock(return_value=True)
++        lock.release = mock.Mock(return_value=release)
++        backend.get_lock.return_value = lock
++        backend.client.transaction.return_value = self._healthy_result(lock)
++        return backend, lock
++
++    @staticmethod
++    def _healthy_result(lock):
++        return {
++            "succeeded": True,
++            "responses": [{
++                "response_range": {
++                    "kvs": [{
++                        "key": lock._key_b64,
++                        "value": lock._uuid,
++                    }],
++                },
++            }],
++        }
++
++    @staticmethod
++    def _health_transaction(lock):
++        return {
++            "compare": [{
++                "key": lock._key_b64,
++                "result": "EQUAL",
++                "target": "VALUE",
++                "value": lock._uuid,
++            }],
++            "success": [{
++                "request_range": {
++                    "key": lock._key_b64,
++                    "serializable": False,
++                },
++            }],
++            "failure": [],
++        }
++
+     def test_host_lock_name_rejects_noncanonical_host(self):
+         self.assertRaises(ValueError, coordination.host_lock_name, " host-1")
+ 
+     @mock.patch.object(tooz_coordination, "get_coordinator")
+     def test_lock_uses_exact_shared_namespace(self, get_coordinator):
+-        backend = mock.Mock()
+-        lock = mock.Mock()
+-        lock.acquire.return_value = True
+-        backend.get_lock.return_value = lock
++        backend, lock = self._backend_with_lock()
+         get_coordinator.return_value = backend
++        backend_url = "etcd3+http://etcd:2379?api_version=v3"
+ 
+         coordinator = coordination.PowerOpsCoordinator(
+-            "notification-1", "etcd3+http://etcd:2379?api_version=v3"
++            "notification-1", backend_url
+         )
+         with coordinator:
+             with coordinator.lock(
+@@ -42,8 +91,20 @@ class PowerOpsCoordinatorTest(test.TestCase):
+             ):
+                 pass
+ 
++        get_coordinator.assert_called_once_with(
++            backend_url,
++            b"notification-1",
++            characteristics={
++                tooz_coordination.Characteristics.
++                DISTRIBUTED_ACROSS_PROCESSES,
++                tooz_coordination.Characteristics.LINEARIZABLE,
++            },
++        )
+         backend.get_lock.assert_called_once_with(b"powerops/host/compute-01")
+         lock.acquire.assert_called_once_with(blocking=30)
++        backend.client.transaction.assert_called_once_with(
++            self._health_transaction(lock)
++        )
+         lock.release.assert_called_once_with()
+         backend.start.assert_called_once_with(start_heart=True)
+         backend.stop.assert_called_once_with()
+@@ -53,3 +114,177 @@ class PowerOpsCoordinatorTest(test.TestCase):
+         self.override_config("backend_url", None, "coordination")
+         coordinator = coordination.PowerOpsCoordinator("notification-1")
+         self.assertRaises(RuntimeError, coordinator.start)
++
++    @ddt.data("redis://redis:6379", "etcd://etcd:2379")
++    @mock.patch.object(tooz_coordination, "get_coordinator")
++    def test_enabled_powerops_rejects_unsupported_backend_scheme(
++            self, backend_url, get_coordinator):
++        self.override_config("enabled", True, "powerops")
++        coordinator = coordination.PowerOpsCoordinator(
++            "notification-1", backend_url
++        )
++
++        self.assertRaises(RuntimeError, coordinator.start)
++
++        get_coordinator.assert_not_called()
++
++    @mock.patch.object(tooz_coordination, "get_coordinator")
++    def test_start_fails_when_backend_lacks_required_characteristics(
++            self, get_coordinator):
++        get_coordinator.side_effect = (
++            tooz_coordination.ToozDriverChosenPoorly("missing"))
++        coordinator = coordination.PowerOpsCoordinator(
++            "notification-1", "etcd3+https://etcd:2379"
++        )
++
++        self.assertRaises(
++            tooz_coordination.ToozDriverChosenPoorly, coordinator.start
++        )
++
++        get_coordinator.assert_called_once_with(
++            "etcd3+https://etcd:2379",
++            b"notification-1",
++            characteristics={
++                tooz_coordination.Characteristics.
++                DISTRIBUTED_ACROSS_PROCESSES,
++                tooz_coordination.Characteristics.LINEARIZABLE,
++            },
++        )
++        self.assertFalse(coordinator.started)
++
++    @mock.patch.object(tooz_coordination, "get_coordinator")
++    def test_assert_healthy_rejects_dead_heartbeat(self, get_coordinator):
++        backend, _lock = self._backend_with_lock()
++        backend.heart.is_alive.return_value = False
++        get_coordinator.return_value = backend
++        coordinator = coordination.PowerOpsCoordinator(
++            "notification-1", "etcd3+http://etcd:2379"
++        )
++        coordinator.start()
++        self.addCleanup(coordinator.stop)
++
++        error = self.assertRaises(RuntimeError, coordinator.assert_healthy)
++
++        self.assertIn("heartbeat", str(error))
++        backend.client.transaction.assert_not_called()
++
++    @mock.patch.object(tooz_coordination, "get_coordinator")
++    def test_assert_healthy_rejects_failed_etcd_compare(self, get_coordinator):
++        backend, lock = self._backend_with_lock()
++        backend.client.transaction.return_value = {"succeeded": False}
++        get_coordinator.return_value = backend
++        coordinator = coordination.PowerOpsCoordinator(
++            "notification-1", "etcd3+http://etcd:2379"
++        )
++        coordinator.start()
++        self.addCleanup(coordinator.stop)
++
++        self.assertRaises(RuntimeError, self._use_lock, coordinator)
++
++        backend.client.transaction.assert_called_once_with(
++            self._health_transaction(lock)
++        )
++
++    @mock.patch.object(tooz_coordination, "get_coordinator")
++    def test_health_failure_is_sticky(self, get_coordinator):
++        backend, lock = self._backend_with_lock()
++        backend.client.transaction.return_value = {"succeeded": False}
++        get_coordinator.return_value = backend
++        coordinator = coordination.PowerOpsCoordinator(
++            "notification-1", "etcd3+http://etcd:2379"
++        )
++        coordinator.start()
++        self.addCleanup(coordinator.stop)
++
++        self.assertRaises(RuntimeError, self._use_lock, coordinator)
++        backend.client.transaction.return_value = self._healthy_result(lock)
++        backend.heart.is_alive.return_value = True
++
++        self.assertRaises(RuntimeError, coordinator.assert_healthy)
++        self.assertEqual(1, backend.client.transaction.call_count)
++
++    @mock.patch.object(tooz_coordination, "get_coordinator")
++    def test_assert_healthy_proves_every_active_lock(self, get_coordinator):
++        backend = mock.Mock()
++        backend.heart.is_alive.return_value = True
++        host_lock = tooz_etcd3gw.Etcd3Lock(
++            backend, b"powerops/host/compute-01", timeout=30
++        )
++        global_lock = tooz_etcd3gw.Etcd3Lock(
++            backend, b"powerops/evacuation/global", timeout=30
++        )
++        for lock in (host_lock, global_lock):
++            lock.acquire = mock.Mock(return_value=True)
++            lock.release = mock.Mock(return_value=True)
++        backend.get_lock.side_effect = [host_lock, global_lock]
++        backend.client.transaction.side_effect = lambda txn: (
++            self._healthy_result(
++                host_lock if txn["compare"][0]["key"] == host_lock._key_b64
++                else global_lock
++            )
++        )
++        get_coordinator.return_value = backend
++        coordinator = coordination.PowerOpsCoordinator(
++            "notification-1", "etcd3+http://etcd:2379"
++        )
++
++        with coordinator:
++            with coordinator.lock("powerops/host/compute-01", 30):
++                backend.client.transaction.reset_mock()
++                with coordinator.lock("powerops/evacuation/global", 30):
++                    backend.client.transaction.reset_mock()
++                    coordinator.assert_healthy()
++
++                    self.assertEqual([
++                        mock.call(self._health_transaction(host_lock)),
++                        mock.call(self._health_transaction(global_lock)),
++                    ], backend.client.transaction.call_args_list)
++
++    @mock.patch.object(tooz_coordination, "get_coordinator")
++    def test_lock_rejects_incompatible_backend_lock(self, get_coordinator):
++        backend = mock.Mock()
++        backend.heart.is_alive.return_value = True
++        incompatible_lock = mock.Mock()
++        backend.get_lock.return_value = incompatible_lock
++        get_coordinator.return_value = backend
++        coordinator = coordination.PowerOpsCoordinator(
++            "notification-1", "etcd3+http://etcd:2379"
++        )
++        coordinator.start()
++        self.addCleanup(coordinator.stop)
++
++        self.assertRaises(RuntimeError, self._use_lock, coordinator)
++
++        incompatible_lock.acquire.assert_not_called()
++
++    @mock.patch.object(tooz_coordination, "get_coordinator")
++    def test_false_release_marks_coordinator_unhealthy(self, get_coordinator):
++        backend, _lock = self._backend_with_lock(release=False)
++        get_coordinator.return_value = backend
++        coordinator = coordination.PowerOpsCoordinator(
++            "notification-1", "etcd3+http://etcd:2379"
++        )
++        coordinator.start()
++        self.addCleanup(coordinator.stop)
++
++        self.assertRaises(RuntimeError, self._use_lock, coordinator)
++
++        error = self.assertRaises(RuntimeError, coordinator.assert_healthy)
++        self.assertIn("release", str(error))
++
++    @mock.patch.object(tooz_coordination, "get_coordinator")
++    def test_release_exception_marks_coordinator_unhealthy(
++            self, get_coordinator):
++        backend, lock = self._backend_with_lock()
++        lock.release.side_effect = RuntimeError("etcd unavailable")
++        get_coordinator.return_value = backend
++        coordinator = coordination.PowerOpsCoordinator(
++            "notification-1", "etcd3+http://etcd:2379"
++        )
++        coordinator.start()
++        self.addCleanup(coordinator.stop)
++
++        self.assertRaises(RuntimeError, self._use_lock, coordinator)
++
++        error = self.assertRaises(RuntimeError, coordinator.assert_healthy)
++        self.assertIn("release", str(error))
+diff --git a/masakari/tests/unit/powerops/test_ironic.py b/masakari/tests/unit/powerops/test_ironic.py
+index 96c9648..31614b0 100644
+--- a/masakari/tests/unit/powerops/test_ironic.py
++++ b/masakari/tests/unit/powerops/test_ironic.py
+@@ -12,9 +12,11 @@
+ # License for the specific language governing permissions and limitations
+ # under the License.
+ 
++import time
+ from unittest import mock
+ 
+ import ddt
++import eventlet
+ 
+ from masakari import conf
+ from masakari.powerops import ironic
+@@ -180,7 +182,7 @@ class IronicPowerClientTest(test.TestCase):
+         connection.baremetal.set_node_power_state.side_effect = (
+             lambda *_args, **_kwargs: events.append("power-off")
+         )
+-        times = iter([0, 2])
++        times = iter([0, 0, 2])
+ 
+         def clock():
+             events.append("clock")
+@@ -193,7 +195,7 @@ class IronicPowerClientTest(test.TestCase):
+         self.assertRaises(
+             ironic.FencingError, client.fence, "compute-01", 1, 1, 3
+         )
+-        self.assertEqual(["clock", "list", "clock"], events)
++        self.assertEqual(["clock", "clock", "list", "clock"], events)
+         connection.baremetal.set_node_power_state.assert_not_called()
+ 
+     def test_fence_rejects_stable_off_observed_after_deadline(self):
+@@ -218,6 +220,140 @@ class IronicPowerClientTest(test.TestCase):
+         )
+         connection.baremetal.get_node.assert_called_once_with("node-1")
+ 
++    def test_fence_bounds_blocked_node_listing(self):
++        node = fakes.node("node-1", "compute-01", "power on")
++        connection = fakes.connection(nodes=[node])
++        connection.session.timeout = mock.sentinel.original_timeout
++        observed_timeouts = []
++
++        def blocked_nodes(**_kwargs):
++            observed_timeouts.append(connection.session.timeout)
++            eventlet.sleep(1)
++            return [node]
++
++        connection.baremetal.nodes.side_effect = blocked_nodes
++        client = ironic.IronicPowerClient(connection)
++        started = time.monotonic()
++
++        self.assertRaises(
++            ironic.FencingError, client.fence,
++            "compute-01", 0.05, 0, 1
++        )
++
++        self.assertLess(time.monotonic() - started, 0.5)
++        self.assertEqual(1, len(observed_timeouts))
++        self.assertGreater(observed_timeouts[0], 0)
++        self.assertLessEqual(observed_timeouts[0], 0.05)
++        self.assertIs(
++            mock.sentinel.original_timeout, connection.session.timeout
++        )
++        connection.baremetal.set_node_power_state.assert_not_called()
++        connection.baremetal.get_node.assert_not_called()
++
++    def test_fence_bounds_blocked_power_request_without_polling(self):
++        node = fakes.node("node-1", "compute-01", "power on")
++        connection = fakes.connection(nodes=[node])
++        connection.session.timeout = mock.sentinel.original_timeout
++        observed_timeouts = []
++
++        def blocked_power_request(*_args, **_kwargs):
++            observed_timeouts.append(connection.session.timeout)
++            eventlet.sleep(1)
++
++        connection.baremetal.set_node_power_state.side_effect = (
++            blocked_power_request
++        )
++        client = ironic.IronicPowerClient(connection)
++        started = time.monotonic()
++
++        self.assertRaises(
++            ironic.FencingError, client.fence,
++            "compute-01", 0.05, 0, 1
++        )
++
++        self.assertLess(time.monotonic() - started, 0.5)
++        self.assertEqual(1, len(observed_timeouts))
++        self.assertGreater(observed_timeouts[0], 0)
++        self.assertLessEqual(observed_timeouts[0], 0.05)
++        self.assertIs(
++            mock.sentinel.original_timeout, connection.session.timeout
++        )
++        connection.baremetal.get_node.assert_not_called()
++
++    def test_fence_bounds_blocked_poll_without_later_poll(self):
++        node = fakes.node("node-1", "compute-01", "power on")
++        connection = fakes.connection(nodes=[node])
++        connection.session.timeout = mock.sentinel.original_timeout
++        observed_timeouts = []
++
++        def blocked_get_node(_node_id):
++            observed_timeouts.append(connection.session.timeout)
++            eventlet.sleep(1)
++            return node
++
++        connection.baremetal.get_node.side_effect = blocked_get_node
++        client = ironic.IronicPowerClient(
++            connection, sleep=lambda _interval: None
++        )
++        started = time.monotonic()
++
++        self.assertRaises(
++            ironic.FencingError, client.fence,
++            "compute-01", 0.05, 0, 1
++        )
++
++        self.assertLess(time.monotonic() - started, 0.5)
++        self.assertEqual(1, len(observed_timeouts))
++        self.assertGreater(observed_timeouts[0], 0)
++        self.assertLessEqual(observed_timeouts[0], 0.05)
++        self.assertIs(
++            mock.sentinel.original_timeout, connection.session.timeout
++        )
++        connection.baremetal.set_node_power_state.assert_called_once_with(
++            node, "power off", wait=False
++        )
++        self.assertEqual(1, connection.baremetal.get_node.call_count)
++
++    def test_fence_checks_health_immediately_before_power_request(self):
++        states = [
++            fakes.node("node-1", "compute-01", "power on"),
++            fakes.node("node-1", "compute-01", "power off"),
++        ]
++        connection = fakes.connection_with_node_states(states)
++        health_check = mock.Mock(side_effect=RuntimeError("lock lost"))
++        client = ironic.IronicPowerClient(
++            connection, sleep=lambda _interval: None
++        )
++        client.health_check = health_check
++
++        self.assertRaises(
++            RuntimeError, client.fence, "compute-01", 1, 0, 1
++        )
++
++        health_check.assert_called_once_with()
++        connection.baremetal.set_node_power_state.assert_not_called()
++        connection.baremetal.get_node.assert_not_called()
++
++    def test_fence_checks_health_each_iteration_and_before_success(self):
++        states = [
++            fakes.node("node-1", "compute-01", "power off"),
++            fakes.node("node-1", "compute-01", "power off"),
++            fakes.node("node-1", "compute-01", "power off"),
++        ]
++        connection = fakes.connection_with_node_states(states)
++        health_check = mock.Mock()
++        client = ironic.IronicPowerClient(
++            connection, sleep=lambda _interval: None
++        )
++        client.health_check = health_check
++
++        result = client.fence("compute-01", 30, 0, 3)
++
++        self.assertEqual("power off", result["power_state"])
++        self.assertEqual(4, health_check.call_count)
++        connection.baremetal.set_node_power_state.assert_not_called()
++        self.assertEqual(2, connection.baremetal.get_node.call_count)
++
+     def test_fence_already_off_is_idempotent(self):
+         states = [
+             fakes.node("node-1", "compute-01", "power off"),
+diff --git a/releasenotes/notes/powerops-ironic-fencing.yaml b/releasenotes/notes/powerops-ironic-fencing.yaml
+index 3871473..5ea790d 100644
+--- a/releasenotes/notes/powerops-ironic-fencing.yaml
++++ b/releasenotes/notes/powerops-ironic-fencing.yaml
+@@ -2,12 +2,15 @@
+ features:
+   - |
+     Adds an opt-in PowerOps host-recovery integration. PowerOps is disabled by
+-    default. When enabled, it requires an etcd-compatible
++    default. When enabled, it requires an ``etcd3+http`` or ``etcd3+https``
+     ``[coordination]backend_url`` for tooz coordination and the
+     ``openstacksdk`` dependency to fence failed hosts through Ironic.
+ 
+-    Add ``ironic_fence`` to the configured pre-task list in
+-    ``[taskflow_driver_recovery_flows]`` to fence a failed host before its
+-    recovery flow continues. While PowerOps is enabled, evacuations are
+-    serialized through the shared coordination backend; disabled deployments
+-    retain the existing evacuation behavior.
++    For both ``host_auto_failure_recovery_tasks`` and
++    ``host_rh_failure_recovery_tasks`` in
++    ``[taskflow_driver_recovery_flows]``, configure the pre-task list in this
++    exact order: ``disable_compute_service_task``, then ``ironic_fence``. This
++    fences a failed host after its Nova compute service is disabled and before
++    recovery continues. While PowerOps is enabled, evacuations are serialized
++    through the shared coordination backend; disabled deployments retain the
++    existing evacuation behavior.
+-- 
+2.49.0
+

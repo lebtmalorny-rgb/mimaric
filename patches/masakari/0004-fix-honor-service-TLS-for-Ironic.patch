@@ -1,0 +1,92 @@
+From fb068de0cac594fdd12da0d9e74bfc3b41dd27f8 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Mon, 31 Aug 2026 21:46:02 +0300
+Subject: [PATCH 04/10] fix: honor service TLS for Ironic
+
+---
+ masakari/powerops/ironic.py                 |  9 +++-
+ masakari/tests/unit/powerops/test_ironic.py | 47 +++++++++++++++++++++
+ 2 files changed, 55 insertions(+), 1 deletion(-)
+
+diff --git a/masakari/powerops/ironic.py b/masakari/powerops/ironic.py
+index 57fef4e..d97fa36 100644
+--- a/masakari/powerops/ironic.py
++++ b/masakari/powerops/ironic.py
+@@ -35,8 +35,15 @@ def connection_from_conf():
+     auth = loading.load_auth_from_conf_options(
+         CONF, "keystone_authtoken"
+     )
++    service_auth = CONF.keystone_authtoken
+     session = loading.load_session_from_conf_options(
+-        CONF, "DEFAULT", auth=auth
++        CONF,
++        "DEFAULT",
++        auth=auth,
++        insecure=service_auth.insecure,
++        cacert=service_auth.cafile,
++        cert=service_auth.certfile,
++        key=service_auth.keyfile,
+     )
+     return openstack_connection.Connection(
+         session=session,
+diff --git a/masakari/tests/unit/powerops/test_ironic.py b/masakari/tests/unit/powerops/test_ironic.py
+index 9138be7..96c9648 100644
+--- a/masakari/tests/unit/powerops/test_ironic.py
++++ b/masakari/tests/unit/powerops/test_ironic.py
+@@ -50,6 +50,53 @@ class IronicPowerClientTest(test.TestCase):
+         )
+         self.assertEqual("admin", connection.call_args.kwargs["interface"])
+ 
++    def test_connection_from_conf_service_insecure_overrides_default(self):
++        self.override_config("insecure", False, "DEFAULT")
++        self.override_config("insecure", True, "keystone_authtoken")
++
++        with mock.patch.object(
++            ironic.loading, "load_auth_from_conf_options",
++            return_value=mock.sentinel.auth,
++        ), mock.patch.object(
++            ironic.openstack_connection, "Connection",
++            return_value=mock.sentinel.connection,
++        ) as connection:
++            ironic.connection_from_conf()
++
++        session = connection.call_args.kwargs["session"]
++        self.assertFalse(session.verify)
++
++    def test_connection_from_conf_uses_service_tls_files(self):
++        self.override_config("insecure", False, "DEFAULT")
++        self.override_config("insecure", False, "keystone_authtoken")
++        self.override_config("cafile", "/default/ca.pem", "DEFAULT")
++        self.override_config(
++            "cafile", "/service/ca.pem", "keystone_authtoken"
++        )
++        self.override_config("certfile", "/default/cert.pem", "DEFAULT")
++        self.override_config(
++            "certfile", "/service/cert.pem", "keystone_authtoken"
++        )
++        self.override_config("keyfile", "/default/key.pem", "DEFAULT")
++        self.override_config(
++            "keyfile", "/service/key.pem", "keystone_authtoken"
++        )
++
++        with mock.patch.object(
++            ironic.loading, "load_auth_from_conf_options",
++            return_value=mock.sentinel.auth,
++        ), mock.patch.object(
++            ironic.openstack_connection, "Connection",
++            return_value=mock.sentinel.connection,
++        ) as connection:
++            ironic.connection_from_conf()
++
++        session = connection.call_args.kwargs["session"]
++        self.assertEqual("/service/ca.pem", session.verify)
++        self.assertEqual(
++            ("/service/cert.pem", "/service/key.pem"), session.cert
++        )
++
+     def test_fence_rejects_duplicate_node_names(self):
+         connection = fakes.connection(nodes=[
+             fakes.node("node-1", "compute-01", "power on"),
+-- 
+2.49.0
+

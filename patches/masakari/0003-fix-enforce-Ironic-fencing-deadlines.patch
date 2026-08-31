@@ -1,0 +1,159 @@
+From bb08f5b2683bbe52bd720d8772aa8924cc6efd42 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Mon, 31 Aug 2026 21:34:12 +0300
+Subject: [PATCH 03/10] fix: enforce Ironic fencing deadlines
+
+---
+ masakari/powerops/ironic.py                 | 19 ++++---
+ masakari/tests/unit/powerops/test_ironic.py | 63 +++++++++++++++++----
+ 2 files changed, 64 insertions(+), 18 deletions(-)
+
+diff --git a/masakari/powerops/ironic.py b/masakari/powerops/ironic.py
+index 4688eae..57fef4e 100644
+--- a/masakari/powerops/ironic.py
++++ b/masakari/powerops/ironic.py
+@@ -36,7 +36,7 @@ def connection_from_conf():
+         CONF, "keystone_authtoken"
+     )
+     session = loading.load_session_from_conf_options(
+-        CONF, "keystone_authtoken", auth=auth
++        CONF, "DEFAULT", auth=auth
+     )
+     return openstack_connection.Connection(
+         session=session,
+@@ -85,11 +85,19 @@ class IronicPowerClient(object):
+         self.sleep = sleep
+         self.monotonic = monotonic
+ 
++    def _raise_if_timed_out(self, deadline, host):
++        if self.monotonic() >= deadline:
++            raise FencingError(
++                "Timed out waiting for stable power off on {!r}".format(host)
++            )
++
+     def fence(self, host, timeout, interval, stable_observations):
++        deadline = self.monotonic() + timeout
+         matches = [
+             node for node in self.connection.baremetal.nodes(details=True)
+             if node.name == host
+         ]
++        self._raise_if_timed_out(deadline, host)
+         if len(matches) != 1:
+             raise FencingError(
+                 "Expected exactly one Ironic node named {!r}".format(host)
+@@ -102,9 +110,9 @@ class IronicPowerClient(object):
+                 node, "power off", wait=False
+             )
+ 
+-        deadline = self.monotonic() + timeout
+         stable = 0
+         while True:
++            self._raise_if_timed_out(deadline, host)
+             _validate_node(node)
+             if _is_compatible_off(node):
+                 stable += 1
+@@ -113,11 +121,6 @@ class IronicPowerClient(object):
+             else:
+                 stable = 0
+ 
+-            if self.monotonic() >= deadline:
+-                raise FencingError(
+-                    "Timed out waiting for stable power off on {!r}".format(
+-                        host
+-                    )
+-                )
+             self.sleep(interval)
++            self._raise_if_timed_out(deadline, host)
+             node = self.connection.baremetal.get_node(node.id)
+diff --git a/masakari/tests/unit/powerops/test_ironic.py b/masakari/tests/unit/powerops/test_ironic.py
+index 75afb1d..9138be7 100644
+--- a/masakari/tests/unit/powerops/test_ironic.py
++++ b/masakari/tests/unit/powerops/test_ironic.py
+@@ -36,9 +36,6 @@ class IronicPowerClientTest(test.TestCase):
+             ironic.loading, "load_auth_from_conf_options",
+             return_value=mock.sentinel.auth,
+         ) as load_auth, mock.patch.object(
+-            ironic.loading, "load_session_from_conf_options",
+-            return_value=mock.sentinel.session,
+-        ) as load_session, mock.patch.object(
+             ironic.openstack_connection, "Connection",
+             return_value=mock.sentinel.connection,
+         ) as connection:
+@@ -46,14 +43,12 @@ class IronicPowerClientTest(test.TestCase):
+ 
+         self.assertIs(mock.sentinel.connection, result)
+         load_auth.assert_called_once_with(CONF, "keystone_authtoken")
+-        load_session.assert_called_once_with(
+-            CONF, "keystone_authtoken", auth=mock.sentinel.auth
+-        )
+-        connection.assert_called_once_with(
+-            session=mock.sentinel.session,
+-            region_name="RegionTwo",
+-            interface="admin",
++        session = connection.call_args.kwargs["session"]
++        self.assertIs(mock.sentinel.auth, session.auth)
++        self.assertEqual(
++            "RegionTwo", connection.call_args.kwargs["region_name"]
+         )
++        self.assertEqual("admin", connection.call_args.kwargs["interface"])
+ 
+     def test_fence_rejects_duplicate_node_names(self):
+         connection = fakes.connection(nodes=[
+@@ -128,6 +123,54 @@ class IronicPowerClientTest(test.TestCase):
+             ironic.FencingError, client.fence, "compute-01", 1, 1, 3
+         )
+ 
++    def test_fence_timeout_starts_before_node_lookup_and_power_request(self):
++        events = []
++        node = fakes.node("node-1", "compute-01", "power on")
++        connection = fakes.connection(nodes=[node])
++        connection.baremetal.nodes.side_effect = lambda **_kwargs: (
++            events.append("list") or [node]
++        )
++        connection.baremetal.set_node_power_state.side_effect = (
++            lambda *_args, **_kwargs: events.append("power-off")
++        )
++        times = iter([0, 2])
++
++        def clock():
++            events.append("clock")
++            return next(times)
++
++        client = ironic.IronicPowerClient(
++            connection, sleep=lambda _n: None, monotonic=clock
++        )
++
++        self.assertRaises(
++            ironic.FencingError, client.fence, "compute-01", 1, 1, 3
++        )
++        self.assertEqual(["clock", "list", "clock"], events)
++        connection.baremetal.set_node_power_state.assert_not_called()
++
++    def test_fence_rejects_stable_off_observed_after_deadline(self):
++        initial = fakes.node("node-1", "compute-01", "power on")
++        powered_off = fakes.node("node-1", "compute-01", "power off")
++        connection = fakes.connection(nodes=[initial])
++        current_time = {"value": 0}
++
++        def get_node(_node_id):
++            current_time["value"] = 2
++            return powered_off
++
++        connection.baremetal.get_node.side_effect = get_node
++        client = ironic.IronicPowerClient(
++            connection,
++            sleep=lambda _n: None,
++            monotonic=lambda: current_time["value"],
++        )
++
++        self.assertRaises(
++            ironic.FencingError, client.fence, "compute-01", 1, 1, 1
++        )
++        connection.baremetal.get_node.assert_called_once_with("node-1")
++
+     def test_fence_already_off_is_idempotent(self):
+         states = [
+             fakes.node("node-1", "compute-01", "power off"),
+-- 
+2.49.0
+

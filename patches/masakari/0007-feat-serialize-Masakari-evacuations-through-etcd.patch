@@ -1,0 +1,234 @@
+From 04de005772b4d4d3b07cb4177db5d07c3e649556 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Mon, 31 Aug 2026 22:43:02 +0300
+Subject: [PATCH 07/10] feat: serialize Masakari evacuations through etcd
+
+---
+ .../engine/drivers/taskflow/host_failure.py   |  40 ++++--
+ .../taskflow/test_host_failure_flow.py        | 122 ++++++++++++++++++
+ 2 files changed, 152 insertions(+), 10 deletions(-)
+
+diff --git a/masakari/engine/drivers/taskflow/host_failure.py b/masakari/engine/drivers/taskflow/host_failure.py
+index 22d6997..09fa9de 100644
+--- a/masakari/engine/drivers/taskflow/host_failure.py
++++ b/masakari/engine/drivers/taskflow/host_failure.py
+@@ -30,6 +30,7 @@ from masakari.engine.drivers.taskflow import base
+ from masakari import exception
+ from masakari import objects
+ from masakari.objects import fields
++from masakari.powerops import coordination as powerops_coordination
+ from masakari import utils
+ 
+ 
+@@ -155,6 +156,7 @@ class EvacuateInstancesTask(base.MasakariTask):
+     def __init__(self, context, novaclient, **kwargs):
+         kwargs['requires'] = ["host_name", "notification_uuid"]
+         self.update_host_method = kwargs['update_host_method']
++        self.powerops_coordinator = kwargs.pop('powerops_coordinator', None)
+         super(EvacuateInstancesTask, self).__init__(context, novaclient,
+                                                     **kwargs)
+ 
+@@ -335,6 +337,9 @@ class EvacuateInstancesTask(base.MasakariTask):
+     def execute(self, host_name, notification_uuid, reserved_host=None):
+         all_vmoves = objects.VMoveList.get_all_vmoves(
+             self.context, notification_uuid, status=fields.VMoveStatus.PENDING)
++        if CONF.powerops.enabled:
++            all_vmoves = sorted(
++                all_vmoves, key=lambda item: item.instance_uuid)
+         instance_list = [i.instance_uuid for i in all_vmoves]
+         msg = ("Start evacuation of instances from failed host '%(host_name)s'"
+                ", instance uuids are: '%(instance_list)s'") % {
+@@ -381,18 +386,33 @@ class EvacuateInstancesTask(base.MasakariTask):
+                 # Set reserved property of reserved_host to False
+                 self.update_host_method(context, reserved_host)
+ 
+-            thread_pool = greenpool.GreenPool(
+-                CONF.host_failure_recovery_threads)
+-
+             nonlocal all_vmoves
+ 
+-            for vmove in all_vmoves:
+-                msg = ("Evacuation of instance started: '%s'"
+-                       % vmove.instance_uuid)
+-                self.update_details(msg, 0.5)
+-                thread_pool.spawn_n(self._evacuate_and_confirm, self.context,
+-                                    vmove, reserved_host)
+-            thread_pool.waitall()
++            if CONF.powerops.enabled:
++                for vmove in all_vmoves:
++                    msg = ("Evacuation of instance started: '%s'"
++                           % vmove.instance_uuid)
++                    self.update_details(msg, 0.5)
++                    with self.powerops_coordinator.lock(
++                            powerops_coordination.GLOBAL_EVACUATION_LOCK,
++                            CONF.powerops.evacuation_lock_timeout):
++                        self._evacuate_and_confirm(
++                            self.context, vmove, reserved_host)
++                        if vmove.status == fields.VMoveStatus.FAILED:
++                            break
++                        eventlet.sleep(CONF.powerops.evacuation_interval)
++            else:
++                thread_pool = greenpool.GreenPool(
++                    CONF.host_failure_recovery_threads)
++
++                for vmove in all_vmoves:
++                    msg = ("Evacuation of instance started: '%s'"
++                           % vmove.instance_uuid)
++                    self.update_details(msg, 0.5)
++                    thread_pool.spawn_n(
++                        self._evacuate_and_confirm, self.context,
++                        vmove, reserved_host)
++                thread_pool.waitall()
+ 
+             all_vmoves = objects.VMoveList.get_all_vmoves(
+                 self.context, notification_uuid)
+diff --git a/masakari/tests/unit/engine/drivers/taskflow/test_host_failure_flow.py b/masakari/tests/unit/engine/drivers/taskflow/test_host_failure_flow.py
+index a812123..a468024 100644
+--- a/masakari/tests/unit/engine/drivers/taskflow/test_host_failure_flow.py
++++ b/masakari/tests/unit/engine/drivers/taskflow/test_host_failure_flow.py
+@@ -20,6 +20,8 @@ import copy
+ from unittest import mock
+ 
+ import ddt
++import eventlet
++from eventlet import greenpool
+ 
+ from masakari.compute import nova
+ from masakari import conf
+@@ -34,6 +36,7 @@ from masakari.objects import fields
+ from masakari.objects import vmove as vmove_obj
+ from masakari import test
+ from masakari.tests.unit import fakes
++from masakari.tests.unit.powerops import fakes as powerops_fakes
+ from masakari.tests import uuidsentinel as uuids
+ 
+ CONF = conf.CONF
+@@ -894,6 +897,125 @@ class HostFailureTestCase(test.TestCase):
+         self.assertEqual(0, len(self.fake_client.servers.stop_calls))
+ 
+ 
++class EvacuateInstancesPowerOpsTestCase(test.TestCase):
++
++    def setUp(self):
++        super(EvacuateInstancesPowerOpsTestCase, self).setUp()
++        self.ctxt = context.get_admin_context()
++        self.novaclient = nova.API()
++        self.notification_uuid = uuids.notification
++
++    @staticmethod
++    def _pending_vmove(instance_uuid):
++        return mock.Mock(
++            instance_uuid=instance_uuid,
++            status=fields.VMoveStatus.PENDING,
++        )
++
++    def test_powerops_evacuation_is_sorted_and_globally_serial(self):
++        events = []
++        coordinator = powerops_fakes.recording_coordinator(events)
++        task = host_failure.EvacuateInstancesTask(
++            self.ctxt,
++            self.novaclient,
++            update_host_method=manager.update_host_method,
++            powerops_coordinator=coordinator,
++        )
++        self.override_config('enabled', True, 'powerops')
++        self.override_config('evacuation_lock_timeout', 17.0, 'powerops')
++        self.override_config('evacuation_interval', 7, 'powerops')
++        vmoves = [self._pending_vmove('vm-b'),
++                  self._pending_vmove('vm-a')]
++
++        def mark_succeeded(_context, vmove, _reserved_host=None):
++            events.append('evacuate-{}'.format(vmove.instance_uuid))
++            vmove.status = fields.VMoveStatus.SUCCEEDED
++
++        def record_sleep(interval):
++            events.append('sleep-{}'.format(interval))
++
++        with mock.patch.object(
++                objects.VMoveList, 'get_all_vmoves', return_value=vmoves), \
++                mock.patch.object(
++                    task, '_evacuate_and_confirm',
++                    side_effect=mark_succeeded) as evacuate, \
++                mock.patch.object(
++                    coordinator, 'lock', wraps=coordinator.lock) as lock, \
++                mock.patch.object(
++                    eventlet, 'sleep', side_effect=record_sleep) as sleep, \
++                mock.patch.object(task, 'update_details') as update_details:
++            task.execute('compute-01', self.notification_uuid)
++
++        self.assertEqual(
++            ['vm-a', 'vm-b'],
++            [call.args[1].instance_uuid
++             for call in evacuate.call_args_list],
++        )
++        self.assertEqual([
++            'evacuation-lock-enter', 'evacuate-vm-a', 'sleep-7',
++            'evacuation-lock-exit', 'evacuation-lock-enter',
++            'evacuate-vm-b', 'sleep-7', 'evacuation-lock-exit',
++        ], events)
++        self.assertEqual([
++            mock.call('powerops/evacuation/global', 17.0),
++            mock.call('powerops/evacuation/global', 17.0),
++        ], lock.call_args_list)
++        self.assertEqual([mock.call(7), mock.call(7)],
++                         sleep.call_args_list)
++        update_details.assert_any_call(
++            "Start evacuation of instances from failed host 'compute-01', "
++            "instance uuids are: 'vm-a,vm-b'")
++
++    def test_powerops_stops_after_first_failed_vmove(self):
++        coordinator = powerops_fakes.recording_coordinator([])
++        task = host_failure.EvacuateInstancesTask(
++            self.ctxt,
++            self.novaclient,
++            update_host_method=manager.update_host_method,
++            powerops_coordinator=coordinator,
++        )
++        self.override_config('enabled', True, 'powerops')
++        vm_a = self._pending_vmove('vm-a')
++        vm_b = self._pending_vmove('vm-b')
++
++        def mark_failed(_context, vmove, _reserved_host=None):
++            vmove.status = fields.VMoveStatus.FAILED
++
++        with mock.patch.object(
++                objects.VMoveList, 'get_all_vmoves',
++                return_value=[vm_b, vm_a]), \
++                mock.patch.object(
++                    task, '_evacuate_and_confirm',
++                    side_effect=mark_failed) as evacuate, \
++                mock.patch.object(eventlet, 'sleep') as sleep:
++            self.assertRaises(
++                exception.HostRecoveryFailureException,
++                task.execute,
++                'compute-01',
++                self.notification_uuid,
++            )
++
++        self.assertEqual('vm-a', evacuate.call_args.args[1].instance_uuid)
++        self.assertEqual(1, evacuate.call_count)
++        sleep.assert_not_called()
++
++    @mock.patch.object(greenpool, 'GreenPool')
++    @mock.patch.object(objects.VMoveList, 'get_all_vmoves', return_value=[])
++    def test_legacy_evacuation_uses_configured_greenpool(
++            self, get_vmoves, greenpool_cls):
++        self.override_config('enabled', False, 'powerops')
++        task = host_failure.EvacuateInstancesTask(
++            self.ctxt,
++            self.novaclient,
++            update_host_method=manager.update_host_method,
++        )
++
++        task.execute('compute-01', self.notification_uuid)
++
++        greenpool_cls.assert_called_once_with(
++            CONF.host_failure_recovery_threads)
++
++
+ class HostFailureFlowCoordinatorTestCase(test.TestCase):
+ 
+     def setUp(self):
+-- 
+2.49.0
+

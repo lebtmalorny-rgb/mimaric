@@ -1,0 +1,32 @@
+From 4d23153d1e8645bafc1e3e6bfd014d2d330cd5e7 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Mon, 31 Aug 2026 23:24:15 +0300
+Subject: [PATCH 08/10] docs: describe Masakari PowerOps fencing
+
+---
+ releasenotes/notes/powerops-ironic-fencing.yaml | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+ create mode 100644 releasenotes/notes/powerops-ironic-fencing.yaml
+
+diff --git a/releasenotes/notes/powerops-ironic-fencing.yaml b/releasenotes/notes/powerops-ironic-fencing.yaml
+new file mode 100644
+index 0000000..3871473
+--- /dev/null
++++ b/releasenotes/notes/powerops-ironic-fencing.yaml
+@@ -0,0 +1,13 @@
++---
++features:
++  - |
++    Adds an opt-in PowerOps host-recovery integration. PowerOps is disabled by
++    default. When enabled, it requires an etcd-compatible
++    ``[coordination]backend_url`` for tooz coordination and the
++    ``openstacksdk`` dependency to fence failed hosts through Ironic.
++
++    Add ``ironic_fence`` to the configured pre-task list in
++    ``[taskflow_driver_recovery_flows]`` to fence a failed host before its
++    recovery flow continues. While PowerOps is enabled, evacuations are
++    serialized through the shared coordination backend; disabled deployments
++    retain the existing evacuation behavior.
+-- 
+2.49.0
+
