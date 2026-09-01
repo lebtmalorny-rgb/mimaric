@@ -1,21 +1,21 @@
-From 9bc9c63d8c1c42f575c0a47198884c75180d595a Mon Sep 17 00:00:00 2001
+From 63a8d0f597f9034a42f2e1b0bd415f1746d33b8d Mon Sep 17 00:00:00 2001
 From: Lebt <lebtmalorny@gmail.com>
 Date: Tue, 1 Sep 2026 10:59:14 +0300
 Subject: [PATCH 5/5] docs: add Russian PowerOps operations guide
 
 ---
- docs/powerops/POWEROPS-ARCHITECTURE.md        | 503 ++++++++++++++++++
- .../tests/unit/test_powerops_documentation.py | 134 +++++
- 2 files changed, 637 insertions(+)
+ docs/powerops/POWEROPS-ARCHITECTURE.md        | 523 ++++++++++++++++++
+ .../tests/unit/test_powerops_documentation.py | 153 +++++
+ 2 files changed, 676 insertions(+)
  create mode 100644 docs/powerops/POWEROPS-ARCHITECTURE.md
  create mode 100644 kolla_ansible/tests/unit/test_powerops_documentation.py
 
 diff --git a/docs/powerops/POWEROPS-ARCHITECTURE.md b/docs/powerops/POWEROPS-ARCHITECTURE.md
 new file mode 100644
-index 0000000000000000000000000000000000000000..cb72c25839a2b8c4a7f7ce579d00f6bbc7207e29
+index 0000000000000000000000000000000000000000..c9948abad8b7310ac0eff5e637af225bba6ea8fd
 --- /dev/null
 +++ b/docs/powerops/POWEROPS-ARCHITECTURE.md
-@@ -0,0 +1,503 @@
+@@ -0,0 +1,523 @@
 +# PowerOps: управление питанием и fencing вычислительных узлов
 +
 +## Краткий вывод
@@ -115,31 +115,43 @@ index 0000000000000000000000000000000000000000..cb72c25839a2b8c4a7f7ce579d00f6bb
 +`etcd3+http` или `etcd3+https`. Mistral и Masakari запрашивают через tooz
 +характеристики `DISTRIBUTED_ACROSS_PROCESSES` и `LINEARIZABLE`, запускают
 +heartbeat и перед критическими действиями проверяют, что etcd всё ещё хранит
-+UUID владельца блокировки. До фиксации успешного результата неподдерживаемый
-+backend, потеря heartbeat или невозможность доказать владение считаются
-+ошибкой. Ошибка освобождения после success относится к отдельной terminal ветке
-+ниже. Redis не используется в активированном пути PowerOps.
++UUID владельца блокировки. До завершения операции, финальной health-проверки и
++успешного возврата из success `LOG.info` неподдерживаемый backend, потеря
++heartbeat или невозможность доказать владение считаются ошибкой. Ошибка
++освобождения после установки внутреннего признака completion относится к
++отдельной terminal ветке ниже. Redis не используется в активированном пути
++PowerOps.
 +
 +Mistral различает ошибку до и после завершения изменяющей операции. До
-+финальной проверки здоровья coordinator и записи success audit ошибка
-+прерывает action. Если Nova уже пытались отключить, fail-safe в режиме
-+best-effort пробует повторно установить Masakari `maintenance=true` и Nova
-+disabled, но только пока владение host lock доказано. Каждый неудачный вызов
-+учитывается в failure audit как `fail_safe_error_count`. После потери heartbeat
-+или ownership новые mutations запрещены: health check перед каждым вызовом
-+OpenStack не допускает некоординированное изменение. Даже при здоровой
-+координации API-вызов может завершиться ошибкой, поэтому фактические состояния
-+Nova и Masakari нужно перечитать; желаемое fail-safe состояние не является
-+гарантией.
++финальной проверки здоровья coordinator и успешного возврата из вызова success
++audit ошибка прерывает action. Если Nova уже пытались отключить, fail-safe в
++режиме best-effort пробует повторно установить Masakari `maintenance=true` и
++Nova disabled, но только пока владение host lock доказано. Каждый неудачный
++вызов включается в поле `fail_safe_error_count` попытки failure audit. После
++потери heartbeat или ownership новые mutations запрещены: health check перед
++каждым вызовом OpenStack не допускает некоординированное изменение. Даже при
++здоровой координации API-вызов может завершиться ошибкой, поэтому фактические
++состояния Nova и Masakari нужно перечитать; желаемое fail-safe состояние не
++является гарантией.
 +
-+Иная ветка применяется, когда сама операция, финальная health-проверка и success
-+audit уже завершены, а затем ошибка возникла при release host lock или остановке
-+coordinator. Она записывается как
-+`completed_with_coordination_cleanup_error`: удалённый переход остаётся
-+завершённым, post-ownership fail-safe не выполняется, и результат action
-+возвращается как завершённый. Оператор должен перечитать фактическое состояние
-+и не повторять power cycle автоматически, иначе уже выполненный off/on может
-+быть выполнен второй раз.
++В этой реализации audit — структурированная запись процесса Mistral через
++`LOG.info`: в неё передаются operation, outcome, host, workflow execution ID и
++безопасные details. Это не является внешним долговечным audit-хранилищем.
++Успешный возврат `LOG.info` сам по себе не гарантирует доставку или сохранение
++записи внешним log collector. Сбор, доставка, неизменяемое хранение и retention
++таких сообщений являются отдельной обязанностью logging-инфраструктуры
++оператора и в эту серию патчей не входят.
++
++Иная ветка применяется, когда сама операция и финальная health-проверка
++завершены, а вызов success audit через `LOG.info` вернулся без исключения, после
++чего ошибка возникла при release host lock или остановке coordinator. Код
++пытается вывести ещё одну запись с outcome
++`completed_with_coordination_cleanup_error`; даже если этот второй `LOG.info`
++завершится ошибкой, удалённый переход остаётся завершённым, post-ownership
++fail-safe не выполняется, и результат action возвращается как завершённый. Это
++описание ветки управления не доказывает сохранение audit-сообщения. Оператор
++должен перечитать фактическое состояние и не повторять power cycle
++автоматически, иначе уже выполненный off/on может быть выполнен второй раз.
 +
 +Используются два имени блокировок:
 +
@@ -230,10 +242,11 @@ index 0000000000000000000000000000000000000000..cb72c25839a2b8c4a7f7ce579d00f6bb
 +
 +Если любой шаг после Nova disable не доказан и ownership ещё подтверждается,
 +fail-safe только пытается в режиме best-effort повторно запросить
-+`maintenance=true` и Nova disabled. Ошибка запроса учитывается в audit, а
-+результирующее состояние не гарантируется. При потерянном ownership action не
-+делает новых mutations. Оператор должен перечитать питание, Nova и Masakari и
-+не включать scheduler, пока фактическое состояние сервисов и ВМ не сверено.
++`maintenance=true` и Nova disabled. Число ошибок запроса передаётся в
++структурированную попытку failure audit, а результирующее состояние и доставка
++этой log-записи не гарантируются. При потерянном ownership action не делает
++новых mutations. Оператор должен перечитать питание, Nova и Masakari и не
++включать scheduler, пока фактическое состояние сервисов и ВМ не сверено.
 +
 +## Сценарий: включение и возврат в эксплуатацию
 +
@@ -403,12 +416,19 @@ index 0000000000000000000000000000000000000000..cb72c25839a2b8c4a7f7ce579d00f6bb
 +   разрешает PUT только при изменении definition или public scope. Чужой
 +   workbook либо несколько совпадений приводят к fail-closed ошибке без
 +   мутации.
-+5. Безопасный PUT требует companion-патч Mistral commit
-+   `665cde88` (`665cde880127f56c8335e6f8b210362f87ae19d9`). Он в той же
-+   SQLAlchemy-транзакции ограничивает lookup workbook текущим request project и
-+   тем самым закрывает межпроектную коллизию и TOCTOU. Одной предварительной
-+   проверки Kolla для этого недостаточно; без данного Mistral-патча deployment
-+   нельзя считать безопасным.
++5. Безопасный PUT требует companion-патч Mistral
++   `0010-fix-scope-workbook-updates-to-request-project.patch`. Он ограничивает
++   проектом Keystone token все изменения `Workbook`, `WorkflowDefinition` и
++   `ActionDefinition`; обновление workbook и его дочерних definitions
++   выполняется в одной SQLAlchemy-транзакции. Это закрывает межпроектный выбор
++   одноимённых public definitions и TOCTOU внутри PUT; одной предварительной
++   проверки Kolla для этого недостаточно. Kolla по-прежнему останавливает
++   reconcile в режиме fail-closed при коллизии каталога workbook или workflow:
++   чужой/множественный workbook блокирует POST/PUT, а неоднозначный либо чужой
++   workflow не позволяет reconcile завершиться успешно. Проверка workflow
++   выполняется после workbook PUT и не означает автоматический rollback уже
++   выполненного обновления. Без companion-патча Mistral deployment нельзя
++   считать безопасным.
 +6. Kolla прямыми чтениями проверяет пять точных actions и четыре точных workflow;
 +   каждый workflow должен быть единственным и принадлежать проекту token.
 +
@@ -429,7 +449,7 @@ index 0000000000000000000000000000000000000000..cb72c25839a2b8c4a7f7ce579d00f6bb
 +| Отказ | Безопасный результат | Действие оператора |
 +|---|---|---|
 +| Не получен host lock, потерян heartbeat или ownership etcd до success | Изменяющее действие прерывается; после потери ownership новые mutations запрещены. Best-effort reassert мог выполниться полностью, частично или не выполниться. | Проверить quorum/доступность etcd и перечитать фактические состояния Ironic, Nova и Masakari; не перезапускать execution вслепую. |
-+| `completed_with_coordination_cleanup_error` после success audit | Удалённая операция уже завершена и её результат возвращён; ошибка относится к release/stop coordinator, post-ownership fail-safe не запускается. | Проверить фактическое состояние и cleanup координации; не повторять уже выполненный power cycle автоматически. |
++| `completed_with_coordination_cleanup_error` после вернувшегося без исключения success `LOG.info` | Удалённая операция уже завершена и её результат возвращён; ошибка относится к release/stop coordinator, post-ownership fail-safe не запускается. Вывод cleanup audit — best-effort и не доказывает внешнее сохранение записи. | Проверить фактическое состояние, внешний logging pipeline и cleanup координации; не повторять уже выполненный power cycle автоматически. |
 +| Неоднозначный или несовместимый Ironic Node, конфликтующий target, `last_error` | Power transition не считается доказанным. | Исправить inventory/ошибку Ironic, сверить BMC read-only, затем создать новую контролируемую операцию. |
 +| Graceful off не уложился в timeout и hard off не разрешён | Плановый хост остаётся выведенным из планирования; жёсткое выключение не выполняется. | Решить, допустим ли отдельный запуск с `allow_hard_off=true`, после проверки приложений и консоли. |
 +| Emergency stable-off не подтверждён | `ironic_fence` падает, evacuation не выполняется. | Не эвакуировать вручную до независимого доказательства fencing. |
@@ -521,10 +541,10 @@ index 0000000000000000000000000000000000000000..cb72c25839a2b8c4a7f7ce579d00f6bb
 +являются подтверждением готовности конкретного production-окружения.
 diff --git a/kolla_ansible/tests/unit/test_powerops_documentation.py b/kolla_ansible/tests/unit/test_powerops_documentation.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..7063e73ff69260eccecc05e76ba436e7ee997a84
+index 0000000000000000000000000000000000000000..2702ff1a6720887a1f4016ed7b963d88c99f0eab
 --- /dev/null
 +++ b/kolla_ansible/tests/unit/test_powerops_documentation.py
-@@ -0,0 +1,134 @@
+@@ -0,0 +1,153 @@
 +# Licensed under the Apache License, Version 2.0 (the "License"); you may
 +# not use this file except in compliance with the License. You may obtain
 +# a copy of the License at
@@ -611,7 +631,7 @@ index 0000000000000000000000000000000000000000..7063e73ff69260eccecc05e76ba436e7
 +            "powerops_allowed_project_names",
 +            "powerops_allowed_user_names",
 +            "пустой список запрещает все вызовы",
-+            "665cde88",
++            "0010-fix-scope-workbook-updates-to-request-project.patch",
 +            "mistral_api",
 +            "mistral_engine",
 +            "mistral_executor",
@@ -655,6 +675,25 @@ index 0000000000000000000000000000000000000000..7063e73ff69260eccecc05e76ba436e7
 +            set(),
 +            required - {item for item in required if item in normalized},
 +        )
++
++    def test_runbook_bounds_audit_and_owner_scoped_reconcile_claims(self):
++        normalized = " ".join(self.text.split())
++        required = {
++            "структурированная запись процесса Mistral через `LOG.info`",
++            "не является внешним долговечным audit-хранилищем",
++            "не гарантирует доставку или сохранение записи",
++            "0010-fix-scope-workbook-updates-to-request-project.patch",
++            "`Workbook`, `WorkflowDefinition` и `ActionDefinition`",
++            "в одной SQLAlchemy-транзакции",
++            "проектом Keystone token",
++            "Kolla по-прежнему останавливает reconcile в режиме fail-closed",
++        }
++
++        self.assertEqual(
++            set(),
++            required - {item for item in required if item in normalized},
++        )
++        self.assertNotIn("665cde88", self.text)
 +
 +
 +if __name__ == "__main__":

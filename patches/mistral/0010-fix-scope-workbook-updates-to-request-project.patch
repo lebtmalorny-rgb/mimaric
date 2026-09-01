@@ -1,18 +1,84 @@
-From 665cde880127f56c8335e6f8b210362f87ae19d9 Mon Sep 17 00:00:00 2001
+From 3e4fe82455de7473809b0e0bc677fa3df3a3d1e2 Mon Sep 17 00:00:00 2001
 From: Lebt <lebtmalorny@gmail.com>
 Date: Tue, 1 Sep 2026 10:25:18 +0300
 Subject: [PATCH 10/10] fix: scope workbook updates to request project
 
 ---
- mistral/db/v2/sqlalchemy/api.py               | 17 +++-
- .../unit/db/v2/test_sqlalchemy_db_api.py      | 95 +++++++++++++++++++
- 2 files changed, 111 insertions(+), 1 deletion(-)
+ mistral/db/v2/api.py                          |  16 +-
+ mistral/db/v2/sqlalchemy/api.py               |  86 ++++++-
+ mistral/services/workbooks.py                 |   9 +-
+ mistral/tests/unit/api/v2/test_workbooks.py   | 113 ++++++++
+ .../unit/db/v2/test_sqlalchemy_db_api.py      | 241 ++++++++++++++++++
+ .../unit/services/test_workbook_service.py    | 113 ++++++++
+ 6 files changed, 569 insertions(+), 9 deletions(-)
 
+diff --git a/mistral/db/v2/api.py b/mistral/db/v2/api.py
+index 6fd806d193eb5e2cd15d4d0c3db5a9ffa3d64bd5..7ab39c2e80adbeacb70f31f30f458ab5dad20a1a 100644
+--- a/mistral/db/v2/api.py
++++ b/mistral/db/v2/api.py
+@@ -158,8 +158,12 @@ def update_workflow_definition(identifier, values):
+     return IMPL.update_workflow_definition(identifier, values)
+ 
+ 
+-def create_or_update_workflow_definition(name, values):
+-    return IMPL.create_or_update_workflow_definition(name, values)
++def create_or_update_workflow_definition(name, values, project_id=None):
++    return IMPL.create_or_update_workflow_definition(
++        name,
++        values,
++        project_id=project_id
++    )
+ 
+ 
+ def delete_workflow_definition(identifier, namespace=''):
+@@ -291,8 +295,12 @@ def update_action_definition(identifier, values):
+     return IMPL.update_action_definition(identifier, values)
+ 
+ 
+-def create_or_update_action_definition(name, values):
+-    return IMPL.create_or_update_action_definition(name, values)
++def create_or_update_action_definition(name, values, project_id=None):
++    return IMPL.create_or_update_action_definition(
++        name,
++        values,
++        project_id=project_id
++    )
+ 
+ 
+ def delete_action_definition(name, namespace=''):
 diff --git a/mistral/db/v2/sqlalchemy/api.py b/mistral/db/v2/sqlalchemy/api.py
-index bec4e37b2c9e225db2ea8acfba43051c770e477d..43d3825fd8b487bcba75e2a67db627770c920a78 100644
+index bec4e37b2c9e225db2ea8acfba43051c770e477d..c70b756b73212738891b059f0176fa2b5792200c 100644
 --- a/mistral/db/v2/sqlalchemy/api.py
 +++ b/mistral/db/v2/sqlalchemy/api.py
-@@ -432,7 +432,22 @@ def create_workbook(values, session=None):
+@@ -377,6 +377,27 @@ def _get_db_object_by_name_and_namespace(model, name,
+     return query.first()
+ 
+ 
++def _get_db_object_by_name_namespace_and_project(
++        model, name, namespace, project_id, session):
++    if namespace is None:
++        namespace = ''
++
++    return b.model_query(model, session=session).filter(
++        sa.and_(
++            model.project_id == project_id,
++            model.name == name,
++            model.namespace == namespace
++        )
++    ).first()
++
++
++def _check_request_project(project_id):
++    if project_id != security.get_project_id():
++        raise exc.NotAllowedException(
++            "Definition project does not match the request project."
++        )
++
++
+ # Workbook definitions.
+ 
+ @b.session_aware()
+@@ -432,7 +453,22 @@ def create_workbook(values, session=None):
  @b.session_aware()
  def update_workbook(name, values, session=None):
      namespace = values.get('namespace')
@@ -36,8 +102,249 @@ index bec4e37b2c9e225db2ea8acfba43051c770e477d..43d3825fd8b487bcba75e2a67db62777
  
      wb.update(values.copy())
  
+@@ -571,6 +607,12 @@ def update_workflow_definition(identifier, values, session=None):
+     namespace = values.get('namespace')
+     wf_def = get_workflow_definition(identifier, namespace=namespace)
+ 
++    return _update_workflow_definition(wf_def, identifier, values)
++
++
++def _update_workflow_definition(wf_def, identifier, values):
++    namespace = values.get('namespace')
++
+     m_dbutils.check_db_obj_access(wf_def)
+ 
+     if wf_def.scope == 'public' and values['scope'] == 'private':
+@@ -605,8 +647,26 @@ def update_workflow_definition(identifier, values, session=None):
+ 
+ 
+ @b.session_aware()
+-def create_or_update_workflow_definition(name, values, session=None):
++def create_or_update_workflow_definition(
++        name, values, project_id=None, session=None):
+     namespace = values.get('namespace')
++
++    if project_id is not None:
++        _check_request_project(project_id)
++
++        wf_def = _get_db_object_by_name_namespace_and_project(
++            models.WorkflowDefinition,
++            name,
++            namespace,
++            project_id,
++            session
++        )
++
++        if wf_def:
++            return _update_workflow_definition(wf_def, name, values)
++
++        return create_workflow_definition(values)
++
+     if _get_db_object_by_name_and_namespace_or_id(
+             models.WorkflowDefinition,
+             name,
+@@ -907,8 +967,28 @@ def update_action_definition(identifier, values, session=None):
+ 
+ 
+ @b.session_aware()
+-def create_or_update_action_definition(name, values, session=None):
++def create_or_update_action_definition(
++        name, values, project_id=None, session=None):
+     namespace = values.get('namespace', '')
++
++    if project_id is not None:
++        _check_request_project(project_id)
++
++        a_def = _get_db_object_by_name_namespace_and_project(
++            models.ActionDefinition,
++            name,
++            namespace,
++            project_id,
++            session
++        )
++
++        if a_def:
++            a_def.update(values.copy())
++
++            return a_def
++
++        return create_action_definition(values)
++
+     if not _get_db_object_by_name_and_namespace(
+             models.ActionDefinition,
+             name,
+diff --git a/mistral/services/workbooks.py b/mistral/services/workbooks.py
+index 17a714ebc3a4cc76c69977832017709ad008f099..9498ff6e6edbd82bd8fa983a2a3e5aed414213cb 100644
+--- a/mistral/services/workbooks.py
++++ b/mistral/services/workbooks.py
+@@ -102,7 +102,8 @@ def _create_or_update_actions(wb_db, actions_spec, namespace):
+             db_actions.append(
+                 db_api_v2.create_or_update_action_definition(
+                     action_name,
+-                    values
++                    values,
++                    project_id=wb_db.project_id
+                 )
+             )
+ 
+@@ -129,7 +130,11 @@ def _create_or_update_workflows(wb_db, workflows_spec, namespace):
+             }
+ 
+             db_wfs.append(
+-                db_api_v2.create_or_update_workflow_definition(wf_name, values)
++                db_api_v2.create_or_update_workflow_definition(
++                    wf_name,
++                    values,
++                    project_id=wb_db.project_id
++                )
+             )
+ 
+     return db_wfs
+diff --git a/mistral/tests/unit/api/v2/test_workbooks.py b/mistral/tests/unit/api/v2/test_workbooks.py
+index d6293be73e0f51d1ca67abbf6038b6e564e6fb4a..7a03ecdec866a7a81978771108534d247aa04de1 100644
+--- a/mistral/tests/unit/api/v2/test_workbooks.py
++++ b/mistral/tests/unit/api/v2/test_workbooks.py
+@@ -18,11 +18,13 @@ from unittest import mock
+ 
+ import sqlalchemy as sa
+ 
++from mistral import context as auth_context
+ from mistral.db.v2 import api as db_api
+ from mistral.db.v2.sqlalchemy import models
+ from mistral import exceptions as exc
+ from mistral.services import workbooks
+ from mistral.tests.unit.api import base
++from mistral.tests.unit import base as test_base
+ 
+ WORKBOOK_DEF = """
+ ---
+@@ -162,6 +164,40 @@ MOCK_DUPLICATE = mock.MagicMock(side_effect=exc.DBDuplicateEntryError())
+ 
+ 
+ class TestWorkbooksController(base.APITest):
++    @staticmethod
++    def _create_workbook_row(definition, namespace, scope='public'):
++        return db_api.create_workbook({
++            'name': 'book',
++            'definition': definition,
++            'spec': {},
++            'scope': scope,
++            'namespace': namespace,
++            'is_system': False
++        })
++
++    @staticmethod
++    def _create_child_rows(workbook, namespace, marker):
++        action = db_api.create_action_definition({
++            'name': '%s.step' % workbook.name,
++            'workbook_name': workbook.name,
++            'definition': '%s action' % marker,
++            'spec': {},
++            'scope': 'public',
++            'namespace': namespace,
++            'is_system': False
++        })
++        workflow = db_api.create_workflow_definition({
++            'name': '%s.flow' % workbook.name,
++            'workbook_name': workbook.name,
++            'definition': '%s workflow' % marker,
++            'spec': {},
++            'scope': 'public',
++            'namespace': namespace,
++            'is_system': False
++        })
++
++        return action, workflow
++
+     @mock.patch.object(db_api, "get_workbook", MOCK_WORKBOOK)
+     def test_get(self):
+         resp = self.app.get('/v2/workbooks/123')
+@@ -226,6 +262,83 @@ class TestWorkbooksController(base.APITest):
+         self.assertEqual(200, resp.status_int)
+         self.assertEqual(UPDATED_WORKBOOK, resp.json)
+ 
++    @mock.patch('mistral.auth.get_auth_handler')
++    def test_put_creates_owned_children_around_foreign_public_rows(
++            self, mock_get_auth_handler):
++        self.override_config('auth_enable', True, group='pecan')
++
++        namespace = 'shared_namespace'
++        foreign_context = test_base.get_context()
++        own_context = test_base.get_context(default=False, admin=True)
++
++        auth_context.set_ctx(foreign_context)
++
++        foreign_workbook = self._create_workbook_row(
++            UPDATED_WORKBOOK_DEF,
++            namespace
++        )
++        foreign_action, foreign_workflow = self._create_child_rows(
++            foreign_workbook,
++            namespace,
++            'foreign'
++        )
++
++        auth_context.set_ctx(own_context)
++
++        own_workbook = self._create_workbook_row(
++            UPDATED_WORKBOOK_DEF,
++            namespace
++        )
++
++        self.ctx = own_context
++        self.mock_ctx.return_value = own_context
++        mock_get_auth_handler.return_value.authenticate.return_value = None
++
++        resp = self.app.put(
++            '/v2/workbooks?namespace=%s&scope=public' % namespace,
++            UPDATED_WORKBOOK_DEF,
++            headers={'Content-Type': 'text/plain'}
++        )
++
++        self.assertEqual(200, resp.status_int)
++        self.assertEqual(own_workbook.id, resp.json['id'])
++
++        auth_context.set_ctx(own_context)
++
++        actions = db_api.get_action_definitions(
++            insecure=True,
++            name='book.step',
++            namespace=namespace
++        )
++        workflows = db_api.get_workflow_definitions(
++            insecure=True,
++            name='book.flow',
++            namespace=namespace
++        )
++        actions_by_project = {a.project_id: a for a in actions}
++        workflows_by_project = {wf.project_id: wf for wf in workflows}
++
++        self.assertEqual(2, len(actions))
++        self.assertEqual(2, len(workflows))
++        self.assertEqual(
++            foreign_action.id,
++            actions_by_project[foreign_context.project_id].id
++        )
++        self.assertEqual(
++            'foreign action',
++            actions_by_project[foreign_context.project_id].definition
++        )
++        self.assertIn(own_context.project_id, actions_by_project)
++        self.assertEqual(
++            foreign_workflow.id,
++            workflows_by_project[foreign_context.project_id].id
++        )
++        self.assertEqual(
++            'foreign workflow',
++            workflows_by_project[foreign_context.project_id].definition
++        )
++        self.assertIn(own_context.project_id, workflows_by_project)
++
+     @mock.patch.object(workbooks, "update_workbook_v2", MOCK_NOT_FOUND)
+     def test_put_not_found(self):
+         resp = self.app.put_json(
 diff --git a/mistral/tests/unit/db/v2/test_sqlalchemy_db_api.py b/mistral/tests/unit/db/v2/test_sqlalchemy_db_api.py
-index c8b610684ae3cf3732af03dbf9db15d790f9ce1b..198e8ffa94853b8923441ac2508c425aacfec380 100644
+index c8b610684ae3cf3732af03dbf9db15d790f9ce1b..1ece0d9255bc50dca81e2144718b85e28c85ea3c 100644
 --- a/mistral/tests/unit/db/v2/test_sqlalchemy_db_api.py
 +++ b/mistral/tests/unit/db/v2/test_sqlalchemy_db_api.py
 @@ -162,6 +162,101 @@ class WorkbookTest(SQLAlchemyTest):
@@ -142,6 +449,304 @@ index c8b610684ae3cf3732af03dbf9db15d790f9ce1b..198e8ffa94853b8923441ac2508c425a
      def test_create_or_update_workbook(self):
          name = WORKBOOKS[0]['name']
          namespace = WORKBOOKS[0]['namespace']
+@@ -875,6 +970,77 @@ class WorkflowDefinitionTest(SQLAlchemyTest):
+ 
+         self.assertEqual(updated, fetched)
+ 
++    def test_scoped_workflow_upsert_selects_request_project(self):
++        foreign_values = copy.deepcopy(WF_DEFINITIONS[0])
++        foreign_values['definition'] = 'foreign workflow definition'
++        foreign = db_api.create_workflow_definition(foreign_values)
++
++        auth_context.set_ctx(ADM_CTX)
++
++        own_values = copy.deepcopy(WF_DEFINITIONS[0])
++        own_values['definition'] = 'own workflow definition'
++        own = db_api.create_workflow_definition(own_values)
++
++        updated_values = copy.deepcopy(own_values)
++        updated_values['definition'] = 'updated own workflow definition'
++
++        updated = db_api.create_or_update_workflow_definition(
++            own.name,
++            updated_values,
++            project_id=ADM_CTX.project_id
++        )
++
++        workflows = db_api.get_workflow_definitions(
++            insecure=True,
++            name=own.name,
++            namespace=own.namespace
++        )
++        workflows_by_project = {wf.project_id: wf for wf in workflows}
++
++        self.assertEqual(own.id, updated.id)
++        self.assertEqual(
++            'updated own workflow definition',
++            workflows_by_project[ADM_CTX.project_id].definition
++        )
++        self.assertEqual(
++            'foreign workflow definition',
++            workflows_by_project[foreign.project_id].definition
++        )
++
++    def test_scoped_workflow_upsert_ignores_foreign_only_row(self):
++        foreign_values = copy.deepcopy(WF_DEFINITIONS[0])
++        foreign_values['definition'] = 'foreign workflow definition'
++        foreign = db_api.create_workflow_definition(foreign_values)
++
++        auth_context.set_ctx(ADM_CTX)
++
++        own_values = copy.deepcopy(WF_DEFINITIONS[0])
++        own_values['definition'] = 'new own workflow definition'
++
++        created = db_api.create_or_update_workflow_definition(
++            foreign.name,
++            own_values,
++            project_id=ADM_CTX.project_id
++        )
++
++        workflows = db_api.get_workflow_definitions(
++            insecure=True,
++            name=foreign.name,
++            namespace=foreign.namespace
++        )
++        workflows_by_project = {wf.project_id: wf for wf in workflows}
++
++        self.assertNotEqual(foreign.id, created.id)
++        self.assertEqual(2, len(workflows))
++        self.assertEqual(
++            'new own workflow definition',
++            workflows_by_project[ADM_CTX.project_id].definition
++        )
++        self.assertEqual(
++            'foreign workflow definition',
++            workflows_by_project[foreign.project_id].definition
++        )
++
+     def test_update_wf_scope_cron_trigger_associated_in_diff_tenant(self):
+         created = db_api.create_workflow_definition(WF_DEFINITIONS[0])
+ 
+@@ -1391,6 +1557,81 @@ class ActionDefinitionTest(SQLAlchemyTest):
+ 
+         self.assertEqual(updated, fetched)
+ 
++    def test_scoped_action_upsert_selects_request_project(self):
++        foreign_values = copy.deepcopy(ACTION_DEFINITIONS[0])
++        foreign_values['description'] = 'foreign action definition'
++        foreign_values['scope'] = 'public'
++        foreign = db_api.create_action_definition(foreign_values)
++
++        auth_context.set_ctx(ADM_CTX)
++
++        own_values = copy.deepcopy(ACTION_DEFINITIONS[0])
++        own_values['description'] = 'own action definition'
++        own_values['scope'] = 'public'
++        own = db_api.create_action_definition(own_values)
++
++        updated_values = copy.deepcopy(own_values)
++        updated_values['description'] = 'updated own action definition'
++
++        updated = db_api.create_or_update_action_definition(
++            own.name,
++            updated_values,
++            project_id=ADM_CTX.project_id
++        )
++
++        actions = db_api.get_action_definitions(
++            insecure=True,
++            name=own.name,
++            namespace=own.namespace
++        )
++        actions_by_project = {action.project_id: action for action in actions}
++
++        self.assertEqual(own.id, updated.id)
++        self.assertEqual(
++            'updated own action definition',
++            actions_by_project[ADM_CTX.project_id].description
++        )
++        self.assertEqual(
++            'foreign action definition',
++            actions_by_project[foreign.project_id].description
++        )
++
++    def test_scoped_action_upsert_ignores_foreign_only_row(self):
++        foreign_values = copy.deepcopy(ACTION_DEFINITIONS[0])
++        foreign_values['description'] = 'foreign action definition'
++        foreign_values['scope'] = 'public'
++        foreign = db_api.create_action_definition(foreign_values)
++
++        auth_context.set_ctx(ADM_CTX)
++
++        own_values = copy.deepcopy(ACTION_DEFINITIONS[0])
++        own_values['description'] = 'new own action definition'
++        own_values['scope'] = 'public'
++
++        created = db_api.create_or_update_action_definition(
++            foreign.name,
++            own_values,
++            project_id=ADM_CTX.project_id
++        )
++
++        actions = db_api.get_action_definitions(
++            insecure=True,
++            name=foreign.name,
++            namespace=foreign.namespace
++        )
++        actions_by_project = {action.project_id: action for action in actions}
++
++        self.assertNotEqual(foreign.id, created.id)
++        self.assertEqual(2, len(actions))
++        self.assertEqual(
++            'new own action definition',
++            actions_by_project[ADM_CTX.project_id].description
++        )
++        self.assertEqual(
++            'foreign action definition',
++            actions_by_project[foreign.project_id].description
++        )
++
+     def test_get_action_definitions(self):
+         created0 = db_api.create_action_definition(ACTION_DEFINITIONS[0])
+         created1 = db_api.create_action_definition(ACTION_DEFINITIONS[1])
+diff --git a/mistral/tests/unit/services/test_workbook_service.py b/mistral/tests/unit/services/test_workbook_service.py
+index ccf02706f9421795e727f9e7fd221a3e1c2608de..da4676c5e56c2e0304695bf5f3ecf7d4c5414c40 100644
+--- a/mistral/tests/unit/services/test_workbook_service.py
++++ b/mistral/tests/unit/services/test_workbook_service.py
+@@ -15,6 +15,7 @@
+ 
+ from oslo_config import cfg
+ 
++from mistral import context as auth_context
+ from mistral.db.v2 import api as db_api
+ from mistral.lang import parser as spec_parser
+ from mistral.services import workbooks as wb_service
+@@ -166,6 +167,40 @@ ACTION_DEFINITION = """concat:
+ 
+ 
+ class WorkbookServiceTest(base.DbTestCase):
++    def _create_workbook_row(self, definition, namespace, scope='public'):
++        wb_spec = spec_parser.get_workbook_spec_from_yaml(definition)
++
++        return db_api.create_workbook(
++            wb_service._get_workbook_values(
++                wb_spec,
++                definition,
++                scope,
++                namespace
++            )
++        )
++
++    def _create_child_rows(self, workbook, namespace, marker):
++        action = db_api.create_action_definition({
++            'name': '%s.concat' % workbook.name,
++            'workbook_name': workbook.name,
++            'definition': '%s action' % marker,
++            'spec': {},
++            'scope': 'public',
++            'namespace': namespace,
++            'is_system': False
++        })
++        workflow = db_api.create_workflow_definition({
++            'name': '%s.wf1' % workbook.name,
++            'workbook_name': workbook.name,
++            'definition': '%s workflow' % marker,
++            'spec': {},
++            'scope': 'public',
++            'namespace': namespace,
++            'is_system': False
++        })
++
++        return action, workflow
++
+     def test_create_workbook(self):
+         namespace = 'test_workbook_service_0123_namespace'
+ 
+@@ -288,6 +323,84 @@ class WorkbookServiceTest(base.DbTestCase):
+         self.assertEqual(namespace, wf2_db.namespace)
+         self.assertEqual(UPDATED_WORKBOOK_WF2_DEFINITION, wf2_db.definition)
+ 
++    def test_update_workbook_scopes_child_definitions_to_owner(self):
++        self.override_config('auth_enable', True, group='pecan')
++
++        namespace = 'shared_namespace'
++        foreign_context = base.get_context()
++        own_context = base.get_context(default=False, admin=True)
++
++        auth_context.set_ctx(foreign_context)
++
++        foreign_workbook = self._create_workbook_row(
++            WORKBOOK,
++            namespace
++        )
++        foreign_action, foreign_workflow = self._create_child_rows(
++            foreign_workbook,
++            namespace,
++            'foreign'
++        )
++
++        auth_context.set_ctx(own_context)
++
++        own_workbook = self._create_workbook_row(WORKBOOK, namespace)
++
++        updated = wb_service.update_workbook_v2(
++            UPDATED_WORKBOOK,
++            namespace=namespace,
++            scope='public'
++        )
++
++        actions = db_api.get_action_definitions(
++            insecure=True,
++            name='my_wb.concat',
++            namespace=namespace
++        )
++        workflows = db_api.get_workflow_definitions(
++            insecure=True,
++            name='my_wb.wf1',
++            namespace=namespace
++        )
++        actions_by_project = {a.project_id: a for a in actions}
++        workflows_by_project = {wf.project_id: wf for wf in workflows}
++
++        self.assertEqual(own_workbook.id, updated.id)
++        self.assertEqual(2, len(actions))
++        self.assertEqual(2, len(workflows))
++        self.assertNotEqual(
++            foreign_action.id,
++            actions_by_project[own_context.project_id].id
++        )
++        self.assertEqual(
++            ACTION_DEFINITION,
++            actions_by_project[own_context.project_id].definition
++        )
++        self.assertEqual(
++            foreign_action.id,
++            actions_by_project[foreign_context.project_id].id
++        )
++        self.assertEqual(
++            'foreign action',
++            actions_by_project[foreign_context.project_id].definition
++        )
++        self.assertNotEqual(
++            foreign_workflow.id,
++            workflows_by_project[own_context.project_id].id
++        )
++        self.assertEqual(
++            UPDATED_WORKBOOK_WF1_DEFINITION,
++            workflows_by_project[own_context.project_id].definition
++        )
++        self.assertEqual(
++            foreign_workflow.id,
++            workflows_by_project[foreign_context.project_id].id
++        )
++        self.assertEqual(
++            'foreign workflow',
++            workflows_by_project[foreign_context.project_id].definition
++        )
++
+     def test_delete_workbook(self):
+         namespace = 'pqr'
+ 
 -- 
 2.49.0
 
