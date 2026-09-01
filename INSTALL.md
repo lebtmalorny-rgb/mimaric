@@ -254,22 +254,102 @@ powerops_validate_registration: "yes"
 kolla_admin_openrc_cacert: "/etc/kolla/controller-ca.pem"
 ```
 
-Оба allowlist обязательны: пустой список запрещает все вызовы. Каждый элемент
-— ровно одно точное имя; запятые, пустая строка и пробелы в начале или конце
-запрещены precheck. Используйте выделенные project/user и минимальные роли.
+### Включение компонентов
 
-`openstack_cacert` относится к пути CA, доступному сервисным контейнерам, и
-используется в rendered coordination URL. `kolla_admin_openrc_cacert` — другой
-контракт: файл должен существовать, быть обычным и читаемым именно на Ansible
-control node, потому что Keystone/Mistral API reconcile делегирован на
-`localhost`. Не подставляйте container-only путь в
-`kolla_admin_openrc_cacert`. Если внутренние API действительно не используют
-TLS, оставьте controller CA пустым согласно общему Kolla TLS-контракту; не
+| Параметр | Назначение |
+|---|---|
+| `enable_ironic` | Включает Ironic, который PowerOps использует только как источник соответствия compute host → BMC и как backend физического питания. Узлы остаются `manageable` с `network_interface=noop`; этот сценарий не включает provisioning, cleaning или `nova-compute-ironic`. |
+| `enable_masakari` | Включает Masakari. В PowerOps он обрабатывает аварийный отказ хоста: отключает `nova-compute`, выполняет fencing через Ironic и только после стабильного `power off` последовательно эвакуирует ВМ. |
+| `enable_mistral` | Включает Mistral для плановых `status`, `power off`, `reboot` и двухфазного возврата хоста. Аварийный fencing Masakari от Mistral не зависит. |
+| `enable_etcd` | Включает etcd, используемый через tooz как общий backend распределённых блокировок Masakari и Mistral. |
+| `enable_powerops` | Активирует PowerOps-конфигурацию, выбор четырёх патченных образов, изменённый Masakari recovery flow и Mistral reconcile/validation. Значение `yes` само по себе не запускает workflow, power action, migration или evacuation. По умолчанию PowerOps выключен. |
+
+### Координация, fencing и последовательность операций
+
+Все значения времени ниже задаются в секундах. Увеличение timeout не ускоряет
+операцию, а только расширяет максимально допустимое ожидание. Слишком малые
+значения дают ложные timeout на медленном BMC или Nova; слишком большие
+удлиняют fail-closed остановку и реакцию оператора.
+
+| Параметр | Назначение и область действия |
+|---|---|
+| `powerops_coordination_url` | Общий tooz URL для Masakari и Mistral. В активной конфигурации ожидается `etcd3+http[s]://...?...api_version=v3`; оба сервиса должны обращаться к одному логическому etcd-кластеру. Потеря coordination/ownership останавливает последующие мутации fail-closed. Redis может оставаться у других сервисов, но не является backend включённого PowerOps. |
+| `powerops_host_lock_timeout` | Максимальное ожидание host lock `powerops/host/<host>`. Один namespace используется плановыми Mistral и аварийными Masakari операциями, поэтому они не могут одновременно изменять один хост. Значение по умолчанию — 30. |
+| `powerops_evacuation_lock_timeout` | Максимальное ожидание Masakari global lock `powerops/evacuation/global` перед evacuation конкретной ВМ. Lock удерживается на время evacuation, подтверждения результата и pacing; значение по умолчанию — 3600. |
+| `powerops_evacuation_interval` | Пауза между последовательными Masakari evacuation, уменьшающая нагрузку на Nova, scheduler, storage и network. Значение по умолчанию — 5; `0` убирает только паузу, но не глобальную сериализацию. |
+| `powerops_power_timeout` | Общий deadline физического hard power transition и подтверждения стабильного состояния через Ironic. Используется аварийным fencing и плановыми hard-off/power-on проверками; значение по умолчанию — 180. |
+| `powerops_poll_interval` | Интервал между чтениями состояния Ironic, Nova или Masakari во время ожидания перехода. Значение по умолчанию — 5. |
+| `powerops_stable_observations` | Число последовательных допустимых наблюдений, необходимых для признания состояния стабильным. Mistral применяет его к питанию и длительным service/maintenance-переходам; в Masakari параметр рендерится как `stable_off_observations` для fencing. Минимум — 2, значение по умолчанию — 3. |
+| `powerops_graceful_shutdown_timeout` | Deadline планового `soft power off` через Ironic. По умолчанию — 300. Переход к hard-off возможен только если workflow явно получил `allow_hard_off: true`; timeout самого API-вызова не запускает вторую мутацию автоматически. |
+| `powerops_vm_action_timeout` | Deadline одной плановой операции Nova над ВМ и подтверждения её результата: stop, live migration или start. Это не timeout всего списка; каждая ВМ обрабатывается отдельно. Значение по умолчанию — 600. |
+| `powerops_service_timeout` | Deadline поиска и изменения согласованного набора Ironic Node, `nova-compute` и Masakari host, включая подтверждение Nova enabled/disabled/up и maintenance. Значение по умолчанию — 300. |
+| `powerops_instance_interval` | Пауза между последовательными плановыми операциями над ВМ в Mistral. Она предотвращает шторм stop/migration/start; значение по умолчанию — 5, `0` отключает паузу, но сохраняет последовательное выполнение. |
+
+В шаблоне `powerops_coordination_url` используются обычные переменные Kolla:
+`internal_protocol` выбирает `http` или `https`, `kolla_internal_fqdn`
+указывает внутренний VIP/FQDN, `etcd_client_port` — клиентский порт etcd, а
+непустой `openstack_cacert` добавляет container-visible CA через параметр
+`ca_cert`. Не подменяйте их произвольным адресом одного etcd member: все
+экземпляры Masakari и Mistral должны получать один отказоустойчивый endpoint.
+
+### Патченные runtime-образы
+
+| Параметр | Назначение |
+|---|---|
+| `powerops_masakari_engine_image` | Repository патченного Masakari Engine. Masakari API остаётся на обычном образе. |
+| `powerops_masakari_engine_tag` | Immutable tag или digest-compatible tag патченного Masakari Engine. Пустое значение блокируется precheck. |
+| `powerops_mistral_api_image` | Repository патченного Mistral API, содержащего owner-scoped workbook API и PowerOps metadata. |
+| `powerops_mistral_api_tag` | Immutable tag патченного Mistral API. |
+| `powerops_mistral_engine_image` | Repository патченного Mistral Engine, исполняющего workflow orchestration и PowerOps actions. |
+| `powerops_mistral_engine_tag` | Immutable tag патченного Mistral Engine. |
+| `powerops_mistral_executor_image` | Repository патченного Mistral Executor, в котором должны быть установлены те же `powerops.*` action entry points. |
+| `powerops_mistral_executor_tag` | Immutable tag патченного Mistral Executor. Mistral Event Engine этим параметром намеренно не заменяется. |
+
+Пары repository/tag обязательны и выбираются только при
+`enable_powerops: "yes"`. Предпочтительны digest либо immutable tag, чтобы
+повторный deploy не получил другие байты под прежним именем.
+
+### Кто может запускать PowerOps
+
+| Параметр | Назначение |
+|---|---|
+| `powerops_allowed_project_names` | Allowlist точных `project_name` из Keystone-scoped контекста вызвавшего Mistral execution. `powerops-operators` в примере — имя проекта Keystone, а не роль или группа. |
+| `powerops_allowed_user_names` | Allowlist точных `user_name` из того же контекста. `svc-powerops` в примере — имя пользователя Keystone. |
+
+Action разрешается, только если имя проекта входит в первый список **и** имя
+пользователя входит во второй — оба условия одновременно. Например,
+`svc-powerops` в проекте `powerops-operators` допускается, а тот же пользователь
+в другом проекте либо другой пользователь в разрешённом проекте отклоняется с
+`PowerOpsUnauthorized` до cloud-мутаций.
+
+Эти параметры не создают Keystone-проект, пользователя или роли и не заменяют
+Keystone RBAC/Mistral policy. Сущности и минимальные роли создаются отдельно.
+Allowlist — дополнительный прикладной gate перед тем, как action воспользуется
+сервисными credentials Mistral для обращения к Ironic, Nova и Masakari.
+
+Сопоставление выполняется по точному имени и регистрозависимо;
+пустой список запрещает все вызовы. Kolla precheck не позволяет включить
+PowerOps с пустым списком или элементами, содержащими запятые, пустую строку
+либо пробелы по краям.
+Если в каждом списке несколько элементов, разрешается любая комбинация
+пользователя и проекта из этих двух списков: это два независимых множества,
+а не список связанных пар.
+Для наиболее узкого доступа используйте один выделенный project и одного
+service user.
+
+### Reconcile, validation и controller CA
+
+| Параметр | Назначение |
+|---|---|
+| `powerops_reconcile_workbook` | При `yes` Kolla после запуска Mistral читает точный публичный workbook `power_ops`: создаёт его при отсутствии либо обновляет единственную принадлежащую token project запись при изменении. Чужая или неоднозначная запись блокирует reconcile. Workflow execution при этом не создаётся. |
+| `powerops_validate_registration` | При `yes` Kolla после populate/reconcile read-only проверяет наличие точных пяти actions и четырёх workflows. Проверка валидирует каталог, но не проверяет реальный etcd lock, BMC или Nova operation. |
+| `kolla_admin_openrc_cacert` | Путь к CA-файлу на Ansible control node для делегированных на `localhost` Keystone/Mistral API-вызовов reconcile и validation. Это не container path и не тот же контракт, что `openstack_cacert`. Файл должен быть обычным и читаемым. |
+
+Если внутренние API используют TLS, `kolla_admin_openrc_cacert` проверяется
+вручную до change gate и повторно внутри deploy/reconfigure. Не подставляйте
+container-only путь. Если internal API действительно работает без TLS,
+оставьте controller CA пустым согласно общему Kolla TLS-контракту; не
 отключайте проверку сертификата для TLS.
-
-PowerOps использует tooz с etcd. Redis может оставаться в облаке для других
-сервисов, но не является зависимостью включённого PowerOps и не должен
-подменять `powerops_coordination_url`.
 
 ## Prechecks и явный gate изменения
 

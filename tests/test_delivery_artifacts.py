@@ -226,6 +226,66 @@ class DeliveryArtifactsTest(unittest.TestCase):
         self.assertNotRegex(text, r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
         self.assertNotIn("Redis как зависимость PowerOps", text)
 
+    def test_globals_section_explains_every_example_parameter(self):
+        text = _read("INSTALL.md")
+        globals_section = text.split("## Настройка globals.yml", 1)[1]
+        globals_section = globals_section.split(
+            "## Prechecks и явный gate изменения", 1
+        )[0]
+
+        documented_parameters = (
+            "enable_ironic",
+            "enable_masakari",
+            "enable_mistral",
+            "enable_etcd",
+            "enable_powerops",
+            "powerops_coordination_url",
+            "powerops_masakari_engine_image",
+            "powerops_masakari_engine_tag",
+            "powerops_mistral_api_image",
+            "powerops_mistral_api_tag",
+            "powerops_mistral_engine_image",
+            "powerops_mistral_engine_tag",
+            "powerops_mistral_executor_image",
+            "powerops_mistral_executor_tag",
+            "powerops_allowed_project_names",
+            "powerops_allowed_user_names",
+            "powerops_host_lock_timeout",
+            "powerops_evacuation_lock_timeout",
+            "powerops_evacuation_interval",
+            "powerops_power_timeout",
+            "powerops_poll_interval",
+            "powerops_stable_observations",
+            "powerops_graceful_shutdown_timeout",
+            "powerops_vm_action_timeout",
+            "powerops_service_timeout",
+            "powerops_instance_interval",
+            "powerops_reconcile_workbook",
+            "powerops_validate_registration",
+            "kolla_admin_openrc_cacert",
+        )
+        for parameter in documented_parameters:
+            self.assertIn(
+                "| `{}` |".format(parameter),
+                globals_section,
+                "missing globals parameter explanation: {}".format(
+                    parameter
+                ),
+            )
+
+        normalized = " ".join(globals_section.split())
+        for statement in (
+            "имя проекта Keystone",
+            "имя пользователя Keystone",
+            "оба условия одновременно",
+            "не создают Keystone-проект",
+            "не заменяют Keystone RBAC",
+            "любая комбинация пользователя и проекта",
+            "регистрозависимо",
+            "сервисными credentials Mistral",
+        ):
+            self.assertIn(statement, normalized)
+
     def test_delivery_manifest_records_verified_evidence_and_boundary(self):
         text = _read("DELIVERY.md")
         for heading in (
@@ -251,9 +311,10 @@ class DeliveryArtifactsTest(unittest.TestCase):
             "stopped after 829",
             "64/64",
             "19/19",
-            "29/29",
+            "30/30",
         ):
             self.assertIn(result, text)
+        self.assertNotIn("29/29", text)
         self.assertIn("INSTALL.md", text)
         self.assertIn("POWEROPS-ARCHITECTURE.md", text)
         self.assertIn("25", text)

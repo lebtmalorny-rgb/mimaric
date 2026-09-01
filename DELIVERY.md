@@ -109,7 +109,7 @@ fresh-apply verification:
 - Kolla-Ansible PowerOps plus Ironic enrollment suites: **64/64**; Ansible
   syntax and diff hygiene passed.
 - Cross-repository source contract suite: **19/19**; artifact repository
-  discovery: **29/29** (10 delivery plus 19 cross-repository); flake8,
+  discovery: **30/30** (11 delivery plus 19 cross-repository); flake8,
   compileall and diff hygiene passed.
 
 Representative verification commands:
