@@ -15,8 +15,15 @@ power-only registry and backend for the existing Nova compute hosts.
 - Kolla-Ansible starts from
   `kolla-ansible-enroll-ironic-patch-3.zip`, SHA-256
   `df27628ce641fefee30114ebeb3651490655aacb0930ad5bc30a298c88c3e08d`.
-- Masakari starts from the vanilla `stable/2025.1` branch.
-- Mistral starts from the vanilla `stable/2025.1` branch.
+- Masakari starts from the vanilla `stable/2025.1` branch and finishes at
+  commit `9f3cb144958b8e60bba72adefb22edf51387c0ca`, tree
+  `83bb2fd7a2d8c2f8d97e26c12fb66e8e06436bc5`.
+- Mistral starts from the vanilla `stable/2025.1` branch and finishes at
+  commit `3e4fe82455de7473809b0e0bc677fa3df3a3d1e2`, tree
+  `8e3009eb1abf8033608d31d7e60cdb02ab8da1ed`.
+- Kolla-Ansible finishes at commit
+  `63a8d0f597f9034a42f2e1b0bd415f1746d33b8d`, tree
+  `287bac4223f24393c32fbfd55c140601c8611a21`.
 - Each source tree has its own numbered Git commits and `git format-patch`
   output.
 - `docs/powerops/POWEROPS-ARCHITECTURE.md` is the Russian operator-facing
@@ -96,9 +103,15 @@ before POST/PUT. The companion Mistral patch
 `0010-fix-scope-workbook-updates-to-request-project.patch` makes
 `update_workbook()` select within the same session-aware transaction by
 `models.Workbook.project_id == security.get_project_id()`, exact name and
-normalized namespace. Kolla's pre-mutation owner assertion gives clear
-operator diagnostics; Mistral's atomic owner lookup closes the TOCTOU window
-and prevents a public same-name row from another project being overwritten.
+normalized namespace. The update then passes
+`project_id=wb_db.project_id` to child `ActionDefinition` and
+`WorkflowDefinition` upserts. Their exact project/name/normalized-namespace
+lookups and all workbook/child writes run in one SQLAlchemy transaction.
+Kolla's pre-mutation owner assertion gives clear operator diagnostics;
+Mistral's atomic owner lookup closes the workbook and child-definition TOCTOU
+windows and prevents any public same-name row from another project being
+overwritten. Kolla also fails closed when workflow validation sees a foreign
+or ambiguous exact name/default-namespace result.
 
 No custom Horizon code is added. When the vanilla Mistral dashboard is
 enabled, operators can discover and start the registered workflows there; the
@@ -176,9 +189,11 @@ action only after the first action has reached a documented safe state and
 released its lock. `evacuate` is not a valid planned instance policy.
 
 The workbook remains the stable operator-facing API and exposes workflow
-inputs, outputs and task status. Detailed uninterrupted transitions are
-recorded in structured action logs and audit events rather than represented as
-separate lock-owning workflow tasks.
+inputs, outputs and task status. Detailed uninterrupted transitions emit a
+`structured LOG.info process log` rather than separate lock-owning workflow
+tasks. This implementation has `no external durable audit store` and
+`no delivery or persistence guarantee`; external collection, retention and
+delivery remain an operator logging-platform responsibility.
 
 Supported instance policies are:
 
@@ -250,7 +265,7 @@ acquire host lock
   -> Ironic graceful power-off
   -> optional explicit hard-off escalation after timeout
   -> prove stable power off
-  -> audit
+  -> LOG.info process record
   -> release lock
 ```
 
@@ -269,7 +284,7 @@ acquire host lock
   -> restart only workflow-stopped VMs sequentially
   -> Nova service enable
   -> Masakari maintenance=false
-  -> audit
+  -> LOG.info process record
   -> release lock
 ```
 
@@ -289,7 +304,7 @@ acquire host lock for power_on_for_inspection
   -> restart explicitly supplied VM UUIDs sequentially
   -> Nova service enable
   -> Masakari maintenance=false
-  -> audit
+  -> LOG.info process record
   -> release lock
 ```
 
@@ -299,14 +314,17 @@ acquire host lock for power_on_for_inspection
 - Errors after Nova disable call a fail-safe action that reasserts Nova
   disabled and Masakari maintenance enabled.
 - A lock is released only by the execution that owns it.
-- Failure to write a success audit record is treated as workflow failure and
-  retains the fail-safe host state.
+- An exception raised by the success `LOG.info` call before the completion
+  marker is treated as workflow failure and retains the fail-safe host state.
+  Returning from that call is only a process control-flow boundary, not proof
+  that an external collector stored the record.
 - A coordinator release or stop error that occurs only after the final health
-  proof and durable success audit is a terminal cleanup warning, not a failed
-  power transition. The action records a separate
-  `completed_with_coordination_cleanup_error` audit and returns its completed
-  result so a retry cannot repeat an already completed power cycle. It never
-  attempts fail-safe mutations after ownership is no longer proven.
+  proof and successful return from the success `LOG.info` call is a terminal
+  cleanup warning, not a failed power transition. The action emits a
+  best-effort `completed_with_coordination_cleanup_error` process-log record
+  and returns its completed result so a retry cannot repeat an already
+  completed power cycle. It never attempts fail-safe mutations after ownership
+  is no longer proven. Neither process-log call is a durable delivery claim.
 - Conflicting Ironic `target_power_state`, a non-empty `last_error`, timeout,
   duplicate node match or unknown power state is a hard failure.
 - Emergency fencing failures stop TaskFlow before instance preparation and
@@ -348,7 +366,10 @@ state, graceful-to-hard escalation rules, explicit restart manifests and
 sequential VM restart. Workbook contract tests prove that lock ownership is
 never transferred between tasks and that the two return actions are separated
 by an operator pause while Nova remains disabled and Masakari remains in
-maintenance.
+maintenance. Owner-scope tests prove that PUT selects only the request
+project's exact `Workbook`, and updates its `ActionDefinition` and
+`WorkflowDefinition` children with `project_id=wb_db.project_id` inside one
+SQLAlchemy transaction.
 
 ### Kolla-Ansible
 

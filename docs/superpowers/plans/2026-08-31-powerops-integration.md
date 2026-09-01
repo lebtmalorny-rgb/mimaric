@@ -194,8 +194,16 @@ Use only the standard library. Require:
 - non-empty exact caller allowlists, etcd coordination, controller CA
   distinction/manual pre-gate check and deploy/reconfigure mutation gate;
 - valid Mistral/Ironic read-only CLI commands that expose every claimed field;
+- subcommand-first Kolla CLI forms
+  `kolla-ansible prechecks -i /path/to/inventory`,
+  `kolla-ansible deploy -i /path/to/inventory` and
+  `kolla-ansible reconfigure -i /path/to/inventory`, while rejecting the
+  obsolete inventory-first order;
 - exact resume JSON, safe `git am --abort` recovery and rollback boundaries;
-- final workbook collision/owner-scope contract in plans and design.
+- final `Workbook` plus child `ActionDefinition`/`WorkflowDefinition`
+  collision/owner-scope contract in plans and design;
+- the bounded audit terminology: a `structured LOG.info process log` with no
+  external durable audit store and no delivery or persistence guarantee.
 
 Run `python3 -m unittest tests.test_delivery_artifacts -v` before creating the
 three root artifacts. Expected RED: missing `INSTALL.md`, `DELIVERY.md` and
@@ -217,9 +225,13 @@ Expected: every patch reports `OK`.
 - [ ] **Step 3: Write detailed Russian `INSTALL.md`**
 
 Pin full Masakari/Mistral baseline and final SHAs plus the Kolla archive hash,
-internal import and final SHA. Give exact `git am` commands on separate clean
-integration branches and abort/recovery handling. Document the dependency
-`Kolla 0004 -> Mistral 0010`.
+internal import and final SHA/tree. Final Mistral is
+`3e4fe82455de7473809b0e0bc677fa3df3a3d1e2` / tree
+`8e3009eb1abf8033608d31d7e60cdb02ab8da1ed`; final Kolla is
+`63a8d0f597f9034a42f2e1b0bd415f1746d33b8d` / tree
+`287bac4223f24393c32fbfd55c140601c8611a21`. Give exact `git am` commands on
+separate clean integration branches and abort/recovery handling. Document the
+dependency `Kolla 0004 -> Mistral 0010`.
 
 Do not invent an image build recipe: the bundle does not contain one. State
 requirements for the operator's existing image pipeline and entry-point
@@ -266,8 +278,10 @@ Replace Kolla Task 4's obsolete direct-workbook GET contract with exact
 unbounded list/filter/ownership validation, controller CA `stat`, direct action
 GETs, exact per-workflow filtered GETs and token-project assertions. Record
 that the companion Mistral owner-scoped update closes the remaining TOCTOU
-window atomically. Add the final Mistral security task/commit and this delivery
-task to their executable plans.
+window atomically for the workbook and both child-definition model types in
+one SQLAlchemy transaction. Add the final Mistral security task/commit and this
+delivery task to their executable plans. Describe action audit output only as
+a structured process log, never as a durable delivered event.
 
 - [ ] **Step 6: Re-run clean-apply and contract verification**
 
@@ -298,8 +312,12 @@ python3 -m compileall -q tests
 git diff --check
 ```
 
-Expected: delivery suite GREEN, cross-repository 18/18, all 25 checksums OK,
-compileall and diff hygiene clean.
+Expected: delivery suite 10/10, cross-repository 19/19, artifact discovery
+29/29, Kolla 64/64, final affected Mistral combined 332/332, all 25 checksums
+OK, compileall and diff hygiene clean. The final Mistral full serial run
+stopped after 829 following known sandbox socket failures, so there is no
+final full-suite PASS claim; the earlier 1620 passed, 8 skipped result is
+historic pre-expanded evidence only.
 
 ```bash
 git add INSTALL.md DELIVERY.md SHA256SUMS tests/test_delivery_artifacts.py \
@@ -307,5 +325,5 @@ git add INSTALL.md DELIVERY.md SHA256SUMS tests/test_delivery_artifacts.py \
   docs/superpowers/plans/2026-08-31-mistral-powerops.md \
   docs/superpowers/plans/2026-08-31-powerops-integration.md \
   docs/superpowers/specs/2026-08-31-openstack-powerops-design.md
-git commit -m "docs: add verified PowerOps installation and delivery guide"
+git commit -m "docs: refresh delivery after ownership hardening"
 ```

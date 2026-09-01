@@ -46,11 +46,11 @@ find patches -type f -name '*.patch' | sort
 
 Проверенные исходные точки и результаты серий:
 
-| Проект | Baseline | Проверенный финальный commit |
-|---|---|---|
-| Masakari | `0fd34dd6a6d90525dbf806f35577c5ee1d7e9444` | `9f3cb144958b8e60bba72adefb22edf51387c0ca` |
-| Mistral | `3b2eab29e9dc71a5ba250d989155eb69a9bd8e48` | `665cde880127f56c8335e6f8b210362f87ae19d9` |
-| Kolla-Ansible | архив SHA-256 `df27628ce641fefee30114ebeb3651490655aacb0930ad5bc30a298c88c3e08d`; локальный импорт `703b06c9fa5771c758f703b424d63fb04192567a` | `9bc9c63d8c1c42f575c0a47198884c75180d595a` |
+| Проект | Baseline | Проверенный финальный commit | Финальное Git tree |
+|---|---|---|---|
+| Masakari | `0fd34dd6a6d90525dbf806f35577c5ee1d7e9444` | `9f3cb144958b8e60bba72adefb22edf51387c0ca` | `83bb2fd7a2d8c2f8d97e26c12fb66e8e06436bc5` |
+| Mistral | `3b2eab29e9dc71a5ba250d989155eb69a9bd8e48` | `3e4fe82455de7473809b0e0bc677fa3df3a3d1e2` | `8e3009eb1abf8033608d31d7e60cdb02ab8da1ed` |
+| Kolla-Ansible | архив SHA-256 `df27628ce641fefee30114ebeb3651490655aacb0930ad5bc30a298c88c3e08d`; локальный импорт `703b06c9fa5771c758f703b424d63fb04192567a` | `63a8d0f597f9034a42f2e1b0bd415f1746d33b8d` | `287bac4223f24393c32fbfd55c140601c8611a21` |
 
 Commit импорта Kolla воспроизводимо описывает использованное дерево, но его
 ID зависит от метаданных локального Git-коммита. Для новой установки
@@ -130,10 +130,12 @@ git diff --check 0fd34dd6a6d90525dbf806f35577c5ee1d7e9444..HEAD
 
 ## Установка патчей Mistral
 
-Mistral 0010 — обязательная security-зависимость reconcile: он выполняет
-атомарный lookup/update workbook по request `project_id`, точным name и
-namespace. Без него Kolla-Ansible 0004 применять для включённого reconcile
-нельзя из-за межпроектной коллизии и TOCTOU.
+Mistral 0010 — обязательная security-зависимость reconcile. При PUT
+он обновляет `Workbook`, а также его дочерние `ActionDefinition` и
+`WorkflowDefinition` только по точному project/name/normalized namespace,
+передавая детям `project_id=wb_db.project_id`, в one SQLAlchemy transaction.
+Без него Kolla-Ansible 0004 применять для включённого reconcile нельзя:
+межпроектная коллизия и TOCTOU должны закрываться и на уровне API.
 
 ```bash
 cd "$MISTRAL_SRC"
@@ -276,7 +278,7 @@ PowerOps использует tooz с etcd. Redis может оставатьс�
 запустите prechecks принятой командой вашего Kolla checkout, например:
 
 ```bash
-kolla-ansible -i /path/to/inventory prechecks
+kolla-ansible prechecks -i /path/to/inventory
 ```
 
 Prechecks должны подтвердить включённые Ironic, Masakari, Mistral и etcd,
@@ -302,13 +304,13 @@ test -r "$POWEROPS_CONTROLLER_CA"
 обязательный inventory конкретного облака.
 
 ```bash
-kolla-ansible -i /path/to/inventory deploy
+kolla-ansible deploy -i /path/to/inventory
 ```
 
 для нового развёртывания либо:
 
 ```bash
-kolla-ansible -i /path/to/inventory reconfigure
+kolla-ansible reconfigure -i /path/to/inventory
 ```
 
 для существующего облака. Не запускайте обе команды подряд автоматически.
@@ -318,6 +320,9 @@ populate/reconcile/validate, но не создают execution и не запу
 точные `power_ops` workbook с пустым namespace и останавливается fail-closed
 при нескольких либо чужих записях. POST выполняется только при отсутствии,
 PUT — только для одной принадлежащей token project изменившейся записи.
+Kolla также проверяет ровно один проектный workflow; Mistral
+выполняет owner-scoped lookup/update `Workbook`, `ActionDefinition` и
+`WorkflowDefinition` в одной SQLAlchemy-транзакции.
 
 Kolla повторяет `stat`/`isreg`/`readable` проверку controller CA уже внутри
 выбранного deploy/reconfigure, после meta: flush_handlers и Mistral action
@@ -365,6 +370,12 @@ maintenance, Ironic `power_state`/`target_power_state`/`last_error` и спис�
 ВМ. Не повторяйте workflow автоматически при неопределённом результате. Live
 canary, power action, evacuation и VM start/stop не разрешаются самим фактом
 применения этих патчей.
+
+Запись PowerOps audit — это только `structured LOG.info process log`.
+Граница контракта: `no external durable audit store` и
+`no delivery or persistence guarantee`. Оператор должен отдельно
+настроить сбор, хранение и доставку process-логов, если это
+требуется политикой аудита.
 
 ## Возобновление workflow возврата
 

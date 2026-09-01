@@ -911,6 +911,12 @@ Emit failure audit data without secrets before re-raising the original typed
 exception. If `self._audit(context, operation, "success", result)` raises, the
 same `_run_locked()` exception path reasserts the fail-safe state.
 
+The `_audit()` helper is a `structured LOG.info process log` only. There is
+`no external durable audit store` in this implementation and there is
+`no delivery or persistence guarantee`. Returning from `LOG.info` is only a
+local control-flow boundary; it does not prove that a collector received or
+retained an event.
+
 **Task 3 review amendment:** validate every public action input after caller
 authorization but before coordinator creation: canonical host, canonical
 segment identifier, one of the three exact instance policies, and a real
@@ -918,14 +924,16 @@ Boolean `allow_hard_off`. Invalid input must create no coordinator or cloud
 connection and make no OpenStack call.
 
 The operation body must return the result without writing its own success
-audit. While the host lock is still held, `_run_locked()` performs the final
-health proof, writes the success audit, and only then marks the remote
-transition complete. Pre-completion errors follow the existing fail-safe and
-failure-audit path. A release or coordinator-stop error after completion is
-instead audited as `completed_with_coordination_cleanup_error`; the completed
+process-log record. While the host lock is still held, `_run_locked()` performs
+the final health proof, calls the success `LOG.info`, and only after that call
+returns marks the remote transition complete. Pre-completion errors follow
+the existing fail-safe and failure-log path. A release or coordinator-stop
+error after completion emits a best-effort
+`completed_with_coordination_cleanup_error` process-log record; the completed
 result is returned and no mutation is attempted after uncertain ownership.
 This terminal cleanup classification prevents an already completed reboot
-from being exposed as a retryable failed action.
+from being exposed as a retryable failed action, but it does not claim durable
+audit delivery.
 
 - [ ] **Step 4: Implement planned power-off**
 
@@ -1211,7 +1219,8 @@ The gate and complete manifest validation run from `_validate_inputs()` after
 caller authorization and before coordinator creation. The manifest must be a
 list of unique canonical string IDs; `None`, scalars, nested values, empty
 strings and path-like values fail with `InstanceManifestError` without cloud
-access. The shared template owns final health, success audit and terminal
+access. The shared template owns final health, the success `LOG.info` process
+record and terminal
 coordination-cleanup classification exactly as in Task 3.
 
 Use this body under the new host lock:
@@ -1476,69 +1485,78 @@ series also contains the reviewed compatibility commit
 
 ---
 
-### Task 6: Scope workbook updates atomically to the request project
+### Task 6: Scope workbook and child-definition updates to the request project
 
 **Files:**
+- Modify: `mistral/db/v2/api.py`
 - Modify: `mistral/db/v2/sqlalchemy/api.py`
+- Modify: `mistral/services/workbooks.py`
+- Test: `mistral/tests/unit/api/v2/test_workbooks.py`
 - Test: `mistral/tests/unit/db/v2/test_sqlalchemy_db_api.py`
+- Test: `mistral/tests/unit/services/test_workbook_service.py`
 
 **Interfaces:**
-- Consumes: request project from `security.get_project_id()`.
-- Preserves: existing create/read/list behavior and public workbook visibility.
-- Produces: owner-scoped PUT lookup/update by exact project, name and normalized
-  namespace inside the same `@session_aware` transaction.
+- Consumes: request project from `security.get_project_id()` and the owning
+  `wb_db.project_id` returned by the exact workbook lookup.
+- Preserves: public read/list visibility and existing create semantics.
+- Produces: owner-scoped PUT for `Workbook`, `ActionDefinition` and
+  `WorkflowDefinition` by exact project, name and normalized namespace in one
+  SQLAlchemy transaction.
 - Required by: Kolla-Ansible PowerOps reconcile patch 0004.
 
-- [ ] **Step 1: Write owner and collision regression tests**
+- [ ] **Step 1: Write the full owner/collision regressions**
 
-Create three cases before production changes:
-
-1. own and foreign public workbooks with the same name/namespace exist; PUT
-   updates only the request project's row;
-2. only a foreign public workbook matches; PUT raises the existing
-   `DBEntityNotFoundError` and leaves it unchanged;
-3. empty/default namespace is matched exactly and never aliases a non-empty
-   namespace.
+Add six real SQLite/Pecan tests across DB, service and API boundaries. Cover an
+own and foreign public workbook with the same name/namespace, foreign-only
+matches, exact empty/default namespace, and foreign child definitions that
+share names with the owned workbook children. The final request must update
+only the request project's workbook and children.
 
 - [ ] **Step 2: Run and verify RED**
 
-Run only those three DB tests and confirm the old name-only
-`get_workbook(name, namespace=namespace)` selects a visible foreign row or the
-wrong project.
+Confirm the pre-fix name-only workbook lookup can select a public foreign row,
+and that unscoped child upserts can mutate a visible foreign
+`ActionDefinition` or `WorkflowDefinition`.
 
-- [ ] **Step 3: Implement one session-aware owned lookup**
+- [ ] **Step 3: Implement the owner-scoped transaction**
 
-Inside `update_workbook()` normalize `None` namespace to `''` and select with
-the supplied transaction session:
+Keep `update_workbook_v2()` and `_on_workbook_update()` inside one SQLAlchemy
+transaction. The DB helper selects with the injected session by exact
+`project_id`, name and normalized namespace, including:
 
 ```python
-wb = b.model_query(models.Workbook, session=session).filter(
-    sa.and_(
-        models.Workbook.project_id == security.get_project_id(),
-        models.Workbook.name == name,
-        models.Workbook.namespace == namespace
-    )
-).first()
+models.Workbook.project_id == security.get_project_id()
 ```
 
-Raise the existing `DBEntityNotFoundError` when no owned exact row exists,
-then update that selected object in the same decorated function. Do not split
-the ownership check and write into separate transactions: that would retain a
-TOCTOU window.
+Reject a caller-supplied project mismatch before lookup. After selecting the
+owned workbook, the service passes `project_id=wb_db.project_id` to both the
+`ActionDefinition` and `WorkflowDefinition` create-or-update calls. Their DB
+helpers apply exact project/name/normalized-namespace filters in that same
+transaction. A missing owned row raises the existing not-found error; public
+visibility never authorizes mutation. This closes the workbook and child
+TOCTOU/ownership boundary together.
 
-- [ ] **Step 4: Verify the security boundary**
+- [ ] **Step 4: Verify the expanded security boundary**
 
-Run the 3 owner-scope regressions, the 60-test workbook DB/service/API
-boundary, the 106-test PowerOps action suite and full flake8. Record the final
-unrestricted suite accurately: the sandbox run had 1631 tests, 1619 passed, 8
-skipped and four local-socket failures independently reproduced on parent
-`8a2db56`; do not report it as an all-green final full suite.
+Run the final affected combined selection: **332/332**. Record the additional,
+partly overlapping selection evidence: new security regressions **6/6**,
+affected workbook boundary **120/120**, **PowerOps 106/106**, and
+**broader 106/106** action/workflow coverage. Run flake8 and diff hygiene.
+
+The historic pre-expanded full result was 1620 passed, 8 skipped. The final
+full serial attempt stopped after 829 tests after known sandbox WSGI socket
+`PermissionError` failures; it did not complete and must not be reported as a
+final full-suite pass.
 
 - [ ] **Step 5: Commit and export all ten patches**
 
 ```bash
-git add mistral/db/v2/sqlalchemy/api.py \
-  mistral/tests/unit/db/v2/test_sqlalchemy_db_api.py
+git add mistral/db/v2/api.py \
+  mistral/db/v2/sqlalchemy/api.py \
+  mistral/services/workbooks.py \
+  mistral/tests/unit/api/v2/test_workbooks.py \
+  mistral/tests/unit/db/v2/test_sqlalchemy_db_api.py \
+  mistral/tests/unit/services/test_workbook_service.py
 git commit -m "fix: scope workbook updates to request project"
 POWEROPS_ARTIFACT_ROOT=/Users/dmitry/Desktop/ironic:mistral:masakari/powerops-patches
 git format-patch --full-index --no-binary --output-directory \
@@ -1550,6 +1568,7 @@ git -C /tmp/mistral-powerops-apply diff --check stable/2025.1...HEAD
 ```
 
 Expected final security commit:
-`665cde880127f56c8335e6f8b210362f87ae19d9`; final patch:
+`3e4fe82455de7473809b0e0bc677fa3df3a3d1e2`; final tree:
+`8e3009eb1abf8033608d31d7e60cdb02ab8da1ed`; final patch:
 `0010-fix-scope-workbook-updates-to-request-project.patch`. All ten patches
 apply in order without fuzz or rejects and reproduce the source tree exactly.

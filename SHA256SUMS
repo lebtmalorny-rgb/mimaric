@@ -2,7 +2,7 @@ a28c32afd6d8baa0e8ea0d5bb785b6160d3956d140ddfd7e026c2830fc0ed1e4  patches/kolla-
 e4ef789d87d8c1a283f7e9ef3d02c5f30d790e01dc1c02f67aed068578d034b6  patches/kolla-ansible/0002-feat-define-Kolla-PowerOps-deployment-contract.patch
 344b01eb9a30367804bd9a297c236587462598e82ba3693bb21faf9fa9955f08  patches/kolla-ansible/0003-feat-render-etcd-backed-PowerOps-configuration.patch
 1b954fccd040ea738434209608b478b98b1f2cad2e3331c8c05f0954e28d7dd1  patches/kolla-ansible/0004-feat-reconcile-PowerOps-actions-and-workbook.patch
-cbdd9b233318311a5a56bcfee40347f66c5a77b107f85d810d5320b1df2e5671  patches/kolla-ansible/0005-docs-add-Russian-PowerOps-operations-guide.patch
+def41befc91d36339f89744c5541d6685d1b8d78e465fe96c79cf9f1a5ebbd2b  patches/kolla-ansible/0005-docs-add-Russian-PowerOps-operations-guide.patch
 2ae6584e8ef3ac0a8b774631a557a93385b45ba4fda1fe8040c81b1787ce1625  patches/masakari/0001-feat-add-PowerOps-coordination-primitives.patch
 223b3c36969094c890e23948aeccff160e3793067d20b719dd2a809358819af7  patches/masakari/0002-feat-fence-failed-hosts-through-Ironic.patch
 81e8d8daafdd12e85dbcfc2119fd09265fb2d6b8788227f5052381dabaf5fa84  patches/masakari/0003-fix-enforce-Ironic-fencing-deadlines.patch
@@ -22,4 +22,4 @@ f949dcc1db024fbbb2c2f8e1eddf1bceaae0e90b73ae17c255b44f82e7240958  patches/mistra
 ee0ea4f6ddc23d65757b7725b22e988b8b68d94c5e0e7b812c588e3146bffe61  patches/mistral/0007-feat-add-guarded-host-return-actions.patch
 b1bfc2a6928d9296bf225e4789e0579e821d14a5850499487776a20298ce2be0  patches/mistral/0008-feat-register-the-PowerOps-workbook-API.patch
 4869e1b110b2c3e6910e0d1581490e919a24361c55bc364cbf054eaf5633f024  patches/mistral/0009-test-generalize-action-plugin-coverage.patch
-400e1b490e5177e396659a0749a02d31a17d9ac00cc78414f6d4230ebb177c63  patches/mistral/0010-fix-scope-workbook-updates-to-request-project.patch
+0a72ca448f29a41abaf16ba159101935bdb5047f96ae1d6415e3615d608bbbf9  patches/mistral/0010-fix-scope-workbook-updates-to-request-project.patch

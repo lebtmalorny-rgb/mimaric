@@ -846,8 +846,14 @@ The PUT is safe only with the companion Mistral commit/patch
 `0010-fix-scope-workbook-updates-to-request-project.patch`. Its
 `update_workbook()` performs an atomic, session-aware lookup/update scoped by
 `models.Workbook.project_id == security.get_project_id()`, exact name and
-normalized namespace. The preceding Kolla ownership assertion is necessary
-operator feedback but alone cannot close the TOCTOU window.
+normalized namespace. In the same one SQLAlchemy transaction, the service
+passes `project_id=wb_db.project_id` to the child `ActionDefinition` and
+`WorkflowDefinition` upserts, which use the same exact owner/name/namespace
+scope. The preceding Kolla ownership assertion is necessary operator feedback
+but alone cannot close either the workbook or child-definition TOCTOU window.
+Kolla remains fail-closed before POST/PUT on an ambiguous or foreign public
+`power_ops` workbook and during validation on a foreign or ambiguous exact
+workflow result.
 
 - [ ] **Step 7: Verify action and workflow names through read-only API calls**
 
@@ -1120,3 +1126,10 @@ git -C /tmp/kolla-powerops-apply diff --check HEAD~5..HEAD
 Expected: the fresh baseline tree equals `powerops-kolla-baseline`, all five
 patches apply in order without fuzz or rejects, `ansible.log` is absent, and
 the hygiene plus enrollment tests pass in the applied tree.
+
+Final verification is **64/64** for the focused PowerOps plus Ironic enrollment
+suite. Expected final commit:
+`63a8d0f597f9034a42f2e1b0bd415f1746d33b8d`; final tree:
+`287bac4223f24393c32fbfd55c140601c8611a21`. Patch 0005 documents the
+`structured LOG.info process log` boundary: there is `no external durable
+audit store` and `no delivery or persistence guarantee` in this bundle.

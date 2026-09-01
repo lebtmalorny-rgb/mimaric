@@ -77,9 +77,9 @@ class DeliveryArtifactsTest(unittest.TestCase):
 
         for token in (
             "git am --abort",
-            "kolla-ansible prechecks",
-            "kolla-ansible deploy",
-            "kolla-ansible reconfigure",
+            "kolla-ansible prechecks -i /path/to/inventory",
+            "kolla-ansible deploy -i /path/to/inventory",
+            "kolla-ansible reconfigure -i /path/to/inventory",
             "powerops_reconcile_workbook",
             "powerops_validate_registration",
             "kolla_admin_openrc_cacert",
@@ -91,6 +91,12 @@ class DeliveryArtifactsTest(unittest.TestCase):
             "отдельного разрешения оператора",
         ):
             self.assertIn(token, text)
+
+        self.assertNotRegex(
+            text,
+            r"kolla-ansible\s+-i\s+/path/to/inventory\s+"
+            r"(?:prechecks|deploy|reconfigure)",
+        )
 
     def test_post_install_commands_read_the_claimed_state(self):
         text = _read("INSTALL.md")
@@ -146,17 +152,39 @@ class DeliveryArtifactsTest(unittest.TestCase):
 
     def test_install_guide_pins_baselines_and_final_commits(self):
         text = _read("INSTALL.md")
+        delivery = _read("DELIVERY.md")
         required = {
             "0fd34dd6a6d90525dbf806f35577c5ee1d7e9444",
             "9f3cb144958b8e60bba72adefb22edf51387c0ca",
+            "83bb2fd7a2d8c2f8d97e26c12fb66e8e06436bc5",
             "3b2eab29e9dc71a5ba250d989155eb69a9bd8e48",
-            "665cde880127f56c8335e6f8b210362f87ae19d9",
+            "3e4fe82455de7473809b0e0bc677fa3df3a3d1e2",
+            "8e3009eb1abf8033608d31d7e60cdb02ab8da1ed",
             "df27628ce641fefee30114ebeb3651490655aacb0930ad5bc30a298c88c3e08d",
             "703b06c9fa5771c758f703b424d63fb04192567a",
-            "9bc9c63d8c1c42f575c0a47198884c75180d595a",
+            "63a8d0f597f9034a42f2e1b0bd415f1746d33b8d",
+            "287bac4223f24393c32fbfd55c140601c8611a21",
         }
         found = set(re.findall(r"[0-9a-f]{40,64}", text))
         self.assertEqual(set(), required - found)
+        delivery_found = set(re.findall(r"[0-9a-f]{40,64}", delivery))
+        self.assertEqual(set(), required - delivery_found)
+        self.assertNotIn(
+            "665cde880127f56c8335e6f8b210362f87ae19d9",
+            text,
+        )
+        self.assertNotIn(
+            "9bc9c63d8c1c42f575c0a47198884c75180d595a",
+            text,
+        )
+        self.assertNotIn(
+            "665cde880127f56c8335e6f8b210362f87ae19d9",
+            delivery,
+        )
+        self.assertNotIn(
+            "9bc9c63d8c1c42f575c0a47198884c75180d595a",
+            delivery,
+        )
 
     def test_install_guide_declares_exact_images_and_no_build_recipe(self):
         text = _read("INSTALL.md")
@@ -215,12 +243,15 @@ class DeliveryArtifactsTest(unittest.TestCase):
             "895 passed, 3 skipped",
             "85 passed",
             "1620 passed, 8 skipped",
-            "106 passed",
-            "60 passed",
-            "3 passed",
-            "4 inherited sandbox failures",
-            "63 passed",
-            "18 passed",
+            "332/332",
+            "6/6",
+            "120/120",
+            "PowerOps 106/106",
+            "broader 106/106",
+            "stopped after 829",
+            "64/64",
+            "19/19",
+            "29/29",
         ):
             self.assertIn(result, text)
         self.assertIn("INSTALL.md", text)
@@ -273,10 +304,22 @@ class DeliveryArtifactsTest(unittest.TestCase):
             "/actions/{{ item }}",
             "/workflows?name={{ item }}&namespace=",
             "models.Workbook.project_id == security.get_project_id()",
+            "ActionDefinition",
+            "WorkflowDefinition",
+            "project_id=wb_db.project_id",
+            "one SQLAlchemy transaction",
             "0010-fix-scope-workbook-updates-to-request-project.patch",
             "TOCTOU",
         ):
             self.assertIn(token, combined)
+
+        all_docs = "\n".join((combined, _read("INSTALL.md"),
+                              _read("DELIVERY.md")))
+        normalized = " ".join(all_docs.split())
+        self.assertIn("structured LOG.info process log", normalized)
+        self.assertIn("no external durable audit store", normalized)
+        self.assertIn("no delivery or persistence guarantee", normalized)
+        self.assertNotIn("durable success audit", normalized)
 
 
 if __name__ == "__main__":

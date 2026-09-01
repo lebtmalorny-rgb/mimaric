@@ -12,13 +12,13 @@ series; its source is delivered by
 | Series | Exact baseline | Verified source HEAD | Commits |
 |---|---|---|---:|
 | Masakari | `0fd34dd6a6d90525dbf806f35577c5ee1d7e9444` (`stable/2025.1`) | `9f3cb144958b8e60bba72adefb22edf51387c0ca` | 10 |
-| Mistral | `3b2eab29e9dc71a5ba250d989155eb69a9bd8e48` (`stable/2025.1`) | `665cde880127f56c8335e6f8b210362f87ae19d9` | 10 |
-| Kolla-Ansible | `kolla-ansible-enroll-ironic-patch-3.zip`, SHA-256 `df27628ce641fefee30114ebeb3651490655aacb0930ad5bc30a298c88c3e08d`; internal force-tracked import `703b06c9fa5771c758f703b424d63fb04192567a` | `9bc9c63d8c1c42f575c0a47198884c75180d595a` | 5 |
+| Mistral | `3b2eab29e9dc71a5ba250d989155eb69a9bd8e48` (`stable/2025.1`) | `3e4fe82455de7473809b0e0bc677fa3df3a3d1e2` | 10 |
+| Kolla-Ansible | `kolla-ansible-enroll-ironic-patch-3.zip`, SHA-256 `df27628ce641fefee30114ebeb3651490655aacb0930ad5bc30a298c88c3e08d`; internal force-tracked import `703b06c9fa5771c758f703b424d63fb04192567a` | `63a8d0f597f9034a42f2e1b0bd415f1746d33b8d` | 5 |
 
 Clean `git am` reproduced the Masakari source tree
 `83bb2fd7a2d8c2f8d97e26c12fb66e8e06436bc5`, the Mistral source tree
-`7d4b612547791d38c8ea15ff41a513fdfd8805f4`, and the Kolla-Ansible source
-tree `990fd4bed52e4f60032791787363b4bfde4f8134`. Commit IDs created by
+`8e3009eb1abf8033608d31d7e60cdb02ab8da1ed`, and the Kolla-Ansible source
+tree `287bac4223f24393c32fbfd55c140601c8611a21`. Commit IDs created by
 `git am` may differ because committer metadata changes; tree equality is the
 content proof.
 
@@ -62,9 +62,12 @@ Kolla-Ansible:
 5. `patches/kolla-ansible/0005-docs-add-Russian-PowerOps-operations-guide.patch`
 
 Dependency boundary: Kolla-Ansible patch 0004 requires Mistral patch 0010.
-The latter atomically scopes workbook PUT lookup/update to the request project,
-exact name and namespace. Kolla additionally rejects ambiguous or foreign
-public `power_ops` matches before mutation.
+The latter scopes the `Workbook` plus child `ActionDefinition` and
+`WorkflowDefinition` lookup/update to exact project, name and normalized
+namespace, passes `project_id=wb_db.project_id`, and performs all writes in
+one SQLAlchemy transaction. Kolla additionally rejects ambiguous or foreign
+public `power_ops` workbook matches before mutation and requires each
+validated workflow to be an exact token-project-owned match.
 
 ## Implemented scenarios
 
@@ -92,20 +95,22 @@ fresh-apply verification:
 - Masakari full unit suite: **895 passed, 3 skipped**, 0 failed (898 run).
 - Masakari final PowerOps-focused selection: **85 passed**, 0 failed; full
   flake8 passed.
-- Mistral pre-security-fix full unit suite: **1620 passed, 8 skipped**, 0
-  failed (1628 run).
-- Final Mistral PowerOps actions: **106 passed**; workbook DB/service/API
-  boundary: **60 passed**; owner-scope security regression: **3 passed**;
-  full flake8 passed.
-- Final Mistral unrestricted sandbox run: 1631 run, 1619 passed, 8 skipped and
-  **4 inherited sandbox failures** caused by prohibited local socket binds and
-  downstream launcher state. The same four failures were reproduced on parent
-  `8a2db56eb5779a1ec59b5f257b7b3b6d50dde9ac`; they are not reported as a
-  passing final full suite.
-- Kolla-Ansible PowerOps plus Ironic enrollment suites in a colon-free mirror:
-  **63 passed**; Ansible syntax check and diff hygiene passed.
-- Cross-repository source contract suite: **18 passed**; flake8, compileall and
-  diff hygiene passed.
+- Historic pre-expanded Mistral evidence, before the final child-ownership
+  hardening: **1620 passed, 8 skipped**, 0 failed (1628 run). This is retained
+  as historical evidence only, not as a final full-suite claim.
+- Final expanded Mistral affected combined run: **332/332**. Additional
+  selection evidence (some selections overlap) is: new owner-scope security
+  regressions **6/6**, affected workbook boundary **120/120**,
+  **PowerOps 106/106**, and **broader 106/106** action/workflow coverage;
+  final flake8 and diff hygiene passed.
+- The final Mistral full serial attempt **stopped after 829** tests following
+  known sandbox WSGI socket `PermissionError` failures. It did not complete,
+  so this delivery makes no final full-suite pass claim.
+- Kolla-Ansible PowerOps plus Ironic enrollment suites: **64/64**; Ansible
+  syntax and diff hygiene passed.
+- Cross-repository source contract suite: **19/19**; artifact repository
+  discovery: **29/29** (10 delivery plus 19 cross-repository); flake8,
+  compileall and diff hygiene passed.
 
 Representative verification commands:
 
@@ -115,6 +120,10 @@ POWEROPS_MASAKARI_TREE="$PWD/worktrees/masakari-powerops" \
 POWEROPS_MISTRAL_TREE="$PWD/worktrees/mistral-powerops" \
 POWEROPS_KOLLA_TREE="$PWD/work/kolla-ansible" \
   python3 -m unittest tests.test_cross_repository_contract -v
+POWEROPS_MASAKARI_TREE="$PWD/worktrees/masakari-powerops" \
+POWEROPS_MISTRAL_TREE="$PWD/worktrees/mistral-powerops" \
+POWEROPS_KOLLA_TREE="$PWD/work/kolla-ansible" \
+  python3 -m unittest discover -s tests -v
 shasum -a 256 -c SHA256SUMS
 git diff --check
 ```
@@ -122,6 +131,11 @@ git diff --check
 The Mistral workbook bytes are identical in Mistral and Kolla-Ansible and have
 SHA-256
 `26c9f2a072827b5c342dcc1d51aacf5995110054a400efe3d68df0563f3e7921`.
+
+PowerOps action audit output is a `structured LOG.info process log` only.
+There is `no external durable audit store` in this patch set and there is
+`no delivery or persistence guarantee`; durable collection and retention are
+an operator logging-platform responsibility and were not verified here.
 
 ## Static verification boundary
 
