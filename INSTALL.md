@@ -20,7 +20,9 @@ Mistral API, Mistral Engine и Mistral Executor. Mistral Event Engine может
 После установки Kolla-серии архитектура и сценарии находятся в
 `$KOLLA_SRC/docs/powerops/POWEROPS-ARCHITECTURE.md`; исходный документ входит
 в [патч Kolla 0005](patches/kolla-ansible/0005-docs-add-Russian-PowerOps-operations-guide.patch).
-Доказательства поставки — в [`DELIVERY.md`](DELIVERY.md).
+Повседневный контроль, диагностика и runtime-приёмка описаны в
+[`OPERATIONS.md`](OPERATIONS.md). Доказательства поставки — в
+[`DELIVERY.md`](DELIVERY.md).
 
 ## Проверка комплекта
 

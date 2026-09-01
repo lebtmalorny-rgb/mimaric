@@ -2,9 +2,11 @@
 
 This repository delivers 25 ordered Git patches plus source-level tests and
 operator documentation for OpenStack Epoxy 2025.1. Detailed installation is
-in [`INSTALL.md`](INSTALL.md). The Russian component/scenario runbook is
-`docs/powerops/POWEROPS-ARCHITECTURE.md` after applying the Kolla-Ansible
-series; its source is delivered by
+in [`INSTALL.md`](INSTALL.md). Routine state checks, failure diagnosis and
+controlled runtime acceptance are in [`OPERATIONS.md`](OPERATIONS.md). The
+Russian component/scenario runbook is
+`docs/powerops/POWEROPS-ARCHITECTURE.md` after applying the Kolla-Ansible series;
+its source is delivered by
 [Kolla patch 0005](patches/kolla-ansible/0005-docs-add-Russian-PowerOps-operations-guide.patch).
 
 ## Baselines
@@ -109,7 +111,7 @@ fresh-apply verification:
 - Kolla-Ansible PowerOps plus Ironic enrollment suites: **64/64**; Ansible
   syntax and diff hygiene passed.
 - Cross-repository source contract suite: **19/19**; artifact repository
-  discovery: **30/30** (11 delivery plus 19 cross-repository); flake8,
+  discovery: **31/31** (12 delivery plus 19 cross-repository); flake8,
   compileall and diff hygiene passed.
 
 Representative verification commands:

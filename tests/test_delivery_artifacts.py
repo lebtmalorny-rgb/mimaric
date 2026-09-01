@@ -286,6 +286,69 @@ class DeliveryArtifactsTest(unittest.TestCase):
         ):
             self.assertIn(statement, normalized)
 
+    def test_operations_runbook_is_linked_and_read_only(self):
+        operations = _read("OPERATIONS.md")
+        install = _read("INSTALL.md")
+        delivery = _read("DELIVERY.md")
+
+        for heading in (
+            "# PowerOps: контроль и диагностика",
+            "## Краткий вывод",
+            "## Правила безопасности",
+            "## Базовый read-only снимок",
+            "## Плановое выключение",
+            "## Плановая перезагрузка",
+            "## Двухфазный возврат хоста",
+            "## Аварийное отключение, fencing и evacuation",
+            "## Диагностика по компонентам",
+            "## Матрица неисправностей",
+            "## Контролируемая runtime-приёмка",
+            "## Пакет доказательств",
+        ):
+            self.assertIn(heading, operations)
+
+        for token in (
+            'openstack compute service list --host "$HOST"',
+            'openstack server list --all-projects --host "$HOST" --long',
+            'openstack baremetal node show "$NODE_UUID"',
+            'openstack segment host show "$SEGMENT_UUID" "$HOST"',
+            'openstack workflow execution show "$EXECUTION_ID"',
+            'openstack task execution list "$EXECUTION_ID"',
+            'openstack action execution list "$TASK_EXECUTION_ID"',
+            'openstack notification show "$NOTIFICATION_ID"',
+            'openstack notification vmove list "$NOTIFICATION_ID"',
+            "etcdctl --endpoints=\"$ETCD_ENDPOINTS\" endpoint health",
+            "powerops/host/<host>",
+            "powerops/evacuation/global",
+            "stale_domains_checked=true",
+            "stable-off",
+            "FAILED",
+            "PASS",
+        ):
+            self.assertIn(token, operations)
+
+        routine = operations.split(
+            "## Контролируемая runtime-приёмка", 1
+        )[0]
+        for mutation in (
+            "openstack workflow execution create",
+            "openstack workflow execution update",
+            "openstack notification create",
+            "openstack segment host update",
+            "openstack compute service set",
+            "openstack baremetal node power",
+            "openstack server evacuate",
+            "openstack server migrate",
+            "openstack server start",
+            "openstack server stop",
+            "openstack server reboot",
+        ):
+            self.assertNotIn(mutation, routine)
+
+        link = "[`OPERATIONS.md`](OPERATIONS.md)"
+        self.assertIn(link, install)
+        self.assertIn(link, delivery)
+
     def test_delivery_manifest_records_verified_evidence_and_boundary(self):
         text = _read("DELIVERY.md")
         for heading in (
@@ -311,11 +374,13 @@ class DeliveryArtifactsTest(unittest.TestCase):
             "stopped after 829",
             "64/64",
             "19/19",
-            "30/30",
+            "31/31",
         ):
             self.assertIn(result, text)
         self.assertNotIn("29/29", text)
+        self.assertNotIn("30/30", text)
         self.assertIn("INSTALL.md", text)
+        self.assertIn("OPERATIONS.md", text)
         self.assertIn("POWEROPS-ARCHITECTURE.md", text)
         self.assertIn("25", text)
         normalized = " ".join(text.split())
