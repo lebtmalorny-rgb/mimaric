@@ -140,6 +140,9 @@ openstack action execution output show "$ACTION_EXECUTION_ID"
 
 Workflow: `power_ops.planned_power_off`. Допустимые `instance_policy`:
 `require_empty`, `live_migrate`, `stop`. Плановая evacuation запрещена.
+Готовые команды запуска находятся в разделе
+[«Плановое выключение: готовая процедура»](#плановое-выключение-готовая-процедура)
+после обязательного runtime/change gate.
 
 Ожидаемая последовательность:
 
@@ -441,6 +444,183 @@ spawn. Коррелируйте по UTC и UUID. Лог показывает п
 на выделенном canary-host, с BMC-консолью, capacity check, backup/rollback plan
 и согласованным окном. Простое применение патчей такого разрешения не даёт.
 
+### Плановое выключение: готовая процедура
+
+Эта процедура выполняет реальное выключение compute host. Запускайте её только
+в утверждённое окно. Identity в mutation-сессии должна одновременно попадать
+в `powerops_allowed_project_names` и `powerops_allowed_user_names`; отдельная
+read-only сессия наблюдения может использовать административную учётную запись
+по регламенту облака. Держите доступ к BMC-консоли. Команды ниже ничего не
+возвращают автоматически при ошибке: безопасный fail-safe может оставить Nova
+disabled и Masakari host в maintenance.
+
+1. Загрузите обычный OpenStack RC либо выберите запись `clouds.yaml`. Не
+   указывайте пароль или token непосредственно в командах. Подготовьте
+   инструменты и точные идентификаторы:
+
+   ```bash
+   command -v openstack
+   command -v jq
+   openstack help workflow execution create
+
+   export HOST=compute-example
+   export SEGMENT_UUID=00000000-0000-0000-0000-000000000000
+   export NODE_UUID=11111111-1111-1111-1111-111111111111
+   export INSTANCE_POLICY=require_empty
+   export ALLOW_HARD_OFF=false
+
+   test -n "$HOST"
+   test -n "$SEGMENT_UUID"
+   test -n "$NODE_UUID"
+   ```
+
+   Замените фиктивные значения реальными. Для первого запуска оставьте
+   `INSTANCE_POLICY=require_empty` и `ALLOW_HARD_OFF=false`. Для последующих
+   операций выберите ровно одну политику:
+
+   | Значение | Что произойдёт до выключения хоста |
+   |---|---|
+   | `require_empty` | Workflow требует, чтобы на source не было ВМ. Это рекомендуемый первый canary. |
+   | `live_migrate` | ВМ по очереди live-migrate с подтверждением и pacing; capacity/storage должны быть проверены заранее. |
+   | `stop` | ВМ по очереди останавливаются; их UUID возвращаются в `stopped_instance_ids` для последующего возврата. |
+
+2. Валидируйте значения и снимите состояние до mutation:
+
+   ```bash
+   case "$INSTANCE_POLICY" in
+     require_empty|live_migrate|stop) ;;
+     *) echo "Unsupported INSTANCE_POLICY" >&2; exit 1 ;;
+   esac
+
+   case "$ALLOW_HARD_OFF" in
+     true|false) ;;
+     *) echo "ALLOW_HARD_OFF must be true or false" >&2; exit 1 ;;
+   esac
+
+   date -u +%Y-%m-%dT%H:%M:%SZ
+   openstack workflow show power_ops.planned_power_off
+   openstack compute service list --host "$HOST" --service nova-compute --long
+   openstack server list --all-projects --host "$HOST" --long
+   openstack baremetal node show "$NODE_UUID" --fields uuid name provision_state power_state target_power_state last_error network_interface
+   openstack segment host show "$SEGMENT_UUID" "$HOST"
+   openstack workflow execution list --rootsonly --limit 50
+   ```
+
+   Остановитесь, если три имени не совпадают, Node не `manageable/noop`,
+   `last_error` не пуст, существует другой незавершённый PowerOps execution или
+   список ВМ неожиданен. Для `require_empty` отдельно докажите нулевое число
+   ВМ:
+
+   ```bash
+   SOURCE_VM_COUNT="$(openstack server list --all-projects --host "$HOST" -f value -c ID | awk 'NF {count++} END {print count+0}')"
+   echo "SOURCE_VM_COUNT=$SOURCE_VM_COUNT"
+   if [ "$INSTANCE_POLICY" = require_empty ]; then
+     test "$SOURCE_VM_COUNT" -eq 0
+   fi
+   ```
+
+   `ALLOW_HARD_OFF=false` разрешает только graceful shutdown и завершает
+   workflow ошибкой при истечении его timeout. `allow_hard_off=true` разрешает
+   последующий hard off и должен включаться только отдельным решением после
+   оценки приложений и риска потери данных. При таком решении подтвердите
+   опасную настройку отдельно:
+
+   ```bash
+   if [ "$ALLOW_HARD_OFF" = true ]; then
+     printf 'Type allow-hard-off:%s to approve hard off: ' "$HOST"
+     read -r CONFIRM_HARD_OFF
+     test "$CONFIRM_HARD_OFF" = "allow-hard-off:$HOST"
+   fi
+   ```
+
+3. Безопасно сформируйте JSON. `--argjson` сохраняет `allow_hard_off` логическим
+   JSON Boolean, а не строкой:
+
+   ```bash
+   WORKFLOW_INPUT="$(
+     jq -nc \
+       --arg host "$HOST" \
+       --arg segment_uuid "$SEGMENT_UUID" \
+       --arg instance_policy "$INSTANCE_POLICY" \
+       --argjson allow_hard_off "$ALLOW_HARD_OFF" \
+       '{host: $host, segment_uuid: $segment_uuid,
+         instance_policy: $instance_policy,
+         allow_hard_off: $allow_hard_off}'
+   )"
+   printf '%s\n' "$WORKFLOW_INPUT" | jq .
+   ```
+
+   Проверьте напечатанный JSON и введите точное имя хоста как последний
+   локальный gate:
+
+   ```bash
+   printf 'Type the exact host name to approve planned power off: '
+   read -r CONFIRM_HOST
+   test "$CONFIRM_HOST" = "$HOST"
+   ```
+
+4. Запустите ровно один execution. Команда возвращает его ID и сохраняет его в
+   текущей shell-сессии:
+
+   ```bash
+   export STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+   EXECUTION_ID="$(openstack workflow execution create -f value -c ID power_ops.planned_power_off "$WORKFLOW_INPUT")"
+   test -n "$EXECUTION_ID"
+   export EXECUTION_ID
+   printf 'EXECUTION_ID=%s\n' "$EXECUTION_ID"
+   ```
+
+   Если команда create вернула timeout или потеряла соединение до печати ID,
+   не запускайте её повторно. Сначала найдите execution чтением списка и
+   сопоставьте workflow, input, время и hostname:
+
+   ```bash
+   openstack workflow execution list --rootsonly --limit 50
+   ```
+
+5. Наблюдайте execution только read-only командами. Повторяйте снимок вручную
+   до терминального `SUCCESS`, `ERROR` либо `CANCELLED`:
+
+   ```bash
+   date -u +%Y-%m-%dT%H:%M:%SZ
+   openstack workflow execution show "$EXECUTION_ID"
+   openstack workflow execution input show "$EXECUTION_ID"
+   openstack task execution list "$EXECUTION_ID"
+   openstack compute service list --host "$HOST" --service nova-compute --long
+   openstack server list --all-projects --host "$HOST" --long
+   openstack baremetal node show "$NODE_UUID" --fields uuid name provision_state power_state target_power_state last_error network_interface
+   openstack segment host show "$SEGMENT_UUID" "$HOST"
+   ```
+
+   В отдельной сессии можно следить за action/audit, не принимая лог за
+   итоговый источник состояния:
+
+   ```bash
+   docker logs --since "$STARTED_AT" -f mistral_executor 2>&1 | grep -E "$EXECUTION_ID|PowerOps audit|ERROR|Traceback"
+   ```
+
+6. После терминального состояния сохраните результат и полный путь ошибок:
+
+   ```bash
+   openstack workflow execution show "$EXECUTION_ID"
+   openstack workflow execution output show "$EXECUTION_ID"
+   openstack workflow execution report show --errors-only "$EXECUTION_ID"
+   openstack task execution list "$EXECUTION_ID"
+   ```
+
+   `SUCCESS` принимается только вместе с фактическими состояниями: Ironic
+   stable-off, пустые `target_power_state`/`last_error`, Nova disabled,
+   Masakari maintenance=true и корректный результат выбранной VM policy. Для
+   `stop` обязательно сохраните точный `stopped_instance_ids`: этот manifest
+   нужен workflow `power_ops.power_on_and_return`. Для `live_migrate` убедитесь,
+   что все исходные UUID покинули source; для `require_empty` manifest должен
+   оставаться пустым.
+
+   При `ERROR` выполните диагностику из раздела «Матрица неисправностей» и не
+   включайте Nova, не снимайте maintenance и не повторяйте execution вслепую.
+   Последующий возврат выполняется отдельным workflow и отдельным operator gate,
+   описанным в разделе «Двухфазный возврат хоста».
+
 Рекомендуемый порядок приёмки:
 
 1. Проверить только status workflow и совпадение трёх имён:
@@ -521,7 +701,7 @@ lease etcd или Nova evacuation. И наоборот, успешный еди�
 доказывает capacity и поведение при конкурентных host failures; эти проверки
 должны быть частью отдельного нагрузочного плана.
 
-Официальная справка по использованным read-only командам:
+Официальная справка по использованным командам:
 
 - OpenStack Mistral CLI: <https://docs.openstack.org/python-openstackclient/latest/cli/plugin-commands/mistral.html>
 - Masakari CLI: <https://docs.openstack.org/python-masakariclient/latest/cli/masakari_commands.html>

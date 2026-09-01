@@ -349,6 +349,29 @@ class DeliveryArtifactsTest(unittest.TestCase):
         self.assertIn(link, install)
         self.assertIn(link, delivery)
 
+        planned_procedure = "### Плановое выключение: готовая процедура"
+        self.assertIn(planned_procedure, operations)
+        self.assertGreater(
+            operations.find(planned_procedure),
+            operations.find("## Контролируемая runtime-приёмка"),
+        )
+        for token in (
+            "command -v jq",
+            "INSTANCE_POLICY=require_empty",
+            "ALLOW_HARD_OFF=false",
+            'case "$INSTANCE_POLICY" in',
+            'case "$ALLOW_HARD_OFF" in',
+            'allow-hard-off:$HOST',
+            'jq -nc \\\n',
+            '--argjson allow_hard_off "$ALLOW_HARD_OFF"',
+            'power_ops.planned_power_off "$WORKFLOW_INPUT"',
+            "-f value -c ID",
+            'test -n "$EXECUTION_ID"',
+            'openstack workflow execution output show "$EXECUTION_ID"',
+            "allow_hard_off=true",
+        ):
+            self.assertIn(token, operations)
+
     def test_delivery_manifest_records_verified_evidence_and_boundary(self):
         text = _read("DELIVERY.md")
         for heading in (
