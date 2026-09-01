@@ -140,28 +140,43 @@ git commit -m "test: verify cross-repository PowerOps contracts"
 
 ---
 
-### Task 3: Produce a verified delivery manifest
+### Task 3: Produce a verified installation guide and delivery manifest
 
 **Files:**
+- Create: `INSTALL.md`
 - Create: `DELIVERY.md`
 - Create: `SHA256SUMS`
-- Modify: `.gitignore`
+- Create: `tests/test_delivery_artifacts.py`
+- Modify: `docs/superpowers/plans/2026-08-31-kolla-ansible-powerops.md`
+- Modify: `docs/superpowers/plans/2026-08-31-mistral-powerops.md`
+- Modify: `docs/superpowers/plans/2026-08-31-powerops-integration.md`
+- Modify: `docs/superpowers/specs/2026-08-31-openstack-powerops-design.md`
 
 **Interfaces:**
 - Consumes: all exported patch files and repository verification outputs.
-- Produces: exact patch ordering, baselines, checksums and verification boundary.
+- Produces: exact patch ordering, baselines, checksums, safe apply/recovery,
+  image/configuration gates and verification boundary.
 - Excludes: source worktrees and any credentials from the artifact commit.
 
-- [ ] **Step 1: Extend ignores for execution worktrees**
+- [ ] **Step 1: Write the failing delivery-artifact contract**
 
-Add:
+Use only the standard library. Require:
 
-```gitignore
-/work/
-/worktrees/
-```
+- all installation/delivery headings and exact baseline/final identities;
+- 10 Masakari, 10 Mistral and 5 Kolla patch paths in exact application order;
+- the actual patch filesystem set is exactly the expected 25 paths, with no
+  unmanifested 26th patch, and sorted checksum hashes match those bytes;
+- exactly four patched runtime image repository/tag pairs and no invented
+  image-build command;
+- non-empty exact caller allowlists, etcd coordination, controller CA
+  distinction/manual pre-gate check and deploy/reconfigure mutation gate;
+- valid Mistral/Ironic read-only CLI commands that expose every claimed field;
+- exact resume JSON, safe `git am --abort` recovery and rollback boundaries;
+- final workbook collision/owner-scope contract in plans and design.
 
-Keep the existing `/sources/` ignore.
+Run `python3 -m unittest tests.test_delivery_artifacts -v` before creating the
+three root artifacts. Expected RED: missing `INSTALL.md`, `DELIVERY.md` and
+`SHA256SUMS`, plus stale plan/design assertions.
 
 - [ ] **Step 2: Create checksums for immutable patch outputs**
 
@@ -170,11 +185,37 @@ find patches -type f -name '*.patch' -print0 \
   | sort -z \
   | xargs -0 shasum -a 256 > SHA256SUMS
 shasum -a 256 -c SHA256SUMS
+POWEROPS_PATCH_COUNT="$(find patches -type f -name '*.patch' | wc -l | tr -d ' ')"
+test "$POWEROPS_PATCH_COUNT" -eq 25
 ```
 
 Expected: every patch reports `OK`.
 
-- [ ] **Step 3: Write `DELIVERY.md` with exact evidence**
+- [ ] **Step 3: Write detailed Russian `INSTALL.md`**
+
+Pin full Masakari/Mistral baseline and final SHAs plus the Kolla archive hash,
+internal import and final SHA. Give exact `git am` commands on separate clean
+integration branches and abort/recovery handling. Document the dependency
+`Kolla 0004 -> Mistral 0010`.
+
+Do not invent an image build recipe: the bundle does not contain one. State
+requirements for the operator's existing image pipeline and entry-point
+acceptance for exactly Masakari Engine plus Mistral API/Engine/Executor;
+Mistral Event Engine may remain vanilla.
+
+Provide a secret-free `globals.yml` example with required services, image/tag
+pairs, strict allowlists, etcd/timing/reconcile/validate options and the
+controller-only `kolla_admin_openrc_cacert` distinction. Make prechecks and one
+of deploy/reconfigure explicit mutation gates. State accurately that prechecks
+do not validate the controller CA: require `test -f`/`test -r` before approval,
+and explain that Kolla repeats `stat` only inside deploy/reconfigure after
+handler flush and action population. State that deployment never executes
+workflows or Nova/Ironic mutations, then document valid `openstack action
+definition list` and exact per-node Ironic field reads, separately authorised
+canary, exact return resume JSON and non-destructive source/image/config/
+workbook rollback.
+
+- [ ] **Step 4: Write `DELIVERY.md` with exact evidence**
 
 Use these sections:
 
@@ -196,7 +237,16 @@ Russian Kolla runbook. State explicitly that no images were built or pushed,
 no deployment/reconfiguration was run, and no physical power or VM operation
 was performed.
 
-- [ ] **Step 4: Re-run clean-apply and contract verification**
+- [ ] **Step 5: Align final plans and design**
+
+Replace Kolla Task 4's obsolete direct-workbook GET contract with exact
+unbounded list/filter/ownership validation, controller CA `stat`, direct action
+GETs, exact per-workflow filtered GETs and token-project assertions. Record
+that the companion Mistral owner-scoped update closes the remaining TOCTOU
+window atomically. Add the final Mistral security task/commit and this delivery
+task to their executable plans.
+
+- [ ] **Step 6: Re-run clean-apply and contract verification**
 
 Apply each patch series to a fresh declared baseline exactly as specified in
 its subsystem plan, then run:
@@ -212,9 +262,27 @@ shasum -a 256 -c SHA256SUMS
 
 Expected: PASS, clean diff hygiene, and all checksums `OK`.
 
-- [ ] **Step 5: Commit the delivery manifest**
+- [ ] **Step 7: Verify delivery contracts and commit**
 
 ```bash
-git add .gitignore DELIVERY.md SHA256SUMS patches
-git commit -m "docs: publish verified PowerOps patch delivery"
+python3 -m unittest tests.test_delivery_artifacts -v
+POWEROPS_MASAKARI_TREE="$PWD/worktrees/masakari-powerops" \
+POWEROPS_MISTRAL_TREE="$PWD/worktrees/mistral-powerops" \
+POWEROPS_KOLLA_TREE="$PWD/work/kolla-ansible" \
+  python3 -m unittest tests.test_cross_repository_contract -v
+shasum -a 256 -c SHA256SUMS
+python3 -m compileall -q tests
+git diff --check
+```
+
+Expected: delivery suite GREEN, cross-repository 18/18, all 25 checksums OK,
+compileall and diff hygiene clean.
+
+```bash
+git add INSTALL.md DELIVERY.md SHA256SUMS tests/test_delivery_artifacts.py \
+  docs/superpowers/plans/2026-08-31-kolla-ansible-powerops.md \
+  docs/superpowers/plans/2026-08-31-mistral-powerops.md \
+  docs/superpowers/plans/2026-08-31-powerops-integration.md \
+  docs/superpowers/specs/2026-08-31-openstack-powerops-design.md
+git commit -m "docs: add verified PowerOps installation and delivery guide"
 ```

@@ -51,13 +51,17 @@ rsync -a --exclude .git \
 cd work/kolla-ansible
 git init
 git add .
+git add -f ansible.log
 git commit -m "chore: import kolla-ansible-enroll-ironic-patch-3"
 git tag powerops-kolla-baseline
 ```
 
 Before `git add`, run `git grep` equivalents against `etc/kolla/passwords.yml`
 and generated logs; stop if any non-placeholder credential is present. Do not
-copy `.git`, shell history or Ansible fact caches.
+copy `.git`, shell history or Ansible fact caches. The explicit force-add is
+limited to the exact ignored archive log so the exportable hygiene commit can
+represent its deletion. Keep `ansible.log binary` in local-only
+`.git/info/attributes`; never add that attributes file to the repository.
 
 - [ ] **Step 2: Write the failing hygiene test**
 
@@ -309,7 +313,7 @@ git commit -m "feat: define Kolla PowerOps deployment contract"
 - Produces: Mistral `[powerops]` and etcd-backed `[coordination]` sections.
 - Preserves: original templates exactly when `enable_powerops` is false, except the existing invalid Masakari `?ca_cert` delimiter is corrected to `&ca_cert`.
 
-- [ ] **Step 1: Write failing source-contract tests**
+- [ ] **Step 1: Write failing render-contract tests**
 
 ```python
 class PowerOpsTemplateTest(unittest.TestCase):
@@ -338,6 +342,20 @@ class PowerOpsTemplateTest(unittest.TestCase):
             self.assertIn("powerops_coordination_url", text)
             self.assertIn("[powerops]", text)
 ```
+
+The source assertions above are supplemental. The test module must also render
+the complete templates and parse the resulting INI for this matrix:
+
+- Masakari API and Engine with PowerOps enabled and disabled;
+- the disabled Masakari Redis and etcd branches, including etcd with and
+  without a CA path;
+- Mistral API, Engine, Event Engine and Executor with PowerOps enabled and
+  disabled.
+
+Assert exact section/option scope in rendered output. In particular, Event
+Engine gets etcd-backed `[coordination]` but never `[powerops]`, and disabled
+renders preserve their original sections. Assert that every rendered TLS etcd
+URL has exactly one `?`, uses `&ca_cert=`, and never contains `?ca_cert=`.
 
 Use these assertions for every timeout variable and for the absence of
 `backend_url = {{ redis_connection_string }}` in Mistral's PowerOps branch:
@@ -548,17 +566,26 @@ cmp ../../worktrees/mistral-powerops/etc/mistral/power_ops.yaml \
 
 - [ ] **Step 4: Populate actions and verify entry points inside containers**
 
-Start `powerops.yml` with guarded, run-once tasks delegated to the first API
-host. Execute these commands with `changed_when: false`:
+Start `powerops.yml` with guarded, run-once tasks. Verify the Mistral entry
+points separately in API, Engine and Executor; success in one image does not
+prove the other two patched images. Execute the checks with
+`changed_when: false`:
 
 ```yaml
 - name: Verify PowerOps Mistral action entry points
   ansible.builtin.command: >-
-    {{ kolla_container_engine }} exec mistral_api python -c
+    {{ kolla_container_engine }} exec {{ item.container }} python -c
     "import importlib.metadata as m; required={'powerops.host_power_status','powerops.planned_power_off','powerops.planned_reboot','powerops.power_on_for_inspection','powerops.return_to_service'}; found={e.name for e in m.entry_points(group='mistral.actions')}; assert required <= found, required - found"
   changed_when: false
+  loop:
+    - container: mistral_api
+      group: mistral-api
+    - container: mistral_engine
+      group: mistral-engine
+    - container: mistral_executor
+      group: mistral-executor
   run_once: true
-  delegate_to: "{{ groups['mistral-api'][0] }}"
+  delegate_to: "{{ groups[item.group][0] }}"
 
 - name: Populate Mistral action definitions
   ansible.builtin.command: >-
@@ -587,12 +614,59 @@ by `enable_powerops | bool`. This keeps container locality correct.
 
 - [ ] **Step 5: Obtain a protected Keystone token**
 
+Before API access, `stat` `kolla_admin_openrc_cacert` on `localhost` with
+`follow: true` and assert that a non-empty path exists, is a regular file and
+is readable. This controller-side path is distinct from `openstack_cacert`
+inside service containers. Use it as `ca_path` for every delegated
+Keystone/Mistral URI task; omit `ca_path` only when the controller value is
+empty.
+
+This is not a role-local precheck. In the implemented ordering it runs inside
+deploy/reconfigure after `meta: flush_handlers` and the Mistral action
+population command, but before Keystone authentication and workbook
+reconciliation. The operator guide must require an explicit read-only
+`test -f`/`test -r` on the controller before approving deploy/reconfigure;
+otherwise a bad CA path is detected only after containers may have restarted.
+
+```yaml
+- name: Check PowerOps controller CA certificate
+  ansible.builtin.stat:
+    path: "{{ kolla_admin_openrc_cacert }}"
+    get_checksum: false
+    follow: true
+  register: powerops_controller_ca
+  run_once: true
+  delegate_to: localhost
+  when:
+    - >-
+      powerops_reconcile_workbook | bool or
+      powerops_validate_registration | bool
+    - kolla_admin_openrc_cacert | length > 0
+
+- name: Validate PowerOps controller CA certificate
+  ansible.builtin.assert:
+    that:
+      - powerops_controller_ca.stat.exists | default(false)
+      - powerops_controller_ca.stat.isreg | default(false)
+      - powerops_controller_ca.stat.readable | default(false)
+  run_once: true
+  delegate_to: localhost
+  when:
+    - >-
+      powerops_reconcile_workbook | bool or
+      powerops_validate_registration | bool
+    - kolla_admin_openrc_cacert | length > 0
+```
+
 Use this project-scoped Keystone request and protect its result:
 
 ```yaml
 - name: Authenticate PowerOps workbook reconciliation
   ansible.builtin.uri:
-    url: "{{ openstack_mistral_auth.auth_url }}/auth/tokens"
+    url: >-
+      {{ openstack_mistral_auth.auth_url |
+         regex_replace('/v3/?$', '') |
+         regex_replace('/+$', '') }}/v3/auth/tokens
     method: POST
     body_format: json
     body:
@@ -609,11 +683,13 @@ Use this project-scoped Keystone request and protect its result:
           project:
             name: "{{ openstack_mistral_auth.project_name }}"
             domain:
-              name: "{{ openstack_mistral_auth.project_domain_name }}"
+              name: "{{ openstack_mistral_auth.domain_name }}"
     status_code: 201
     return_content: true
     validate_certs: true
-    ca_path: "{{ openstack_cacert if openstack_cacert else omit }}"
+    ca_path: >-
+      {{ kolla_admin_openrc_cacert
+         if kolla_admin_openrc_cacert else omit }}
   register: powerops_keystone_auth
   no_log: true
   run_once: true
@@ -626,8 +702,11 @@ Use this project-scoped Keystone request and protect its result:
   ansible.builtin.set_fact:
     powerops_keystone_token: >-
       {{ powerops_keystone_auth.x_subject_token }}
+    powerops_keystone_project_id: >-
+      {{ powerops_keystone_auth.json.token.project.id }}
   no_log: true
   run_once: true
+  delegate_to: localhost
   when: >-
     powerops_reconcile_workbook | bool or
     powerops_validate_registration | bool
@@ -651,23 +730,59 @@ Read the file on the control node with:
 
 ```yaml
 powerops_workbook_definition: >-
-  {{ lookup('ansible.builtin.file', role_path ~ '/files/power_ops.yaml') }}
+  {{ lookup('ansible.builtin.file', role_path ~ '/files/power_ops.yaml',
+            rstrip=False) }}
 ```
 
-Implement the read/create/update sequence exactly:
+List all exact-name/default-namespace candidates without a bounded page limit,
+then defensively repeat the exact name/namespace filter. Fail closed before
+POST/PUT if more than one row exists or the sole row's `project_id` differs
+from `powerops_keystone_project_id`:
 
 ```yaml
-- name: Read existing PowerOps workbook
+- name: List matching PowerOps workbooks
   ansible.builtin.uri:
-    url: "{{ mistral_internal_endpoint }}/workbooks/power_ops"
+    url: >-
+      {{ mistral_internal_endpoint }}/workbooks?name=power_ops&namespace=
     method: GET
     headers:
       X-Auth-Token: "{{ powerops_keystone_token }}"
-    status_code: [200, 404]
+    status_code: 200
     return_content: true
     validate_certs: true
-    ca_path: "{{ openstack_cacert if openstack_cacert else omit }}"
-  register: powerops_workbook_get
+    ca_path: >-
+      {{ kolla_admin_openrc_cacert
+         if kolla_admin_openrc_cacert else omit }}
+  register: powerops_workbook_list
+  until: powerops_workbook_list is success
+  retries: 12
+  delay: 5
+  no_log: true
+  run_once: true
+  delegate_to: localhost
+  when: powerops_reconcile_workbook | bool
+
+- name: Store matching PowerOps workbooks
+  ansible.builtin.set_fact:
+    powerops_matching_workbooks: >-
+      {{ powerops_workbook_list.json.workbooks | default([]) |
+         selectattr('name', 'equalto', 'power_ops') |
+         selectattr('namespace', 'equalto', '') | list }}
+  no_log: true
+  run_once: true
+  delegate_to: localhost
+  when: powerops_reconcile_workbook | bool
+
+- name: Validate PowerOps workbook ownership
+  ansible.builtin.assert:
+    that:
+      - powerops_matching_workbooks | length <= 1
+      - >-
+        powerops_matching_workbooks | length == 0 or
+        powerops_matching_workbooks[0].project_id ==
+        powerops_keystone_project_id
+    fail_msg: >-
+      Refusing to reconcile an ambiguous or foreign public power_ops workbook
   no_log: true
   run_once: true
   delegate_to: localhost
@@ -679,15 +794,17 @@ Implement the read/create/update sequence exactly:
     method: POST
     headers:
       X-Auth-Token: "{{ powerops_keystone_token }}"
-      Content-Type: application/json;charset=utf-8
+      Content-Type: text/plain
     body: "{{ powerops_workbook_definition }}"
     body_format: raw
     status_code: 201
     validate_certs: true
-    ca_path: "{{ openstack_cacert if openstack_cacert else omit }}"
+    ca_path: >-
+      {{ kolla_admin_openrc_cacert
+         if kolla_admin_openrc_cacert else omit }}
   when:
     - powerops_reconcile_workbook | bool
-    - powerops_workbook_get.status == 404
+    - powerops_matching_workbooks | length == 0
   no_log: true
   run_once: true
   delegate_to: localhost
@@ -698,56 +815,98 @@ Implement the read/create/update sequence exactly:
     method: PUT
     headers:
       X-Auth-Token: "{{ powerops_keystone_token }}"
-      Content-Type: application/json;charset=utf-8
+      Content-Type: text/plain
     body: "{{ powerops_workbook_definition }}"
     body_format: raw
     status_code: 200
     validate_certs: true
-    ca_path: "{{ openstack_cacert if openstack_cacert else omit }}"
+    ca_path: >-
+      {{ kolla_admin_openrc_cacert
+         if kolla_admin_openrc_cacert else omit }}
   when:
     - powerops_reconcile_workbook | bool
-    - powerops_workbook_get.status == 200
-    - powerops_workbook_get.json.definition != powerops_workbook_definition
+    - powerops_matching_workbooks | length == 1
+    - >-
+      powerops_matching_workbooks[0].project_id ==
+      powerops_keystone_project_id
+    - >-
+      powerops_matching_workbooks[0].definition |
+      default('') != powerops_workbook_definition or
+      powerops_matching_workbooks[0].scope | default('') != 'public'
   no_log: true
   run_once: true
   delegate_to: localhost
 ```
 
-When the definition is identical, neither mutation task runs and Ansible
-reports the reconciliation unchanged.
+Do not add automatic retries to POST or PUT. When the definition is identical
+and the existing scope is already public, neither mutation task runs and
+Ansible reports the reconciliation unchanged.
+
+The PUT is safe only with the companion Mistral commit/patch
+`0010-fix-scope-workbook-updates-to-request-project.patch`. Its
+`update_workbook()` performs an atomic, session-aware lookup/update scoped by
+`models.Workbook.project_id == security.get_project_id()`, exact name and
+normalized namespace. The preceding Kolla ownership assertion is necessary
+operator feedback but alone cannot close the TOCTOU window.
 
 - [ ] **Step 7: Verify action and workflow names through read-only API calls**
 
-Use these read-only catalogue requests:
+Use a direct read-only GET for every exact action. For workflows, the API does
+not provide the same direct exact read contract, so issue one unbounded
+name/default-namespace filtered list GET per expected workflow and assert one
+exact, token-project-owned row. Safe GETs retry 12 times with a five-second
+delay; mutation requests never retry blindly.
 
 ```yaml
-- name: Read populated Mistral actions
+- name: Read exact populated Mistral actions
   ansible.builtin.uri:
-    url: "{{ mistral_internal_endpoint }}/actions?limit=1000"
+    url: "{{ mistral_internal_endpoint }}/actions/{{ item }}"
     method: GET
     headers:
       X-Auth-Token: "{{ powerops_keystone_token }}"
     status_code: 200
     return_content: true
     validate_certs: true
-    ca_path: "{{ openstack_cacert if openstack_cacert else omit }}"
-  register: powerops_actions
+    ca_path: >-
+      {{ kolla_admin_openrc_cacert
+         if kolla_admin_openrc_cacert else omit }}
+  register: powerops_action_reads
+  until: powerops_action_reads is success
+  retries: 12
+  delay: 5
+  loop:
+    - powerops.host_power_status
+    - powerops.planned_power_off
+    - powerops.planned_reboot
+    - powerops.power_on_for_inspection
+    - powerops.return_to_service
   when: powerops_validate_registration | bool
   no_log: true
   run_once: true
   delegate_to: localhost
 
-- name: Read registered PowerOps workflows
+- name: Read exact registered PowerOps workflows
   ansible.builtin.uri:
-    url: "{{ mistral_internal_endpoint }}/workflows?limit=1000"
+    url: >-
+      {{ mistral_internal_endpoint }}/workflows?name={{ item }}&namespace=
     method: GET
     headers:
       X-Auth-Token: "{{ powerops_keystone_token }}"
     status_code: 200
     return_content: true
     validate_certs: true
-    ca_path: "{{ openstack_cacert if openstack_cacert else omit }}"
-  register: powerops_workflows
+    ca_path: >-
+      {{ kolla_admin_openrc_cacert
+         if kolla_admin_openrc_cacert else omit }}
+  register: powerops_workflow_reads
+  until: powerops_workflow_reads is success
+  retries: 12
+  delay: 5
+  loop:
+    - power_ops.host_power_status
+    - power_ops.planned_power_off
+    - power_ops.planned_reboot
+    - power_ops.power_on_and_return
   when: powerops_validate_registration | bool
   no_log: true
   run_once: true
@@ -757,25 +916,39 @@ Use these read-only catalogue requests:
 Then apply these assertions:
 
 ```yaml
-- name: Validate PowerOps action and workflow catalogue
+- name: Validate registered PowerOps actions
   ansible.builtin.assert:
     that:
-      - "'powerops.host_power_status' in (powerops_actions.json.actions | map(attribute='name') | list)"
-      - "'powerops.planned_power_off' in (powerops_actions.json.actions | map(attribute='name') | list)"
-      - "'powerops.planned_reboot' in (powerops_actions.json.actions | map(attribute='name') | list)"
-      - "'powerops.power_on_for_inspection' in (powerops_actions.json.actions | map(attribute='name') | list)"
-      - "'powerops.return_to_service' in (powerops_actions.json.actions | map(attribute='name') | list)"
-      - "'power_ops.host_power_status' in (powerops_workflows.json.workflows | map(attribute='name') | list)"
-      - "'power_ops.planned_power_off' in (powerops_workflows.json.workflows | map(attribute='name') | list)"
-      - "'power_ops.planned_reboot' in (powerops_workflows.json.workflows | map(attribute='name') | list)"
-      - "'power_ops.power_on_and_return' in (powerops_workflows.json.workflows | map(attribute='name') | list)"
+      - >-
+        (powerops_action_reads.results | default([]) |
+         map(attribute='json.name') | list | unique | sort) ==
+        ['powerops.host_power_status', 'powerops.planned_power_off',
+         'powerops.planned_reboot', 'powerops.power_on_for_inspection',
+         'powerops.return_to_service']
   no_log: true
   run_once: true
   when: powerops_validate_registration | bool
+
+- name: Validate each registered PowerOps workflow
+  ansible.builtin.assert:
+    that:
+      - item.json.workflows | default([]) | length == 1
+      - >-
+        (item.json.workflows | default([]) |
+         map(attribute='name') | list) == [item.item]
+      - >-
+        (item.json.workflows | default([]) |
+         map(attribute='project_id') | list) ==
+        [powerops_keystone_project_id]
+  loop: "{{ powerops_workflow_reads.results | default([]) }}"
+  no_log: true
+  run_once: true
+  delegate_to: localhost
+  when: powerops_validate_registration | bool
 ```
 
-The two GET tasks and this assertion remain `no_log: true` because their
-registered data or evaluation context carries the token.
+The GET loops and assertions remain `no_log: true` because their registered
+data or evaluation context carries the token.
 
 - [ ] **Step 8: Wire post-restart ordering**
 
@@ -917,10 +1090,16 @@ git add docs/powerops/POWEROPS-ARCHITECTURE.md \
   kolla_ansible/tests/unit/test_powerops_documentation.py
 git commit -m "docs: add Russian PowerOps operations guide"
 POWEROPS_ARTIFACT_ROOT=/Users/dmitry/Desktop/ironic:mistral:masakari/powerops-patches
-git format-patch --output-directory \
+git format-patch --full-index --no-binary --output-directory \
   "$POWEROPS_ARTIFACT_ROOT/patches/kolla-ansible" \
   powerops-kolla-baseline..HEAD
 ```
+
+The local-only `ansible.log binary` attribute plus `--full-index --no-binary`
+must produce a hash-only deletion record. Before publishing, assert that the
+Task 1 patch contains `Binary files a/ansible.log and /dev/null differ`, does
+not contain `GIT binary patch`, and contains no log payload or credential
+material.
 
 - [ ] **Step 7: Apply the exported series to a clean archive copy**
 
@@ -931,10 +1110,13 @@ rsync -a --exclude .git \
   /tmp/kolla-powerops-apply/
 git -C /tmp/kolla-powerops-apply init
 git -C /tmp/kolla-powerops-apply add .
+git -C /tmp/kolla-powerops-apply add -f ansible.log
 git -C /tmp/kolla-powerops-apply commit -m "baseline"
 git -C /tmp/kolla-powerops-apply am \
   "$POWEROPS_ARTIFACT_ROOT"/patches/kolla-ansible/*.patch
 git -C /tmp/kolla-powerops-apply diff --check HEAD~5..HEAD
 ```
 
-Expected: all five patches apply in order without fuzz or rejects.
+Expected: the fresh baseline tree equals `powerops-kolla-baseline`, all five
+patches apply in order without fuzz or rejects, `ansible.log` is absent, and
+the hygiene plus enrollment tests pass in the applied tree.

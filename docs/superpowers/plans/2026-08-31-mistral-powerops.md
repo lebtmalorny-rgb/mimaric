@@ -1461,20 +1461,95 @@ rg -n "evacuat" mistral/actions/powerops etc/mistral/power_ops.yaml
 
 Expected: both tox environments pass and the final search has no matches.
 
-- [ ] **Step 7: Commit and export the patch series**
+- [ ] **Step 7: Commit the workbook contract**
 
 ```bash
 git add setup.cfg etc/mistral/power_ops.yaml \
   releasenotes/notes/powerops-planned-host-actions.yaml \
   mistral/tests/unit/actions/powerops
 git commit -m "feat: register the PowerOps workbook API"
+```
+
+Export is deferred until the final owner-scope security task below. The final
+series also contains the reviewed compatibility commit
+`test: generalize action plugin coverage` as patch 0009.
+
+---
+
+### Task 6: Scope workbook updates atomically to the request project
+
+**Files:**
+- Modify: `mistral/db/v2/sqlalchemy/api.py`
+- Test: `mistral/tests/unit/db/v2/test_sqlalchemy_db_api.py`
+
+**Interfaces:**
+- Consumes: request project from `security.get_project_id()`.
+- Preserves: existing create/read/list behavior and public workbook visibility.
+- Produces: owner-scoped PUT lookup/update by exact project, name and normalized
+  namespace inside the same `@session_aware` transaction.
+- Required by: Kolla-Ansible PowerOps reconcile patch 0004.
+
+- [ ] **Step 1: Write owner and collision regression tests**
+
+Create three cases before production changes:
+
+1. own and foreign public workbooks with the same name/namespace exist; PUT
+   updates only the request project's row;
+2. only a foreign public workbook matches; PUT raises the existing
+   `DBEntityNotFoundError` and leaves it unchanged;
+3. empty/default namespace is matched exactly and never aliases a non-empty
+   namespace.
+
+- [ ] **Step 2: Run and verify RED**
+
+Run only those three DB tests and confirm the old name-only
+`get_workbook(name, namespace=namespace)` selects a visible foreign row or the
+wrong project.
+
+- [ ] **Step 3: Implement one session-aware owned lookup**
+
+Inside `update_workbook()` normalize `None` namespace to `''` and select with
+the supplied transaction session:
+
+```python
+wb = b.model_query(models.Workbook, session=session).filter(
+    sa.and_(
+        models.Workbook.project_id == security.get_project_id(),
+        models.Workbook.name == name,
+        models.Workbook.namespace == namespace
+    )
+).first()
+```
+
+Raise the existing `DBEntityNotFoundError` when no owned exact row exists,
+then update that selected object in the same decorated function. Do not split
+the ownership check and write into separate transactions: that would retain a
+TOCTOU window.
+
+- [ ] **Step 4: Verify the security boundary**
+
+Run the 3 owner-scope regressions, the 60-test workbook DB/service/API
+boundary, the 106-test PowerOps action suite and full flake8. Record the final
+unrestricted suite accurately: the sandbox run had 1631 tests, 1619 passed, 8
+skipped and four local-socket failures independently reproduced on parent
+`8a2db56`; do not report it as an all-green final full suite.
+
+- [ ] **Step 5: Commit and export all ten patches**
+
+```bash
+git add mistral/db/v2/sqlalchemy/api.py \
+  mistral/tests/unit/db/v2/test_sqlalchemy_db_api.py
+git commit -m "fix: scope workbook updates to request project"
 POWEROPS_ARTIFACT_ROOT=/Users/dmitry/Desktop/ironic:mistral:masakari/powerops-patches
-git format-patch --output-directory \
+git format-patch --full-index --no-binary --output-directory \
   "$POWEROPS_ARTIFACT_ROOT/patches/mistral" stable/2025.1..HEAD
-git worktree add /tmp/mistral-powerops-apply stable/2025.1
+git worktree add --detach /tmp/mistral-powerops-apply stable/2025.1
 git -C /tmp/mistral-powerops-apply am \
   "$POWEROPS_ARTIFACT_ROOT"/patches/mistral/*.patch
 git -C /tmp/mistral-powerops-apply diff --check stable/2025.1...HEAD
 ```
 
-Expected: every patch applies in order without fuzz or rejects.
+Expected final security commit:
+`665cde880127f56c8335e6f8b210362f87ae19d9`; final patch:
+`0010-fix-scope-workbook-updates-to-request-project.patch`. All ten patches
+apply in order without fuzz or rejects and reproduce the source tree exactly.

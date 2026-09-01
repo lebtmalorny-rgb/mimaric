@@ -71,8 +71,34 @@ The deploy/reconfigure path is idempotent:
 3. start or reconfigure service containers using patched images;
 4. verify the expected Python entry points inside the relevant containers;
 5. run `mistral-db-manage populate` to reconcile custom actions;
-6. create or update the `power_ops` workbook through the Mistral API;
-7. verify all expected action and workflow names.
+6. on the Ansible controller, follow and `stat` a non-empty
+   `kolla_admin_openrc_cacert`, requiring a readable regular file;
+7. obtain the token project ID and list exact `power_ops`/empty-namespace
+   workbook matches without a bounded page limit;
+8. reject ambiguous matches and any public workbook owned by another project,
+   then create an absent row or update one changed owned row;
+9. verify every action by direct exact GET and every workflow by an exact
+   name/default-namespace filtered GET, including token-project ownership.
+
+All delegated controller API calls use `kolla_admin_openrc_cacert`, after a
+local followed-link `stat` proves that a non-empty path is a readable regular
+file. This is deliberately separate from `openstack_cacert`, whose path is
+consumed inside service containers. The role-local prechecks do not perform
+this controller CA check: the built-in `stat` runs inside deploy/reconfigure
+after handler flush and Mistral action population. The operator installation
+procedure therefore requires an explicit read-only controller `test -f` and
+`test -r` before approving that mutation gate.
+
+Workbook reconciliation has two complementary ownership defenses. Kolla
+filters `/workbooks?name=power_ops&namespace=` results and fails closed with
+`Refusing to reconcile an ambiguous or foreign public power_ops workbook`
+before POST/PUT. The companion Mistral patch
+`0010-fix-scope-workbook-updates-to-request-project.patch` makes
+`update_workbook()` select within the same session-aware transaction by
+`models.Workbook.project_id == security.get_project_id()`, exact name and
+normalized namespace. Kolla's pre-mutation owner assertion gives clear
+operator diagnostics; Mistral's atomic owner lookup closes the TOCTOU window
+and prevents a public same-name row from another project being overwritten.
 
 No custom Horizon code is added. When the vanilla Mistral dashboard is
 enabled, operators can discover and start the registered workflows there; the
@@ -328,8 +354,12 @@ maintenance.
 
 Contract and Ansible tests prove baseline hygiene, secret-safe logging,
 configuration rendering, correct image placement, entry-point verification,
-action population, idempotent workbook create/update and absence of power
-actions during deploy/reconfigure.
+action population, fail-closed workbook collision/owner handling, idempotent
+owned workbook create/update and absence of power actions during
+deploy/reconfigure. Controller API TLS is checked through
+`kolla_admin_openrc_cacert`; action catalogue checks use `/actions/{{ item }}`
+and workflow checks use `/workflows?name={{ item }}&namespace=` with exact
+token-project assertions.
 
 ### Cross-Repository
 
