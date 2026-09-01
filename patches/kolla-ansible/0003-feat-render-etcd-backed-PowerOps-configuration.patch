@@ -1,0 +1,576 @@
+From 7bca977b81c0fb87b6e138e74070e88a1ca80421 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Tue, 1 Sep 2026 09:29:38 +0300
+Subject: [PATCH 3/5] feat: render etcd-backed PowerOps configuration
+
+---
+ .../roles/masakari/templates/masakari.conf.j2 |  26 +-
+ .../roles/mistral/templates/mistral.conf.j2   |  21 +-
+ .../tests/unit/test_powerops_templates.py     | 481 ++++++++++++++++++
+ 3 files changed, 524 insertions(+), 4 deletions(-)
+ create mode 100644 kolla_ansible/tests/unit/test_powerops_templates.py
+
+diff --git a/ansible/roles/masakari/templates/masakari.conf.j2 b/ansible/roles/masakari/templates/masakari.conf.j2
+index 3b7c1ee2550711fe0bc6c18a0dcccadaf8898b56..e00364e240f53150f60d5dd153bce4a6af9adc2b 100644
+--- a/ansible/roles/masakari/templates/masakari.conf.j2
++++ b/ansible/roles/masakari/templates/masakari.conf.j2
+@@ -85,14 +85,36 @@ policy_file = {{ masakari_policy_file }}
+ connection = mysql+pymysql://{{ masakari_database_user }}:{{ masakari_database_password }}@{{ masakari_database_address }}/{{ masakari_database_name }}{% if mariadb_enable_mtls_backend | bool %}?ssl_ca={{ database_cacert }}&ssl_cert=/etc/masakari/certs/masakari-cert.pem&ssl_key=/etc/masakari/certs/masakari-key.pem&ssl_check_hostname=true{% endif %}
+ 
+ 
+-{% if service_name == 'masakari-api' %}
++{% if enable_powerops | bool %}
++{% if service_name in ['masakari-api', 'masakari-engine'] %}
++[coordination]
++backend_url = {{ powerops_coordination_url }}
++{% endif %}
++
++{% if service_name == 'masakari-engine' %}
++[powerops]
++enabled = true
++host_lock_timeout = {{ powerops_host_lock_timeout }}
++evacuation_lock_timeout = {{ powerops_evacuation_lock_timeout }}
++evacuation_interval = {{ powerops_evacuation_interval }}
++power_timeout = {{ powerops_power_timeout }}
++poll_interval = {{ powerops_poll_interval }}
++stable_off_observations = {{ powerops_stable_observations }}
++region_name = {{ openstack_region_name }}
++interface = internal
++
++[taskflow_driver_recovery_flows]
++host_auto_failure_recovery_tasks = pre:['disable_compute_service_task', 'ironic_fence'],main:['prepare_HA_enabled_instances_task'],post:['evacuate_instances_task']
++host_rh_failure_recovery_tasks = pre:['disable_compute_service_task', 'ironic_fence'],main:['prepare_HA_enabled_instances_task', 'evacuate_instances_task'],post:[]
++{% endif %}
++{% elif service_name == 'masakari-api' %}
+ [coordination]
+ {% if masakari_coordination_backend == 'redis' %}
+ backend_url = {{ redis_connection_string }}
+ {% elif masakari_coordination_backend == 'etcd' %}
+ # NOTE(jan.gutter): etcd v3.4 removed the default `v3alpha` api_version. Until
+ # tooz defaults to a newer version, we should explicitly specify `v3`
+-backend_url = etcd3+{{ internal_protocol }}://{{ kolla_internal_fqdn }}:{{ etcd_client_port }}?api_version=v3{% if openstack_cacert %}?ca_cert={{ openstack_cacert }}{% endif %}
++backend_url = etcd3+{{ internal_protocol }}://{{ kolla_internal_fqdn }}:{{ etcd_client_port }}?api_version=v3{% if openstack_cacert %}&ca_cert={{ openstack_cacert }}{% endif %}
+ {% endif %}
+ {% endif %}
+ 
+diff --git a/ansible/roles/mistral/templates/mistral.conf.j2 b/ansible/roles/mistral/templates/mistral.conf.j2
+index 3ce3ef8d3056bdde633a5c5c09f8f1032d07beaf..8073748a6fe36f428bc8d842db66945a5d680f0b 100644
+--- a/ansible/roles/mistral/templates/mistral.conf.j2
++++ b/ansible/roles/mistral/templates/mistral.conf.j2
+@@ -106,7 +106,24 @@ connection_string = {{ osprofiler_backend_connection_string }}
+ {% endif %}
+ 
+ [coordination]
+-backend_url = {{ redis_connection_string }}
+-
++backend_url = {% if enable_powerops | bool %}{{ powerops_coordination_url }}{% else %}{{ redis_connection_string }}{% endif %}
++{% if enable_powerops | bool and service_name in ['mistral-api', 'mistral-engine', 'mistral-executor'] %}
++[powerops]
++enabled = true
++coordination_url = {{ powerops_coordination_url }}
++host_lock_timeout = {{ powerops_host_lock_timeout }}
++power_timeout = {{ powerops_power_timeout }}
++poll_interval = {{ powerops_poll_interval }}
++stable_observations = {{ powerops_stable_observations }}
++graceful_shutdown_timeout = {{ powerops_graceful_shutdown_timeout }}
++vm_action_timeout = {{ powerops_vm_action_timeout }}
++service_timeout = {{ powerops_service_timeout }}
++instance_interval = {{ powerops_instance_interval }}
++region_name = {{ openstack_region_name }}
++interface = internal
++nova_disable_reason = PowerOps planned operation
++allowed_project_names = {{ powerops_allowed_project_names | join(',') }}
++allowed_user_names = {{ powerops_allowed_user_names | join(',') }}
++{% endif %}
+ [oslo_concurrency]
+ lock_path = /var/lib/mistral/tmp
+diff --git a/kolla_ansible/tests/unit/test_powerops_templates.py b/kolla_ansible/tests/unit/test_powerops_templates.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..a3d190cffc4eb97e18e8a2f6a26860c784090583
+--- /dev/null
++++ b/kolla_ansible/tests/unit/test_powerops_templates.py
+@@ -0,0 +1,481 @@
++# Licensed under the Apache License, Version 2.0 (the "License"); you may
++# not use this file except in compliance with the License. You may obtain
++# a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++import configparser
++from pathlib import Path
++import unittest
++
++import jinja2
++
++
++ROOT = Path(__file__).resolve().parents[3]
++MASAKARI_TEMPLATE = "ansible/roles/masakari/templates/masakari.conf.j2"
++MISTRAL_TEMPLATE = "ansible/roles/mistral/templates/mistral.conf.j2"
++
++PLAIN_ETCD_URL = (
++    "etcd3+http://controller.internal:2379?api_version=v3"
++)
++TLS_ETCD_URL = (
++    "etcd3+https://controller.internal:2379?api_version=v3"
++    "&ca_cert=/etc/kolla/certificates/ca.pem"
++)
++REDIS_URL = "redis://:secret@redis.internal:6379"
++
++POWEROPS_VALUES = {
++    "powerops_host_lock_timeout": 31,
++    "powerops_evacuation_lock_timeout": 3601,
++    "powerops_evacuation_interval": 6,
++    "powerops_power_timeout": 181,
++    "powerops_poll_interval": 7,
++    "powerops_stable_observations": 4,
++    "powerops_graceful_shutdown_timeout": 301,
++    "powerops_vm_action_timeout": 601,
++    "powerops_service_timeout": 302,
++    "powerops_instance_interval": 8,
++}
++
++MASAKARI_BASE_SECTIONS = {
++    "DEFAULT",
++    "database",
++    "keystone_authtoken",
++    "oslo_messaging_notifications",
++    "oslo_messaging_rabbit",
++    "oslo_middleware",
++    "taskflow",
++    "oslo_concurrency",
++}
++MISTRAL_BASE_SECTIONS = {
++    "DEFAULT",
++    "database",
++    "keystone_authtoken",
++    "mistral",
++    "openstack_actions",
++    "oslo_messaging_notifications",
++    "oslo_messaging_rabbit",
++    "coordination",
++    "oslo_concurrency",
++}
++
++
++def _ansible_bool(value):
++    if isinstance(value, str):
++        return value.lower() in {"1", "on", "true", "yes"}
++    return bool(value)
++
++
++def _kolla_address(_network, host):
++    return host
++
++
++def _put_address_in_context(value, _context):
++    return value
++
++
++def _environment():
++    environment = jinja2.Environment(  # nosec: local templates and fixtures
++        loader=jinja2.FileSystemLoader(str(ROOT)),
++        undefined=jinja2.StrictUndefined,
++        keep_trailing_newline=True,
++    )
++    environment.filters.update({
++        "bool": _ansible_bool,
++        "kolla_address": _kolla_address,
++        "put_address_in_context": _put_address_in_context,
++    })
++    return environment
++
++
++def _common_variables():
++    return {
++        "api_interface_address": "10.0.0.10",
++        "database_cacert": "/etc/ssl/database-ca.pem",
++        "database_connection_recycle_time": 10,
++        "database_max_pool_size": 20,
++        "default_project_domain_id": "default",
++        "default_project_domain_name": "Default",
++        "default_user_domain_id": "default",
++        "default_user_domain_name": "Default",
++        "enable_ceilometer": False,
++        "enable_memcached": True,
++        "enable_osprofiler": False,
++        "global_identity_logging_format": "%(user)s %(project)s",
++        "groups": {"memcached": ["memcached.internal"]},
++        "internal_protocol": "http",
++        "keystone_internal_url": "http://keystone.internal:5000",
++        "keystone_public_url": "https://keystone.example:5000",
++        "kolla_enable_mtls_backend": False,
++        "kolla_internal_fqdn": "controller.internal",
++        "mariadb_enable_mtls_backend": False,
++        "memcache_secret_key": "memcache-secret",
++        "memcache_security_strategy": "ENCRYPT",
++        "memcached_port": 11211,
++        "notify_transport_url": "rabbit://notifications",
++        "om_enable_queue_manager": False,
++        "om_enable_rabbitmq_stream_fanout": False,
++        "om_enable_rabbitmq_tls": False,
++        "om_rabbitmq_cacert": "/etc/ssl/rabbit-ca.pem",
++        "om_rabbitmq_qos_prefetch_count": 10,
++        "openstack_cacert": "",
++        "openstack_region_name": "RegionTwo",
++        "osprofiler_backend_connection_string": "redis://profiler",
++        "osprofiler_secret": "profiler-secret",
++        "redis_connection_string": REDIS_URL,
++        "rpc_transport_url": "rabbit://rpc",
++        **POWEROPS_VALUES,
++        "powerops_allowed_project_names": ["ops-project", "ha-project"],
++        "powerops_allowed_user_names": ["ops-user", "ha-user"],
++    }
++
++
++def _masakari_variables(service_name, enabled, backend, ca_cert):
++    variables = _common_variables()
++    variables.update({
++        "service_name": service_name,
++        "enable_powerops": enabled,
++        "masakari_api_port": 15868,
++        "masakari_coordination_backend": backend,
++        "masakari_database_address": "mariadb.internal:3306",
++        "masakari_database_name": "masakari",
++        "masakari_database_password": "database-secret",
++        "masakari_database_user": "masakari",
++        "masakari_keystone_password": "keystone-secret",
++        "masakari_keystone_user": "masakari",
++        "masakari_logging_debug": False,
++        "nova_keystone_password": "nova-secret",
++        "nova_keystone_user": "nova",
++        "internal_protocol": "https" if ca_cert else "http",
++        "openstack_cacert": ca_cert,
++        "powerops_coordination_url": (
++            TLS_ETCD_URL if ca_cert else PLAIN_ETCD_URL
++        ),
++        "etcd_client_port": 2379,
++    })
++    return variables
++
++
++def _mistral_variables(service_name, enabled, ca_cert):
++    variables = _common_variables()
++    variables.update({
++        "service_name": service_name,
++        "enable_powerops": enabled,
++        "mistral_api_port": 8989,
++        "mistral_api_workers": 4,
++        "mistral_database_address": "mariadb.internal:3306",
++        "mistral_database_name": "mistral",
++        "mistral_database_password": "database-secret",
++        "mistral_database_user": "mistral",
++        "mistral_enabled_notification_topics": [],
++        "mistral_internal_base_endpoint": "http://mistral.internal:8989",
++        "mistral_keystone_password": "keystone-secret",
++        "mistral_keystone_user": "mistral",
++        "mistral_logging_debug": False,
++        "openstack_cacert": ca_cert,
++        "powerops_coordination_url": (
++            TLS_ETCD_URL if ca_cert else PLAIN_ETCD_URL
++        ),
++    })
++    return variables
++
++
++def _render(relative_path, variables):
++    return _environment().get_template(str(relative_path)).render(**variables)
++
++
++def _parse(rendered):
++    parser = configparser.ConfigParser(
++        default_section="__configparser_defaults__",
++        interpolation=None,
++        strict=True,
++    )
++    parser.read_string(rendered)
++    return parser
++
++
++class MasakariPowerOpsTemplateTest(unittest.TestCase):
++
++    def _render(self, service_name, enabled, backend, ca_cert):
++        variables = _masakari_variables(
++            service_name,
++            enabled,
++            backend,
++            ca_cert,
++        )
++        rendered = _render(
++            MASAKARI_TEMPLATE,
++            variables,
++        )
++        return rendered, _parse(rendered)
++
++    def test_disabled_matrix_preserves_original_sections_and_values(self):
++        for service_name in ("masakari-api", "masakari-engine"):
++            for backend in ("redis", "etcd"):
++                for ca_cert in ("", "/etc/kolla/certificates/ca.pem"):
++                    with self.subTest(
++                            service=service_name,
++                            backend=backend,
++                            ca=bool(ca_cert)):
++                        rendered, config = self._render(
++                            service_name,
++                            False,
++                            backend,
++                            ca_cert,
++                        )
++                        expected_sections = set(MASAKARI_BASE_SECTIONS)
++                        if service_name == "masakari-api":
++                            expected_sections.add("coordination")
++                        self.assertEqual(
++                            expected_sections,
++                            set(config.sections()),
++                        )
++                        self.assertNotIn("[powerops]", rendered)
++                        self.assertNotIn(
++                            "[taskflow_driver_recovery_flows]",
++                            rendered,
++                        )
++                        if service_name == "masakari-api":
++                            expected_url = REDIS_URL
++                            if backend == "etcd":
++                                expected_url = (
++                                    TLS_ETCD_URL if ca_cert
++                                    else PLAIN_ETCD_URL
++                                )
++                            self.assertEqual(
++                                expected_url,
++                                config["coordination"]["backend_url"],
++                            )
++
++    def test_enabled_matrix_uses_etcd_and_limits_powerops_to_engine(self):
++        expected_powerops = {
++            "enabled": "true",
++            "host_lock_timeout": "31",
++            "evacuation_lock_timeout": "3601",
++            "evacuation_interval": "6",
++            "power_timeout": "181",
++            "poll_interval": "7",
++            "stable_off_observations": "4",
++            "region_name": "RegionTwo",
++            "interface": "internal",
++        }
++        for service_name in ("masakari-api", "masakari-engine"):
++            for backend in ("redis", "etcd"):
++                for ca_cert in ("", "/etc/kolla/certificates/ca.pem"):
++                    with self.subTest(
++                            service=service_name,
++                            backend=backend,
++                            ca=bool(ca_cert)):
++                        rendered, config = self._render(
++                            service_name,
++                            True,
++                            backend,
++                            ca_cert,
++                        )
++                        expected_url = (
++                            TLS_ETCD_URL if ca_cert else PLAIN_ETCD_URL
++                        )
++                        self.assertIn("coordination", config)
++                        self.assertEqual(
++                            expected_url,
++                            config["coordination"]["backend_url"],
++                        )
++                        if service_name == "masakari-engine":
++                            self.assertEqual(
++                                expected_powerops,
++                                dict(config["powerops"]),
++                            )
++                            self.assertIn(
++                                "taskflow_driver_recovery_flows",
++                                config,
++                            )
++                        else:
++                            self.assertNotIn("[powerops]", rendered)
++                            self.assertNotIn(
++                                "[taskflow_driver_recovery_flows]",
++                                rendered,
++                            )
++
++    def test_engine_flow_fences_before_preparation_and_evacuation(self):
++        _rendered, config = self._render(
++            "masakari-engine",
++            True,
++            "redis",
++            "",
++        )
++
++        self.assertIn("taskflow_driver_recovery_flows", config)
++        self.assertEqual(
++            "pre:['disable_compute_service_task', 'ironic_fence'],"
++            "main:['prepare_HA_enabled_instances_task'],"
++            "post:['evacuate_instances_task']",
++            config["taskflow_driver_recovery_flows"][
++                "host_auto_failure_recovery_tasks"
++            ],
++        )
++        self.assertEqual(
++            "pre:['disable_compute_service_task', 'ironic_fence'],"
++            "main:['prepare_HA_enabled_instances_task', "
++            "'evacuate_instances_task'],post:[]",
++            config["taskflow_driver_recovery_flows"][
++                "host_rh_failure_recovery_tasks"
++            ],
++        )
++
++    def test_all_etcd_urls_have_one_query_separator(self):
++        for enabled in (False, True):
++            for service_name in ("masakari-api", "masakari-engine"):
++                for ca_cert in ("", "/etc/kolla/certificates/ca.pem"):
++                    with self.subTest(
++                            enabled=enabled,
++                            service=service_name,
++                            ca=bool(ca_cert)):
++                        rendered, config = self._render(
++                            service_name,
++                            enabled,
++                            "etcd",
++                            ca_cert,
++                        )
++                        if "coordination" not in config:
++                            continue
++                        url = config["coordination"]["backend_url"]
++                        self.assertEqual(1, url.count("?"))
++                        self.assertNotIn("?ca_cert=", url)
++                        self.assertNotIn("?ca_cert=", rendered)
++
++
++class MistralPowerOpsTemplateTest(unittest.TestCase):
++
++    def _render(self, service_name, enabled, ca_cert):
++        variables = _mistral_variables(service_name, enabled, ca_cert)
++        rendered = _render(
++            MISTRAL_TEMPLATE,
++            variables,
++        )
++        return rendered, _parse(rendered)
++
++    def test_disabled_matrix_preserves_redis_sections_and_values(self):
++        service_sections = {
++            "mistral-api": "api",
++            "mistral-engine": "engine",
++            "mistral-event-engine": "event_engine",
++            "mistral-executor": "executor",
++        }
++        for service_name, service_section in service_sections.items():
++            for ca_cert in ("", "/etc/kolla/certificates/ca.pem"):
++                with self.subTest(
++                        service=service_name,
++                        ca=bool(ca_cert)):
++                    rendered, config = self._render(
++                        service_name,
++                        False,
++                        ca_cert,
++                    )
++                    self.assertEqual(
++                        MISTRAL_BASE_SECTIONS | {service_section},
++                        set(config.sections()),
++                    )
++                    self.assertEqual(
++                        REDIS_URL,
++                        config["coordination"]["backend_url"],
++                    )
++                    self.assertNotIn("[powerops]", rendered)
++
++    def test_disabled_coordination_keeps_original_local_whitespace(self):
++        marker = "rabbit_transient_quorum_queue = true"
++        expected_tail = "\n".join((
++            marker,
++            "",
++            "",
++            "",
++            "",
++            "",
++            "[coordination]",
++            "backend_url = " + REDIS_URL,
++            "",
++            "[oslo_concurrency]",
++            "lock_path = /var/lib/mistral/tmp",
++            "",
++        ))
++
++        for service_name in (
++                "mistral-api",
++                "mistral-engine",
++                "mistral-event-engine",
++                "mistral-executor"):
++            with self.subTest(service=service_name):
++                rendered, _config = self._render(service_name, False, "")
++                self.assertEqual(
++                    expected_tail,
++                    rendered[rendered.index(marker):],
++                )
++
++    def test_enabled_matrix_uses_etcd_for_every_service(self):
++        services = (
++            "mistral-api",
++            "mistral-engine",
++            "mistral-event-engine",
++            "mistral-executor",
++        )
++        for service_name in services:
++            for ca_cert in ("", "/etc/kolla/certificates/ca.pem"):
++                with self.subTest(
++                        service=service_name,
++                        ca=bool(ca_cert)):
++                    rendered, config = self._render(
++                        service_name,
++                        True,
++                        ca_cert,
++                    )
++                    expected_url = (
++                        TLS_ETCD_URL if ca_cert else PLAIN_ETCD_URL
++                    )
++                    actual_url = config["coordination"]["backend_url"]
++                    self.assertEqual(expected_url, actual_url)
++                    self.assertEqual(1, actual_url.count("?"))
++                    self.assertNotIn("?ca_cert=", actual_url)
++                    self.assertNotIn(REDIS_URL, rendered)
++
++    def test_powerops_options_are_limited_to_patched_services(self):
++        expected_powerops = {
++            "enabled": "true",
++            "coordination_url": PLAIN_ETCD_URL,
++            "host_lock_timeout": "31",
++            "power_timeout": "181",
++            "poll_interval": "7",
++            "stable_observations": "4",
++            "graceful_shutdown_timeout": "301",
++            "vm_action_timeout": "601",
++            "service_timeout": "302",
++            "instance_interval": "8",
++            "region_name": "RegionTwo",
++            "interface": "internal",
++            "nova_disable_reason": "PowerOps planned operation",
++            "allowed_project_names": "ops-project,ha-project",
++            "allowed_user_names": "ops-user,ha-user",
++        }
++        for service_name in (
++                "mistral-api",
++                "mistral-engine",
++                "mistral-event-engine",
++                "mistral-executor"):
++            with self.subTest(service=service_name):
++                rendered, config = self._render(service_name, True, "")
++                if service_name == "mistral-event-engine":
++                    self.assertNotIn("[powerops]", rendered)
++                else:
++                    self.assertIn("powerops", config)
++                    self.assertEqual(
++                        expected_powerops,
++                        dict(config["powerops"]),
++                    )
++
++
++if __name__ == "__main__":
++    unittest.main()
+-- 
+2.49.0
+

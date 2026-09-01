@@ -1,7 +1,7 @@
 From 3323fcdc261b1b68b59e6eb5ba5cde06629b0815 Mon Sep 17 00:00:00 2001
 From: Lebt <lebtmalorny@gmail.com>
 Date: Tue, 1 Sep 2026 05:09:49 +0300
-Subject: [PATCH 6/9] fix: harden planned action boundaries
+Subject: [PATCH 06/10] fix: harden planned action boundaries
 
 ---
  mistral/actions/powerops/base.py              | 104 ++++--
@@ -11,7 +11,7 @@ Subject: [PATCH 6/9] fix: harden planned action boundaries
  4 files changed, 398 insertions(+), 49 deletions(-)
 
 diff --git a/mistral/actions/powerops/base.py b/mistral/actions/powerops/base.py
-index ec6a15f..8ba1dc3 100644
+index ec6a15fd86a2c2aedf4f3c6d9a8394b6af8fe67f..8ba1dc3d0945f9ef9ae608502bb212f9b19909b9 100644
 --- a/mistral/actions/powerops/base.py
 +++ b/mistral/actions/powerops/base.py
 @@ -40,50 +40,88 @@ class PowerOpsAction(actions.Action):
@@ -137,7 +137,7 @@ index ec6a15f..8ba1dc3 100644
      def _fail_safe(self, cloud):
          errors = []
 diff --git a/mistral/actions/powerops/clients.py b/mistral/actions/powerops/clients.py
-index 7db0478..d3d9d27 100644
+index 7db04781be578743f374864de73163502b3254c5..d3d9d276715c5acce795f19318dad5724b414929 100644
 --- a/mistral/actions/powerops/clients.py
 +++ b/mistral/actions/powerops/clients.py
 @@ -137,6 +137,15 @@ def _noop_health_check():
@@ -171,7 +171,7 @@ index 7db0478..d3d9d27 100644
      def _deadline(self, timeout):
          return self.monotonic() + timeout
 diff --git a/mistral/actions/powerops/planned.py b/mistral/actions/powerops/planned.py
-index b4f992f..919a9fc 100644
+index b4f992f9b14bcf35925e11bee9480167810f840e..919a9fc1f4f5f4d9b696a5ed4476517d94874c09 100644
 --- a/mistral/actions/powerops/planned.py
 +++ b/mistral/actions/powerops/planned.py
 @@ -18,12 +18,30 @@ from mistral.actions.powerops import base
@@ -236,7 +236,7 @@ index b4f992f..919a9fc 100644
              return result
  
 diff --git a/mistral/tests/unit/actions/powerops/test_planned.py b/mistral/tests/unit/actions/powerops/test_planned.py
-index 184a38b..98b8d22 100644
+index 184a38b68932755168d0830a5d9958c461c8bf89..98b8d22093978ba1c428490448b2da82bd3780bf 100644
 --- a/mistral/tests/unit/actions/powerops/test_planned.py
 +++ b/mistral/tests/unit/actions/powerops/test_planned.py
 @@ -12,6 +12,7 @@

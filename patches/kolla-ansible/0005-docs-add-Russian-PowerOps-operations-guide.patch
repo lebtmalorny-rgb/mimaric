@@ -1,0 +1,664 @@
+From 9bc9c63d8c1c42f575c0a47198884c75180d595a Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Tue, 1 Sep 2026 10:59:14 +0300
+Subject: [PATCH 5/5] docs: add Russian PowerOps operations guide
+
+---
+ docs/powerops/POWEROPS-ARCHITECTURE.md        | 503 ++++++++++++++++++
+ .../tests/unit/test_powerops_documentation.py | 134 +++++
+ 2 files changed, 637 insertions(+)
+ create mode 100644 docs/powerops/POWEROPS-ARCHITECTURE.md
+ create mode 100644 kolla_ansible/tests/unit/test_powerops_documentation.py
+
+diff --git a/docs/powerops/POWEROPS-ARCHITECTURE.md b/docs/powerops/POWEROPS-ARCHITECTURE.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..cb72c25839a2b8c4a7f7ce579d00f6bbc7207e29
+--- /dev/null
++++ b/docs/powerops/POWEROPS-ARCHITECTURE.md
+@@ -0,0 +1,503 @@
++# PowerOps: управление питанием и fencing вычислительных узлов
++
++## Краткий вывод
++
++PowerOps разделяет плановые и аварийные операции. Плановое выключение,
++контролируемая перезагрузка и возврат хоста выполняются workflow Mistral.
++Аварийный recovery выполняется Masakari напрямую через Ironic и не зависит от
++доступности Mistral. Ironic обращается к Redfish/BMC и является единственной
++точкой выполнения физической команды питания.
++
++Во всех изменяющих состояние сценариях используется распределённая
++координация tooz через etcd. Общая блокировка хоста исключает параллельную
++плановую операцию и аварийный recovery одного узла. При аварии evacuation
++начинается только после доказанного устойчивого состояния `power off`, а ВМ
++обрабатываются по одной. При плановом возврате остановленные ВМ также
++запускаются по одной. Это снижает одновременную нагрузку на Nova, хранилище и
++сеть и не позволяет пропустить fencing ради более быстрого recovery.
++
++Kolla-Ansible при `deploy` и `reconfigure` только настраивает сервисы,
++регистрирует actions и выполняет reconcile/register workbook. Этот путь не запускает workflow
++и не вызывает Nova, Ironic или BMC для изменения состояния.
++PowerOps по умолчанию выключен и начинает работать только после явной настройки
++оператором всех зависимостей, образов и списков доступа.
++
++## Границы решения
++
++- Имя узла должно совпадать во всех системах:
++  `Nova hostname = Masakari host.name = Ironic Node.name`. Любая операция
++  разрешает ровно один Nova compute service, ровно одну запись хоста Masakari в
++  указанном сегменте и ровно один Ironic Node с точным именем.
++- Ironic Node заранее создаётся как реестр BMC и power backend. Поддерживается
++  только `provision_state=manageable` и `network_interface=noop`; такой узел не
++  переводится в `available`, не участвует в cleaning и provisioning.
++- Redfish-адрес, system ID, логин, пароль и CA хранятся в `driver_info` Ironic.
++  PowerOps не переносит BMC-пароли в Mistral workbook или Kolla globals.
++  Минимальный контракт enrollment: `driver=redfish`, а в `driver_info`
++  определены `redfish_address`, `redfish_system_id`, `redfish_username`,
++  `redfish_password` и `redfish_verify_ca`. В production нужен Redfish HTTPS с
++  проверкой доверенного CA и минимальными RBAC-правами сервисной учётной записи.
++- Плановые операции запускаются через стандартные Mistral API, CLI либо
++  доступный в облаке штатный интерфейс Mistral. Отдельный PowerOps-плагин
++  Horizon в эту поставку не входит; прямое выключение хоста из Horizon в обход
++  workflow не является поддерживаемым сценарием.
++- Аварийный путь начинается с Masakari host-failure notification. В нём нет
++  дополнительного вызова Mistral, поэтому отказ Mistral не блокирует fencing.
++- Включение аварийно fenced-хоста — отдельная операторская операция после
++  диагностики. Такой хост автоматически не включается.
++- `power_ops.host_power_status` возвращает снимок состояния на момент запроса,
++  а не подписку и не гарантию того, что состояние останется неизменным после
++  ответа.
++
++## Компоненты и их ответственность
++
++| Компонент | Ответственность |
++|---|---|
++| Оператор / штатный интерфейс Mistral | Выбирает точный хост и сегмент, политику ВМ, подтверждает gate возврата и контролирует результат execution. |
++| Kolla-Ansible | Проверяет зависимости и образы, рендерит конфигурацию, регистрирует actions, создаёт или безопасно обновляет workbook. |
++| Mistral API, Engine, Executor | Авторизуют и исполняют плановые actions, удерживают host lock, координируют Nova, Masakari и Ironic. |
++| Masakari Monitor и Engine | Создают и обрабатывают аварийное уведомление, отключают compute service, выполняют `ironic_fence`, затем последовательную evacuation. |
++| Nova | Запрещает новое размещение на хосте, выполняет live migration, stop/start и emergency evacuation ВМ. |
++| Ironic | Разрешает точный Node, отправляет power target в BMC и подтверждает устойчивое состояние питания. |
++| Redfish/BMC | Физически выключает или включает сервер. |
++| etcd через tooz | Даёт общие для Mistral и Masakari линейризуемые блокировки и контроль их владения. |
++
++Плановый вызов:
++
++```text
++оператор
++  -> Mistral API -> workflow power_ops.*
++  -> action powerops.* -> host lock в etcd
++  -> Masakari maintenance -> Nova disable и обработка ВМ
++  -> Ironic -> Redfish/BMC -> проверка устойчивого power state
++  -> результат execution и безопасное итоговое состояние
++```
++
++Аварийный вызов:
++
++```text
++Masakari Monitor -> host-failure notification -> Masakari Engine
++  -> host lock в etcd -> Nova disable -> ironic_fence
++  -> Ironic -> Redfish/BMC hard off -> stable-off
++  -> подготовка VMove -> глобально последовательная evacuation Nova
++```
++
++Workbook `power_ops` публикует четыре workflow и пять actions:
++
++| Workflow | Action / назначение |
++|---|---|
++| `power_ops.host_power_status` | `powerops.host_power_status`: точечное чтение Ironic, Nova и Masakari. |
++| `power_ops.planned_power_off` | `powerops.planned_power_off`: подготовка ВМ и контролируемое выключение. |
++| `power_ops.planned_reboot` | `powerops.planned_reboot`: контролируемая последовательность off, on и возврат. |
++| `power_ops.power_on_and_return` | Сначала `powerops.power_on_for_inspection`, после operator gate — `powerops.return_to_service`. |
++
++## Координация через etcd
++
++При включённом PowerOps `powerops_coordination_url` имеет схему
++`etcd3+http` или `etcd3+https`. Mistral и Masakari запрашивают через tooz
++характеристики `DISTRIBUTED_ACROSS_PROCESSES` и `LINEARIZABLE`, запускают
++heartbeat и перед критическими действиями проверяют, что etcd всё ещё хранит
++UUID владельца блокировки. До фиксации успешного результата неподдерживаемый
++backend, потеря heartbeat или невозможность доказать владение считаются
++ошибкой. Ошибка освобождения после success относится к отдельной terminal ветке
++ниже. Redis не используется в активированном пути PowerOps.
++
++Mistral различает ошибку до и после завершения изменяющей операции. До
++финальной проверки здоровья coordinator и записи success audit ошибка
++прерывает action. Если Nova уже пытались отключить, fail-safe в режиме
++best-effort пробует повторно установить Masakari `maintenance=true` и Nova
++disabled, но только пока владение host lock доказано. Каждый неудачный вызов
++учитывается в failure audit как `fail_safe_error_count`. После потери heartbeat
++или ownership новые mutations запрещены: health check перед каждым вызовом
++OpenStack не допускает некоординированное изменение. Даже при здоровой
++координации API-вызов может завершиться ошибкой, поэтому фактические состояния
++Nova и Masakari нужно перечитать; желаемое fail-safe состояние не является
++гарантией.
++
++Иная ветка применяется, когда сама операция, финальная health-проверка и success
++audit уже завершены, а затем ошибка возникла при release host lock или остановке
++coordinator. Она записывается как
++`completed_with_coordination_cleanup_error`: удалённый переход остаётся
++завершённым, post-ownership fail-safe не выполняется, и результат action
++возвращается как завершённый. Оператор должен перечитать фактическое состояние
++и не повторять power cycle автоматически, иначе уже выполненный off/on может
++быть выполнен второй раз.
++
++Используются два имени блокировок:
++
++- `powerops/host/<host>` охватывает полный изменяющий состояние сценарий одного
++  хоста. Одно и то же имя строят Mistral и Masakari, поэтому плановый workflow и
++  аварийный recovery не могут одновременно управлять одним узлом.
++- `powerops/evacuation/global` берётся Masakari отдельно для каждой ВМ и
++  удерживается на время вызова evacuation, подтверждения результата и
++  `powerops_evacuation_interval`. Поэтому даже одновременные аварии разных
++  хостов не создают параллельный поток evacuation.
++
++`power_ops.host_power_status` не берёт host lock: это намеренно только
++point-in-time чтение. Перед любым последующим изменением action заново разрешает
++ресурсы и проверяет их состояние уже под блокировкой.
++
++## Сценарий: плановое выключение
++
++Вход: точные `host`, `segment_uuid`, одна из разрешённых политик ВМ и Boolean
++`allow_hard_off`. Action допускается только тогда, когда имя проекта входит в
++`powerops_allowed_project_names` **и** имя пользователя входит в
++`powerops_allowed_user_names`. Сопоставление точное; пустой список запрещает все вызовы.
++Kolla precheck дополнительно не позволяет включить PowerOps с пустым или
++неоднозначно записанным списком.
++
++Порядок `power_ops.planned_power_off`:
++
++```text
++получить powerops/host/<host>
++  -> проверить точное множество Ironic + Nova + Masakari
++  -> Masakari on_maintenance=true
++  -> Nova service disabled, reason="PowerOps planned operation"
++  -> обработать ВМ по instance_policy
++  -> повторно доказать, что источник можно выключать
++  -> Ironic soft power off -> stable-off
++  -> оставить Nova disabled и Masakari maintenance=true
++```
++
++Разрешены только следующие `instance_policy`:
++
++- `require_empty` — завершить workflow ошибкой, если на точном хосте есть хотя
++  бы одна ВМ;
++- `live_migrate` — принимать только ВМ `ACTIVE`, сортировать их по UUID,
++  мигрировать строго по одной и подтверждать, что каждая стала `ACTIVE` на
++  другом compute host;
++- `stop` — принимать только `ACTIVE` или `SHUTOFF`, останавливать `ACTIVE` по
++  одной, подтверждать `SHUTOFF` и вернуть точный `stopped_instance_ids` для
++  последующего возврата.
++
++Плановая политика `evacuate` запрещена: evacuation допустима только в
++аварийном Masakari-сценарии после fencing.
++
++Сначала Ironic получает `soft power off`. Если graceful timeout истёк,
++переход к hard `power off` разрешён только при точном Boolean
++`allow_hard_off=true`; по умолчанию он запрещён. Успех требует нескольких
++совместимых наблюдений `power_state=power off`,
++`target_power_state in [null, power off]`, пустого `last_error` и неизменного
++совместимого Node. Это состояние далее называется stable-off. Результат и
++`stopped_instance_ids` нужно сохранить: для политики `stop` этот manifest
++передаётся в отдельный workflow возврата.
++
++## Сценарий: плановая перезагрузка
++
++`power_ops.planned_reboot` не посылает непрозрачную команду reboot. До точки
++выключения он повторяет все проверки планового выключения, затем выполняет
++контролируемую цепочку:
++
++```text
++maintenance=true -> Nova disabled -> политика ВМ
++  -> Ironic power off -> stable-off
++  -> Ironic power on -> устойчивый power on
++  -> дождаться nova-compute state=up при status=disabled
++  -> последовательно запустить остановленные ВМ
++  -> Nova enabled -> maintenance=false
++```
++
++При `live_migrate` исходный хост должен стать пустым, поэтому запускать на нём
++нечего. При `stop` UUID из manifest сортируются; каждая ВМ запускается только
++после перехода предыдущей в `ACTIVE` и паузы `powerops_instance_interval`.
++Уже `ACTIVE` экземпляр безопасно пропускается. Nova включается для scheduler и
++maintenance снимается только после завершения всей последовательности.
++
++Автоматический критерий готовности в этом workflow проверяет устойчивый Ironic
++`power on` и `nova-compute state=up/status=disabled`; отдельные состояния
++libvirt, сетевых и storage-агентов action не опрашивает. Если их ручная проверка
++обязательна до возврата в scheduler, вместо единого planned reboot следует
++использовать плановое выключение и затем двухфазный
++`power_ops.power_on_and_return` с operator gate.
++
++Если любой шаг после Nova disable не доказан и ownership ещё подтверждается,
++fail-safe только пытается в режиме best-effort повторно запросить
++`maintenance=true` и Nova disabled. Ошибка запроса учитывается в audit, а
++результирующее состояние не гарантируется. При потерянном ownership action не
++делает новых mutations. Оператор должен перечитать питание, Nova и Masakari и
++не включать scheduler, пока фактическое состояние сервисов и ВМ не сверено.
++
++## Сценарий: включение и возврат в эксплуатацию
++
++Это двухфазный workflow `power_ops.power_on_and_return`. Он применяется после
++планового выключения либо как отдельная контролируемая процедура после ремонта
++аварийно fenced-хоста. Для аварийного хоста manifest остановленных ВМ обычно
++пуст, потому что их уже эвакуировала Nova.
++
++Первая фаза `powerops.power_on_for_inspection` под host lock подтверждает точное
++множество ресурсов, оставляет Masakari maintenance, оставляет Nova disabled,
++включает Ironic Node и ждёт устойчивый `power on` и `nova-compute state=up`.
++После завершения action блокировка освобождается, а Mistral останавливается на
++`operator_inspection_gate` с `pause-before: true`:
++
++```text
++power on подтверждён
++  -> Nova всё ещё disabled, Masakari maintenance=true
++  -> оператор проверяет ОС, libvirt, nova-compute, сеть и storage
++  -> оператор исключает оставшиеся активные домены старых ВМ
++  -> resume с новым Mistral environment
++```
++
++После проверки execution возобновляется запросом
++`PUT /v2/executions/<execution_id>` с точным телом:
++
++```json
++{
++  "state": "RUNNING",
++  "params": {
++    "env": {
++      "stale_domains_checked": true
++    }
++  }
++}
++```
++
++Значение должно быть JSON Boolean, а не строкой. Внутренний контракт action —
++`stale_domains_checked=true`; без него `powerops.return_to_service` завершается
++ошибкой. Вторая фаза заново получает host lock и повторно требует устойчивый
++`power on`, Nova `disabled/up` и Masakari `maintenance=true`. Затем она по UUID
++запускает только ВМ из переданного `stopped_instance_ids`, ждёт `ACTIVE` после
++каждого запуска, включает Nova и последним шагом снимает maintenance.
++
++## Сценарий: аварийный fencing и эвакуация
++
++При host-failure notification Masakari Engine выполняет emergency path без
++Mistral:
++
++```text
++получить powerops/host/<host> на весь recovery flow
++  -> disable_compute_service_task
++  -> ironic_fence
++       -> найти ровно один Ironic Node.name == host
++       -> проверить manageable, network_interface=noop и last_error пуст
++       -> запросить hard power off через Ironic
++       -> получить несколько последовательных stable-off наблюдений
++  -> prepare_HA_enabled_instances_task
++  -> evacuate_instances_task по одной ВМ
++```
++
++`ironic_fence` проверяет deadline и здоровье блокировки до критических
++действий. Совместимое выключение требует `power_state=power off`, отсутствующего
++или совпадающего `target_power_state` и пустого `last_error`. Если точный Node не
++найден, найдено несколько Node, Node несовместим, etcd unhealthy или stable-off
++не подтверждён до deadline, TaskFlow завершается ошибкой. Evacuation при этом не
++начинается — это fail-closed барьер против одновременной работы одной ВМ на
++старом и новом хосте.
++
++Прямая перезагрузка отказавшего хоста не заменяет fencing: сначала всегда
++требуются hard off, stable-off и evacuation, и лишь затем — диагностика и
++отдельный операторский workflow возврата.
++
++После успешного fencing Masakari сортирует VMove по UUID. Для каждой ВМ он
++получает `powerops/evacuation/global`, вызывает Nova evacuation, ждёт
++подтверждения конечного состояния и выдерживает интервал, не освобождая
++глобальную блокировку раньше. При ошибке текущая VMove помечается `FAILED`, а
++следующие ВМ не запускаются в текущей попытке evacuation. Для recovery methods
++`auto` и `reserved_host` эта ошибка завершает выбранный flow. Для
++`auto_priority` Masakari после ошибки `auto` и успешной проверки coordinator
++может запустить `reserved_host`; для `rh_priority` порядок обратный. Этот
++альтернативный recovery flow остаётся внутри того же
++`powerops/host/<host>`, а обработка каждой его ВМ по-прежнему защищена
++`powerops/evacuation/global`; нездоровый coordinator запрещает fallback.
++Следовательно, после первой `FAILED` записи оператор должен проверить все VMove
++и progress notification, прежде чем заключать, что более поздних Nova mutations
++не было. На уже fenced-хосте не выполняется автоматический power on даже при
++откате или ошибке последующих задач.
++
++## Последовательный запуск и эвакуация ВМ
++
++Последовательность детерминирована лексикографической сортировкой UUID:
++
++```text
++VM-A: mutation -> подтверждение -> pacing
++                                 |
++VM-B:                           mutation -> подтверждение -> pacing
++                                                                    |
++VM-C:                                                              mutation
++```
++
++- В `live_migrate`, `stop` и последующем planned restart один Mistral action
++  начинает следующую ВМ только после подтверждения предыдущей и
++  `powerops_instance_interval`.
++- В emergency recovery Masakari включает вызов evacuation, подтверждение и
++  `powerops_evacuation_interval` внутрь `powerops/evacuation/global`. Это делает
++  evacuation и последующий старт/восстановление ВМ Nova глобально
++  последовательными даже для нескольких одновременных host-failure flows.
++- Тайм-аут одной ВМ не разрешает текущей попытке продолжить «на удачу»:
++  плановый action переходит к best-effort fail-safe, а текущий аварийный flow
++  останавливает оставшиеся VMove. Priority recovery может после health check
++  начать альтернативный flow по правилам предыдущего раздела.
++
++Такая сериализация уменьшает шторм запросов, но сама по себе не гарантирует
++ёмкость назначения, пропускную способность хранилища или сети. Значения
++интервалов и timeout должны подтверждаться нагрузочными испытаниями конкретного
++облака.
++
++## Развёртывание и повторная конфигурация
++
++Минимальный пример в `/etc/kolla/globals.yml` использует фиктивные имена образов
++и не содержит реальных адресов или секретов:
++
++```yaml
++enable_ironic: "yes"
++enable_masakari: "yes"
++enable_mistral: "yes"
++enable_etcd: "yes"
++enable_powerops: "yes"
++
++powerops_allowed_project_names:
++  - "powerops-operators"
++powerops_allowed_user_names:
++  - "powerops-service-user"
++
++powerops_masakari_engine_image: "registry.example.invalid/openstack/masakari-engine-powerops"
++powerops_masakari_engine_tag: "2025.1-example"
++powerops_mistral_api_image: "registry.example.invalid/openstack/mistral-api-powerops"
++powerops_mistral_api_tag: "2025.1-example"
++powerops_mistral_engine_image: "registry.example.invalid/openstack/mistral-engine-powerops"
++powerops_mistral_engine_tag: "2025.1-example"
++powerops_mistral_executor_image: "registry.example.invalid/openstack/mistral-executor-powerops"
++powerops_mistral_executor_tag: "2025.1-example"
++```
++
++`powerops_coordination_url` по умолчанию строится из внутреннего endpoint etcd;
++при HTTPS он включает контейнерный CA. Prechecks требуют все четыре сервиса,
++etcd, непустые точные allowlist и непустые image/tag каждой патченной службы.
++Патченный Masakari-код выбирается только для `masakari_engine`. Патченный
++Mistral-код обязателен сразу в трёх контейнерах: `mistral_api`,
++`mistral_engine`, `mistral_executor`; Event Engine не исполняет PowerOps action
++и остаётся на обычном образе. При включённом PowerOps etcd настроен как backend
++coordination всех Mistral-сервисов, а секция `[powerops]` рендерится только для
++API, Engine и Executor.
++
++После перезапуска обработчиков `deploy` и `reconfigure` выполняют одинаковый
++идемпотентный reconcile/register:
++
++1. Masakari Engine обязан содержать entry point `ironic_fence`.
++2. Каждый из трёх патченных контейнеров Mistral отдельно проверяется на все пять
++   `mistral.actions`; populate каталога выполняется один раз в `mistral_api`.
++3. Контроллер Kolla получает project-scoped Keystone token. Если задан
++   `kolla_admin_openrc_cacert`, symlink разрешается, а конечный файл обязан
++   существовать, быть обычным и читаемым; пустое значение использует системное
++   доверие. Token и ответы скрыты через `no_log`.
++4. Kolla читает все точные `power_ops` workbook с пустым namespace. Ноль
++   совпадений разрешает POST; ровно одно совпадение, принадлежащее проекту token,
++   разрешает PUT только при изменении definition или public scope. Чужой
++   workbook либо несколько совпадений приводят к fail-closed ошибке без
++   мутации.
++5. Безопасный PUT требует companion-патч Mistral commit
++   `665cde88` (`665cde880127f56c8335e6f8b210362f87ae19d9`). Он в той же
++   SQLAlchemy-транзакции ограничивает lookup workbook текущим request project и
++   тем самым закрывает межпроектную коллизию и TOCTOU. Одной предварительной
++   проверки Kolla для этого недостаточно; без данного Mistral-патча deployment
++   нельзя считать безопасным.
++6. Kolla прямыми чтениями проверяет пять точных actions и четыре точных workflow;
++   каждый workflow должен быть единственным и принадлежать проекту token.
++
++Readiness GET имеют ограниченные повторы, а POST/PUT намеренно не повторяются
++вслепую. Ни один deploy-time task не обращается к `/executions`, не запускает
++workflow, не вызывает Nova migration/evacuation и не меняет Ironic power state.
++
++Порядок применения поставки: сначала пронумерованные патчи Masakari и Mistral,
++включая owner-scoped commit, затем патчи Kolla-Ansible; после сборки задаются
++точные patched image/tag и выполняются prechecks. Откат PowerOps начинается с
++`enable_powerops: "no"` и штатного `reconfigure`; откат патченных образов и
++исходников выполняется только после завершения активных operations и проверки,
++что нет удерживаемых locks. Это не является разрешением на live reconfigure —
++такое действие требует отдельного change window.
++
++## Состояния отказа и безопасное восстановление
++
++| Отказ | Безопасный результат | Действие оператора |
++|---|---|---|
++| Не получен host lock, потерян heartbeat или ownership etcd до success | Изменяющее действие прерывается; после потери ownership новые mutations запрещены. Best-effort reassert мог выполниться полностью, частично или не выполниться. | Проверить quorum/доступность etcd и перечитать фактические состояния Ironic, Nova и Masakari; не перезапускать execution вслепую. |
++| `completed_with_coordination_cleanup_error` после success audit | Удалённая операция уже завершена и её результат возвращён; ошибка относится к release/stop coordinator, post-ownership fail-safe не запускается. | Проверить фактическое состояние и cleanup координации; не повторять уже выполненный power cycle автоматически. |
++| Неоднозначный или несовместимый Ironic Node, конфликтующий target, `last_error` | Power transition не считается доказанным. | Исправить inventory/ошибку Ironic, сверить BMC read-only, затем создать новую контролируемую операцию. |
++| Graceful off не уложился в timeout и hard off не разрешён | Плановый хост остаётся выведенным из планирования; жёсткое выключение не выполняется. | Решить, допустим ли отдельный запуск с `allow_hard_off=true`, после проверки приложений и консоли. |
++| Emergency stable-off не подтверждён | `ironic_fence` падает, evacuation не выполняется. | Не эвакуировать вручную до независимого доказательства fencing. |
++| Ошибка одной emergency evacuation | Текущая VMove получает `FAILED`, следующие UUID не обрабатываются в этой попытке; `auto_priority`/`rh_priority` могут запустить альтернативный flow при здоровом coordinator. Хост остаётся fenced. | Проверить все VMove, notification progress, Nova fault и размещение ВМ, включая возможную вторую попытку. |
++| Ошибка старта ВМ или возврата сервиса | Best-effort fail-safe пытается запросить Nova disabled и Masakari maintenance; часть manifest может уже быть `ACTIVE`, а итоговые административные состояния не гарантированы. | Перечитать manifest и фактические статусы; повторный action пропускает уже `ACTIVE`, но запускать его можно только после устранения причины и проверки ownership. |
++| Чужой/множественный workbook или нечитаемый controller CA | Kolla reconcile останавливается до POST/PUT или проверки каталога. | Устранить namespace/project collision либо CA; не обходить assertion. |
++
++После аварии нельзя считать отсутствие ответа ОС доказательством выключения.
++Допустимы только совместимые наблюдения Ironic/BMC. Нельзя вручную включать
++Nova service или снимать Masakari maintenance до проверки старых libvirt domains:
++это нарушает операторский gate, даже если физический сервер уже отвечает.
++
++## Проверки оператора
++
++Следующие команды являются read-only; замените placeholders фактическими
++значениями и выполняйте их с учётной записью, имеющей только необходимый доступ:
++
++```bash
++openstack baremetal node show HOST -f yaml \
++  -c uuid -c name -c provision_state -c network_interface \
++  -c power_state -c target_power_state -c last_error
++openstack compute service list --service nova-compute --host HOST
++openstack segment host list SEGMENT_UUID
++openstack server list --all-projects --host HOST --long
++openstack workflow execution show EXECUTION_ID
++```
++
++Перед плановой операцией проверьте точное совпадение имён, отсутствие
++незавершённого execution и ожидаемый список ВМ. После выключения ожидаются
++stable-off, Nova disabled и Masakari maintenance. После первой фазы возврата
++ожидаются power on, `nova-compute up/disabled` и maintenance. Только после
++проверки ОС, libvirt domains, network/storage agents и отсутствия stale domains
++передавайте точный resume JSON. После завершения сверяйте Nova enabled,
++maintenance=false, размещение и состояние каждой ВМ.
++
++Для аварии дополнительно просматривайте Masakari notification progress и VMove:
++`ironic_fence` должен быть успешен раньше первой evacuation. При `FAILED` нельзя
++предполагать состояние следующих UUID; его нужно читать из Nova и Masakari.
++Логи нужны для корреляции по notification/workflow execution ID, но не заменяют
++чтение фактического состояния Ironic, Nova и Masakari.
++
++## Статическая проверка
++
++Локальный контракт Kolla выполняется без deployment:
++
++```bash
++python -m unittest \
++  kolla_ansible.tests.unit.test_powerops_documentation \
++  kolla_ansible.tests.unit.test_powerops_registration \
++  kolla_ansible.tests.unit.test_powerops_configuration_contract -v
++ansible-playbook -i ansible/inventory/all-in-one \
++  ansible/site.yml --syntax-check
++git diff --check powerops-kolla-baseline...HEAD
++```
++
++Отдельно проверяются unit suites патченных Masakari и Mistral, применение
++каждой серии через `git am` к точному stable/2025.1 baseline, равенство итоговых
++деревьев и SHA-256 файлов поставки. Поиск deployment-ролей должен подтверждать
++отсутствие workflow execution, Nova migration/evacuation, baremetal power и
++утечек через `no_log: false` либо CA в query string.
++
++Эти проверки доказывают структуру конфигурации, контракт кода и
++воспроизводимость патчей, но не доказывают поведение реального BMC,
++не доказывают поведение lease etcd и не доказывают миграцию или evacuation Nova.
++
++## Проверка в реальной инфраструктуре
++
++Runtime-приёмка выполняется сначала на выделенном тестовом compute host и только
++в согласованное окно. До production нужны отдельные доказательства:
++
++1. Read-only проверка каждого Ironic Node, Redfish HTTPS/CA и фактического
++   соответствия имени и физического сервера.
++2. Проверка доступности etcd из Masakari и всех Mistral service containers,
++   heartbeat, lease и взаимного исключения одного host lock между процессами.
++3. Плановое выключение для `require_empty`, затем лабораторные `live_migrate` и
++   `stop` с измерением timeout и pacing; проверка безопасного состояния при
++   принудительной ошибке каждого шага.
++4. Двухфазный возврат с реальной паузой, проверкой stale domains, точным resume
++   environment и последовательным стартом manifest.
++5. Контролируемая Masakari host-failure notification: доказать stable-off до
++   первой VMove, глобально последовательную evacuation и остановку очереди при
++   ошибке.
++6. Проверка коллизии public workbook между двумя проектами и того, что
++   owner-scoped Mistral PUT не может изменить чужую запись.
++
++В рамках статической реализации реальные BMC-команды, операции питания,
++проверка lease etcd, Nova migration/evacuation, запуск ВМ, Masakari notification,
++Kolla deploy и reconfigure не выполнялись. Поэтому успешные локальные тесты не
++являются подтверждением готовности конкретного production-окружения.
+diff --git a/kolla_ansible/tests/unit/test_powerops_documentation.py b/kolla_ansible/tests/unit/test_powerops_documentation.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..7063e73ff69260eccecc05e76ba436e7ee997a84
+--- /dev/null
++++ b/kolla_ansible/tests/unit/test_powerops_documentation.py
+@@ -0,0 +1,134 @@
++# Licensed under the Apache License, Version 2.0 (the "License"); you may
++# not use this file except in compliance with the License. You may obtain
++# a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++from pathlib import Path
++import unittest
++
++
++ROOT = Path(__file__).resolve().parents[3]
++RUNBOOK = ROOT / "docs/powerops/POWEROPS-ARCHITECTURE.md"
++
++HEADINGS = [
++    "# PowerOps: управление питанием и fencing вычислительных узлов",
++    "## Краткий вывод",
++    "## Границы решения",
++    "## Компоненты и их ответственность",
++    "## Координация через etcd",
++    "## Сценарий: плановое выключение",
++    "## Сценарий: плановая перезагрузка",
++    "## Сценарий: включение и возврат в эксплуатацию",
++    "## Сценарий: аварийный fencing и эвакуация",
++    "## Последовательный запуск и эвакуация ВМ",
++    "## Развёртывание и повторная конфигурация",
++    "## Состояния отказа и безопасное восстановление",
++    "## Проверки оператора",
++    "## Статическая проверка",
++    "## Проверка в реальной инфраструктуре",
++]
++
++
++class PowerOpsDocumentationTest(unittest.TestCase):
++
++    def setUp(self):
++        self.text = RUNBOOK.read_text(encoding="utf-8")
++
++    def test_runbook_has_the_required_section_order(self):
++        actual = [
++            line for line in self.text.splitlines()
++            if line.startswith("# ") or line.startswith("## ")
++        ]
++
++        self.assertEqual(HEADINGS, actual)
++
++    def test_runbook_covers_all_powerops_scenarios_and_safety_contracts(self):
++        required = {
++            "power_ops.host_power_status",
++            "power_ops.planned_power_off",
++            "power_ops.planned_reboot",
++            "power_ops.power_on_and_return",
++            "powerops.host_power_status",
++            "powerops.planned_power_off",
++            "powerops.planned_reboot",
++            "powerops.power_on_for_inspection",
++            "powerops.return_to_service",
++            "ironic_fence",
++            "powerops/host/<host>",
++            "powerops/evacuation/global",
++            "require_empty",
++            "live_migrate",
++            "stop",
++            "Плановая политика `evacuate` запрещена",
++            "снимок состояния на момент запроса",
++            "stable-off",
++            "автоматически не включается",
++            "manageable",
++            "network_interface=noop",
++        }
++
++        self.assertEqual(
++            set(),
++            required - {item for item in required if item in self.text},
++        )
++
++    def test_runbook_covers_deployment_security_and_operator_gate(self):
++        required = {
++            "powerops_allowed_project_names",
++            "powerops_allowed_user_names",
++            "пустой список запрещает все вызовы",
++            "665cde88",
++            "mistral_api",
++            "mistral_engine",
++            "mistral_executor",
++            "kolla_admin_openrc_cacert",
++            '"state": "RUNNING"',
++            '"stale_domains_checked": true',
++            "reconcile/register",
++            "не запускает workflow",
++            "Redis не используется",
++            "Статическая проверка",
++            "Проверка в реальной инфраструктуре",
++            "не доказывают поведение реального BMC",
++            "не доказывают поведение lease etcd",
++            "не доказывают миграцию или evacuation Nova",
++        }
++
++        self.assertEqual(
++            set(),
++            required - {item for item in required if item in self.text},
++        )
++
++    def test_runbook_distinguishes_failure_and_fallback_boundaries(self):
++        normalized = " ".join(self.text.split())
++        required = {
++            "best-effort",
++            "fail_safe_error_count",
++            "новые mutations запрещены",
++            "фактические состояния Nova и Masakari нужно перечитать",
++            "completed_with_coordination_cleanup_error",
++            "результат action возвращается как завершённый",
++            "не повторять power cycle автоматически",
++            "текущей попытке evacuation",
++            "auto_priority",
++            "rh_priority",
++            "альтернативный recovery flow",
++            "нездоровый coordinator запрещает fallback",
++            "все VMove и progress notification",
++        }
++
++        self.assertEqual(
++            set(),
++            required - {item for item in required if item in normalized},
++        )
++
++
++if __name__ == "__main__":
++    unittest.main()
+-- 
+2.49.0
+

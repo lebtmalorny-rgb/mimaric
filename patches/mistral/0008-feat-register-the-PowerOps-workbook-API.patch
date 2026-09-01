@@ -1,7 +1,7 @@
 From c7bea65f4ccb86dc18a7c29d8972acf7bbedd2b6 Mon Sep 17 00:00:00 2001
 From: Lebt <lebtmalorny@gmail.com>
 Date: Tue, 1 Sep 2026 05:57:06 +0300
-Subject: [PATCH 8/9] feat: register the PowerOps workbook API
+Subject: [PATCH 08/10] feat: register the PowerOps workbook API
 
 ---
  etc/mistral/power_ops.yaml                    |  88 ++++++
@@ -17,7 +17,7 @@ Subject: [PATCH 8/9] feat: register the PowerOps workbook API
 
 diff --git a/etc/mistral/power_ops.yaml b/etc/mistral/power_ops.yaml
 new file mode 100644
-index 0000000..119be4e
+index 0000000000000000000000000000000000000000..119be4e86037b750271dc62a7d282ac28f22ac5e
 --- /dev/null
 +++ b/etc/mistral/power_ops.yaml
 @@ -0,0 +1,88 @@
@@ -111,7 +111,7 @@ index 0000000..119be4e
 +      result: <% $.result %>
 diff --git a/mistral/tests/unit/actions/powerops/test_registration.py b/mistral/tests/unit/actions/powerops/test_registration.py
 new file mode 100644
-index 0000000..9aa8edf
+index 0000000000000000000000000000000000000000..9aa8edff3dafaa5dba5a359612567ff80878b594
 --- /dev/null
 +++ b/mistral/tests/unit/actions/powerops/test_registration.py
 @@ -0,0 +1,49 @@
@@ -166,7 +166,7 @@ index 0000000..9aa8edf
 +                self.assertIs(expected_class, entry_points[name].load())
 diff --git a/mistral/tests/unit/actions/powerops/test_workbook.py b/mistral/tests/unit/actions/powerops/test_workbook.py
 new file mode 100644
-index 0000000..4cd8e72
+index 0000000000000000000000000000000000000000..4cd8e7252cb86420f49913935ebca55665ea143d
 --- /dev/null
 +++ b/mistral/tests/unit/actions/powerops/test_workbook.py
 @@ -0,0 +1,251 @@
@@ -423,7 +423,7 @@ index 0000000..4cd8e72
 +        self.assertFalse(any('lock' in name for name in exposed_names))
 diff --git a/releasenotes/notes/powerops-planned-host-actions.yaml b/releasenotes/notes/powerops-planned-host-actions.yaml
 new file mode 100644
-index 0000000..653fb79
+index 0000000000000000000000000000000000000000..653fb79eda942eb29caa1011b209feac093e268b
 --- /dev/null
 +++ b/releasenotes/notes/powerops-planned-host-actions.yaml
 @@ -0,0 +1,26 @@
@@ -454,7 +454,7 @@ index 0000000..653fb79
 +    live OpenStack, etcd, BMC, virtual-machine, migration, or physical-host
 +    verification.
 diff --git a/setup.cfg b/setup.cfg
-index 41c9d14..b49ab88 100644
+index 41c9d145e9ffa43c63be338750991f23d837dff4..b49ab88e67bab7a745b9eaea9cd92529e496a847 100644
 --- a/setup.cfg
 +++ b/setup.cfg
 @@ -58,6 +58,11 @@ mistral.action.providers =

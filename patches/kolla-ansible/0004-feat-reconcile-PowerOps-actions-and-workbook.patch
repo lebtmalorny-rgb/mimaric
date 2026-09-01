@@ -1,0 +1,1249 @@
+From bf98e7d8b6c7d217a90d56fefb9ebf9b089e7ede Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Tue, 1 Sep 2026 09:53:01 +0300
+Subject: [PATCH 4/5] feat: reconcile PowerOps actions and workbook
+
+---
+ ansible/roles/masakari/tasks/deploy.yml       |   3 +
+ ansible/roles/masakari/tasks/powerops.yml     |   9 +
+ ansible/roles/mistral/files/power_ops.yaml    |  88 ++
+ ansible/roles/mistral/tasks/deploy.yml        |   3 +
+ ansible/roles/mistral/tasks/powerops.yml      | 309 +++++++
+ .../tests/unit/test_powerops_registration.py  | 776 ++++++++++++++++++
+ 6 files changed, 1188 insertions(+)
+ create mode 100644 ansible/roles/masakari/tasks/powerops.yml
+ create mode 100644 ansible/roles/mistral/files/power_ops.yaml
+ create mode 100644 ansible/roles/mistral/tasks/powerops.yml
+ create mode 100644 kolla_ansible/tests/unit/test_powerops_registration.py
+
+diff --git a/ansible/roles/masakari/tasks/deploy.yml b/ansible/roles/masakari/tasks/deploy.yml
+index e8edec1c092884818b1b89b566f157fbd35c5580..93506cb38d70269172817599d438c4e005afac17 100644
+--- a/ansible/roles/masakari/tasks/deploy.yml
++++ b/ansible/roles/masakari/tasks/deploy.yml
+@@ -12,3 +12,6 @@
+ 
+ - name: Flush handlers
+   meta: flush_handlers
++
++- import_tasks: powerops.yml
++  when: enable_powerops | bool
+diff --git a/ansible/roles/masakari/tasks/powerops.yml b/ansible/roles/masakari/tasks/powerops.yml
+new file mode 100644
+index 0000000000000000000000000000000000000000..2c61c9fb1a88830bd337c1304d3936ab3f2958b0
+--- /dev/null
++++ b/ansible/roles/masakari/tasks/powerops.yml
+@@ -0,0 +1,9 @@
++---
++- name: Verify PowerOps Masakari fencing entry point
++  become: true
++  ansible.builtin.command: >-
++    {{ kolla_container_engine }} exec masakari_engine python -c
++    "import importlib.metadata as m; found={e.name for e in m.entry_points(group='masakari.task_flow.tasks')}; assert 'ironic_fence' in found"
++  changed_when: false
++  run_once: true
++  delegate_to: "{{ groups['masakari-engine'][0] }}"
+diff --git a/ansible/roles/mistral/files/power_ops.yaml b/ansible/roles/mistral/files/power_ops.yaml
+new file mode 100644
+index 0000000000000000000000000000000000000000..119be4e86037b750271dc62a7d282ac28f22ac5e
+--- /dev/null
++++ b/ansible/roles/mistral/files/power_ops.yaml
+@@ -0,0 +1,88 @@
++---
++version: '2.0'
++name: power_ops
++
++workflows:
++  host_power_status:
++    input:
++      - host
++      - segment_uuid
++    tasks:
++      status:
++        action: powerops.host_power_status
++        input:
++          host: <% $.host %>
++          segment_uuid: <% $.segment_uuid %>
++        publish:
++          result: <% task().result %>
++    output:
++      result: <% $.result %>
++
++  planned_power_off:
++    input:
++      - host
++      - segment_uuid
++      - instance_policy: require_empty
++      - allow_hard_off: false
++    tasks:
++      power_off:
++        action: powerops.planned_power_off
++        input:
++          host: <% $.host %>
++          segment_uuid: <% $.segment_uuid %>
++          instance_policy: <% $.instance_policy %>
++          allow_hard_off: <% $.allow_hard_off %>
++        publish:
++          result: <% task().result %>
++    output:
++      result: <% $.result %>
++      stopped_instance_ids: <% $.result.stopped_instance_ids %>
++
++  planned_reboot:
++    input:
++      - host
++      - segment_uuid
++      - instance_policy: require_empty
++      - allow_hard_off: false
++    tasks:
++      reboot:
++        action: powerops.planned_reboot
++        input:
++          host: <% $.host %>
++          segment_uuid: <% $.segment_uuid %>
++          instance_policy: <% $.instance_policy %>
++          allow_hard_off: <% $.allow_hard_off %>
++        publish:
++          result: <% task().result %>
++    output:
++      result: <% $.result %>
++
++  power_on_and_return:
++    input:
++      - host
++      - segment_uuid
++      - stopped_instance_ids: []
++    tasks:
++      power_on_for_inspection:
++        action: powerops.power_on_for_inspection
++        input:
++          host: <% $.host %>
++          segment_uuid: <% $.segment_uuid %>
++        on-success: operator_inspection_gate
++
++      operator_inspection_gate:
++        action: std.noop
++        pause-before: true
++        on-success: return_to_service
++
++      return_to_service:
++        action: powerops.return_to_service
++        input:
++          host: <% $.host %>
++          segment_uuid: <% $.segment_uuid %>
++          stopped_instance_ids: <% $.stopped_instance_ids %>
++          stale_domains_checked: <% env().get('stale_domains_checked', false) %>
++        publish:
++          result: <% task().result %>
++    output:
++      result: <% $.result %>
+diff --git a/ansible/roles/mistral/tasks/deploy.yml b/ansible/roles/mistral/tasks/deploy.yml
+index e0c2b3483708a29eadf5d7df39be3c64f4e02535..dfa432c9b4ddb1152251ed6f0663d19ad51fb5f9 100644
+--- a/ansible/roles/mistral/tasks/deploy.yml
++++ b/ansible/roles/mistral/tasks/deploy.yml
+@@ -12,3 +12,6 @@
+ 
+ - name: Flush handlers
+   meta: flush_handlers
++
++- import_tasks: powerops.yml
++  when: enable_powerops | bool
+diff --git a/ansible/roles/mistral/tasks/powerops.yml b/ansible/roles/mistral/tasks/powerops.yml
+new file mode 100644
+index 0000000000000000000000000000000000000000..29137ddca9109fa56f981beccf3950a9648b517f
+--- /dev/null
++++ b/ansible/roles/mistral/tasks/powerops.yml
+@@ -0,0 +1,309 @@
++---
++- name: Verify PowerOps Mistral action entry points
++  become: true
++  ansible.builtin.command: >-
++    {{ kolla_container_engine }} exec {{ item.container }} python -c
++    "import importlib.metadata as m; required={'powerops.host_power_status','powerops.planned_power_off','powerops.planned_reboot','powerops.power_on_for_inspection','powerops.return_to_service'}; found={e.name for e in m.entry_points(group='mistral.actions')}; assert required <= found, required - found"
++  changed_when: false
++  loop:
++    - container: mistral_api
++      group: mistral-api
++    - container: mistral_engine
++      group: mistral-engine
++    - container: mistral_executor
++      group: mistral-executor
++  loop_control:
++    label: "{{ item.container }}"
++  run_once: true
++  delegate_to: "{{ groups[item.group][0] }}"
++
++- name: Populate Mistral action definitions
++  become: true
++  ansible.builtin.command: >-
++    {{ kolla_container_engine }} exec mistral_api
++    mistral-db-manage --config-file /etc/mistral/mistral.conf populate
++  changed_when: false
++  run_once: true
++  delegate_to: "{{ groups['mistral-api'][0] }}"
++
++- name: Check PowerOps controller CA certificate
++  ansible.builtin.stat:
++    path: "{{ kolla_admin_openrc_cacert }}"
++    get_checksum: false
++    follow: true
++  register: powerops_controller_ca
++  run_once: true
++  delegate_to: localhost
++  when:
++    - >-
++      powerops_reconcile_workbook | bool or
++      powerops_validate_registration | bool
++    - kolla_admin_openrc_cacert | length > 0
++
++- name: Validate PowerOps controller CA certificate
++  ansible.builtin.assert:
++    that:
++      - powerops_controller_ca.stat.exists | default(false)
++      - powerops_controller_ca.stat.isreg | default(false)
++      - powerops_controller_ca.stat.readable | default(false)
++    fail_msg: >-
++      kolla_admin_openrc_cacert must resolve to a controller-readable CA file
++  run_once: true
++  delegate_to: localhost
++  when:
++    - >-
++      powerops_reconcile_workbook | bool or
++      powerops_validate_registration | bool
++    - kolla_admin_openrc_cacert | length > 0
++
++- name: Authenticate PowerOps workbook reconciliation
++  ansible.builtin.uri:
++    url: >-
++      {{ openstack_mistral_auth.auth_url |
++         regex_replace('/v3/?$', '') |
++         regex_replace('/+$', '') }}/v3/auth/tokens
++    method: POST
++    body_format: json
++    body:
++      auth:
++        identity:
++          methods:
++            - password
++          password:
++            user:
++              name: "{{ openstack_mistral_auth.username }}"
++              password: "{{ openstack_mistral_auth.password }}"
++              domain:
++                name: "{{ openstack_mistral_auth.user_domain_name }}"
++        scope:
++          project:
++            name: "{{ openstack_mistral_auth.project_name }}"
++            domain:
++              name: "{{ openstack_mistral_auth.domain_name }}"
++    status_code: 201
++    return_content: true
++    validate_certs: true
++    ca_path: >-
++      {{ kolla_admin_openrc_cacert
++         if kolla_admin_openrc_cacert else omit }}
++  register: powerops_keystone_auth
++  no_log: true
++  run_once: true
++  delegate_to: localhost
++  when: >-
++    powerops_reconcile_workbook | bool or
++    powerops_validate_registration | bool
++
++- name: Store protected PowerOps token
++  ansible.builtin.set_fact:
++    powerops_keystone_token: >-
++      {{ powerops_keystone_auth.x_subject_token }}
++    powerops_keystone_project_id: >-
++      {{ powerops_keystone_auth.json.token.project.id }}
++  no_log: true
++  run_once: true
++  delegate_to: localhost
++  when: >-
++    powerops_reconcile_workbook | bool or
++    powerops_validate_registration | bool
++
++- name: Load PowerOps workbook definition
++  ansible.builtin.set_fact:
++    powerops_workbook_definition: >-
++      {{ lookup('ansible.builtin.file',
++                role_path ~ '/files/power_ops.yaml', rstrip=False) }}
++  run_once: true
++  delegate_to: localhost
++  when: powerops_reconcile_workbook | bool
++
++- name: List matching PowerOps workbooks
++  ansible.builtin.uri:
++    url: >-
++      {{ mistral_internal_endpoint }}/workbooks?name=power_ops&namespace=
++    method: GET
++    headers:
++      X-Auth-Token: "{{ powerops_keystone_token }}"
++    status_code: 200
++    return_content: true
++    validate_certs: true
++    ca_path: >-
++      {{ kolla_admin_openrc_cacert
++         if kolla_admin_openrc_cacert else omit }}
++  register: powerops_workbook_list
++  until: powerops_workbook_list is success
++  retries: 12
++  delay: 5
++  no_log: true
++  run_once: true
++  delegate_to: localhost
++  when: powerops_reconcile_workbook | bool
++
++- name: Store matching PowerOps workbooks
++  ansible.builtin.set_fact:
++    powerops_matching_workbooks: >-
++      {{ powerops_workbook_list.json.workbooks | default([]) |
++         selectattr('name', 'equalto', 'power_ops') |
++         selectattr('namespace', 'equalto', '') | list }}
++  no_log: true
++  run_once: true
++  delegate_to: localhost
++  when: powerops_reconcile_workbook | bool
++
++- name: Validate PowerOps workbook ownership
++  ansible.builtin.assert:
++    that:
++      - powerops_matching_workbooks | length <= 1
++      - >-
++        powerops_matching_workbooks | length == 0 or
++        powerops_matching_workbooks[0].project_id ==
++        powerops_keystone_project_id
++    fail_msg: >-
++      Refusing to reconcile an ambiguous or foreign public power_ops workbook
++  no_log: true
++  run_once: true
++  delegate_to: localhost
++  when: powerops_reconcile_workbook | bool
++
++- name: Create PowerOps workbook
++  ansible.builtin.uri:
++    url: "{{ mistral_internal_endpoint }}/workbooks?scope=public"
++    method: POST
++    headers:
++      X-Auth-Token: "{{ powerops_keystone_token }}"
++      Content-Type: text/plain
++    body: "{{ powerops_workbook_definition }}"
++    body_format: raw
++    status_code: 201
++    validate_certs: true
++    ca_path: >-
++      {{ kolla_admin_openrc_cacert
++         if kolla_admin_openrc_cacert else omit }}
++  no_log: true
++  run_once: true
++  delegate_to: localhost
++  when:
++    - powerops_reconcile_workbook | bool
++    - powerops_matching_workbooks | length == 0
++
++# SECURITY CONTRACT: the companion Mistral owner-scoped update patch
++# must constrain PUT lookup to the token project before this update is safe.
++# The preceding ownership assertion does not close the TOCTOU window.
++- name: Update changed PowerOps workbook
++  ansible.builtin.uri:
++    url: "{{ mistral_internal_endpoint }}/workbooks?scope=public"
++    method: PUT
++    headers:
++      X-Auth-Token: "{{ powerops_keystone_token }}"
++      Content-Type: text/plain
++    body: "{{ powerops_workbook_definition }}"
++    body_format: raw
++    status_code: 200
++    validate_certs: true
++    ca_path: >-
++      {{ kolla_admin_openrc_cacert
++         if kolla_admin_openrc_cacert else omit }}
++  no_log: true
++  run_once: true
++  delegate_to: localhost
++  when:
++    - powerops_reconcile_workbook | bool
++    - powerops_matching_workbooks | length == 1
++    - >-
++      powerops_matching_workbooks[0].project_id ==
++      powerops_keystone_project_id
++    - >-
++      powerops_matching_workbooks[0].definition |
++      default('') != powerops_workbook_definition or
++      powerops_matching_workbooks[0].scope |
++      default('') != 'public'
++
++- name: Read registered PowerOps actions
++  ansible.builtin.uri:
++    url: "{{ mistral_internal_endpoint }}/actions/{{ item }}"
++    method: GET
++    headers:
++      X-Auth-Token: "{{ powerops_keystone_token }}"
++    status_code: 200
++    return_content: true
++    validate_certs: true
++    ca_path: >-
++      {{ kolla_admin_openrc_cacert
++         if kolla_admin_openrc_cacert else omit }}
++  loop:
++    - powerops.host_power_status
++    - powerops.planned_power_off
++    - powerops.planned_reboot
++    - powerops.power_on_for_inspection
++    - powerops.return_to_service
++  loop_control:
++    label: "{{ item }}"
++  register: powerops_action_reads
++  until: powerops_action_reads is success
++  retries: 12
++  delay: 5
++  no_log: true
++  run_once: true
++  delegate_to: localhost
++  when: powerops_validate_registration | bool
++
++- name: Read registered PowerOps workflows
++  ansible.builtin.uri:
++    url: >-
++      {{ mistral_internal_endpoint }}/workflows?name={{ item }}&namespace=
++    method: GET
++    headers:
++      X-Auth-Token: "{{ powerops_keystone_token }}"
++    status_code: 200
++    return_content: true
++    validate_certs: true
++    ca_path: >-
++      {{ kolla_admin_openrc_cacert
++         if kolla_admin_openrc_cacert else omit }}
++  loop:
++    - power_ops.host_power_status
++    - power_ops.planned_power_off
++    - power_ops.planned_reboot
++    - power_ops.power_on_and_return
++  loop_control:
++    label: "{{ item }}"
++  register: powerops_workflow_reads
++  until: powerops_workflow_reads is success
++  retries: 12
++  delay: 5
++  no_log: true
++  run_once: true
++  delegate_to: localhost
++  when: powerops_validate_registration | bool
++
++- name: Validate registered PowerOps actions
++  ansible.builtin.assert:
++    that:
++      - >-
++        (powerops_action_reads.results | default([]) |
++         map(attribute='json.name') | list | unique | sort) ==
++        ['powerops.host_power_status', 'powerops.planned_power_off',
++         'powerops.planned_reboot', 'powerops.power_on_for_inspection',
++         'powerops.return_to_service']
++  no_log: true
++  run_once: true
++  delegate_to: localhost
++  when: powerops_validate_registration | bool
++
++- name: Validate each registered PowerOps workflow
++  ansible.builtin.assert:
++    that:
++      - item.json.workflows | default([]) | length == 1
++      - >-
++        (item.json.workflows | default([]) |
++         map(attribute='name') | list) == [item.item]
++      - >-
++        (item.json.workflows | default([]) |
++         map(attribute='project_id') | list) ==
++        [powerops_keystone_project_id]
++  loop: "{{ powerops_workflow_reads.results | default([]) }}"
++  loop_control:
++    label: "{{ item.item | default('missing workflow') }}"
++  no_log: true
++  run_once: true
++  delegate_to: localhost
++  when: powerops_validate_registration | bool
+diff --git a/kolla_ansible/tests/unit/test_powerops_registration.py b/kolla_ansible/tests/unit/test_powerops_registration.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..1c2e6494c788ab986291a56061aaea469278db5e
+--- /dev/null
++++ b/kolla_ansible/tests/unit/test_powerops_registration.py
+@@ -0,0 +1,776 @@
++# Licensed under the Apache License, Version 2.0 (the "License"); you may
++# not use this file except in compliance with the License. You may obtain
++# a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++import hashlib
++from pathlib import Path
++import re
++import unittest
++import warnings
++
++from ansible.parsing.dataloader import DataLoader
++from ansible.template import Templar
++import jinja2
++import yaml
++
++
++ROOT = Path(__file__).resolve().parents[3]
++MISTRAL_DEPLOY = ROOT / "ansible/roles/mistral/tasks/deploy.yml"
++MISTRAL_POWEROPS = ROOT / "ansible/roles/mistral/tasks/powerops.yml"
++MASAKARI_DEPLOY = ROOT / "ansible/roles/masakari/tasks/deploy.yml"
++MASAKARI_POWEROPS = ROOT / "ansible/roles/masakari/tasks/powerops.yml"
++WORKBOOK = ROOT / "ansible/roles/mistral/files/power_ops.yaml"
++
++ACTION_NAMES = [
++    "powerops.host_power_status",
++    "powerops.planned_power_off",
++    "powerops.planned_reboot",
++    "powerops.power_on_for_inspection",
++    "powerops.return_to_service",
++]
++WORKFLOW_NAMES = [
++    "power_ops.host_power_status",
++    "power_ops.planned_power_off",
++    "power_ops.planned_reboot",
++    "power_ops.power_on_and_return",
++]
++
++
++def _load_yaml(path):
++    return yaml.safe_load(path.read_text(encoding="utf-8"))
++
++
++def _named(tasks, name):
++    matches = [task for task in tasks if task.get("name") == name]
++    if len(matches) != 1:
++        raise AssertionError(
++            f"expected one task named {name!r}, found {len(matches)}"
++        )
++    return matches[0]
++
++
++def _normalise(value):
++    return " ".join(str(value).split())
++
++
++def _assert_controller_secret_task(test_case, task):
++    test_case.assertIs(task.get("no_log"), True)
++    test_case.assertIs(task.get("run_once"), True)
++    test_case.assertEqual("localhost", task.get("delegate_to"))
++
++
++def _template(value, variables):
++    templar = Templar(loader=DataLoader(), variables=variables)
++    with warnings.catch_warnings():
++        warnings.filterwarnings(
++            "ignore",
++            message="'crypt' is deprecated.*",
++            category=DeprecationWarning,
++            module="passlib.utils",
++        )
++        return templar.template(
++            value,
++            fail_on_undefined=True,
++        )
++
++
++def _conditions_pass(conditions, variables):
++    return all(
++        _template("{{ (%s) }}" % condition, variables) is True
++        for condition in conditions
++    )
++
++
++def _task_runs(task, variables):
++    conditions = task.get("when", True)
++    if not isinstance(conditions, list):
++        conditions = [conditions]
++    return _conditions_pass(conditions, variables)
++
++
++def _assertion_outcome(task, variables):
++    conditions = task["ansible.builtin.assert"]["that"]
++    return "passed" if _conditions_pass(conditions, variables) else "failed"
++
++
++class PowerOpsRegistrationTest(unittest.TestCase):
++
++    def test_registration_imports_run_after_handlers_and_are_guarded(self):
++        for path in (MISTRAL_DEPLOY, MASAKARI_DEPLOY):
++            with self.subTest(path=path):
++                tasks = _load_yaml(path)
++                flush_index = next(
++                    index for index, task in enumerate(tasks)
++                    if task.get("meta") == "flush_handlers"
++                )
++                imports = [
++                    (index, task) for index, task in enumerate(tasks)
++                    if task.get("import_tasks") == "powerops.yml"
++                ]
++                self.assertEqual(1, len(imports))
++                import_index, task = imports[0]
++                self.assertGreater(import_index, flush_index)
++                self.assertEqual("enable_powerops | bool", task.get("when"))
++
++    def test_entrypoint_checks_and_population_are_mandatory_and_exact(self):
++        mistral = _load_yaml(MISTRAL_POWEROPS)
++        check = _named(
++            mistral,
++            "Verify PowerOps Mistral action entry points",
++        )
++        populate = _named(mistral, "Populate Mistral action definitions")
++        self.assertLess(mistral.index(check), mistral.index(populate))
++        self.assertNotIn("when", check)
++        self.assertNotIn("when", populate)
++        self.assertIs(check.get("run_once"), True)
++        self.assertIs(populate.get("run_once"), True)
++        self.assertEqual(
++            "{{ groups[item.group][0] }}",
++            check.get("delegate_to"),
++        )
++        expected_targets = [
++            {"container": "mistral_api", "group": "mistral-api"},
++            {"container": "mistral_engine", "group": "mistral-engine"},
++            {
++                "container": "mistral_executor",
++                "group": "mistral-executor",
++            },
++        ]
++        self.assertEqual(expected_targets, check.get("loop"))
++        self.assertNotIn("mistral-event-engine", yaml.safe_dump(check))
++        self.assertEqual(
++            "{{ groups['mistral-api'][0] }}",
++            populate.get("delegate_to"),
++        )
++        self.assertIs(check.get("changed_when"), False)
++        self.assertIs(populate.get("changed_when"), False)
++        self.assertEqual(
++            "{{ kolla_container_engine }} exec mistral_api "
++            "mistral-db-manage --config-file "
++            "/etc/mistral/mistral.conf populate",
++            _normalise(populate["ansible.builtin.command"]),
++        )
++        command = _normalise(check["ansible.builtin.command"])
++        self.assertIn("exec {{ item.container }} python -c", command)
++        self.assertIn("m.entry_points(group='mistral.actions')", command)
++        for name in ACTION_NAMES:
++            self.assertIn(repr(name), command)
++
++        masakari = _load_yaml(MASAKARI_POWEROPS)
++        self.assertEqual(1, len(masakari))
++        check = _named(
++            masakari,
++            "Verify PowerOps Masakari fencing entry point",
++        )
++        self.assertNotIn("when", check)
++        self.assertIs(check.get("run_once"), True)
++        self.assertIs(check.get("changed_when"), False)
++        self.assertEqual(
++            "{{ groups['masakari-engine'][0] }}",
++            check.get("delegate_to"),
++        )
++        command = _normalise(check["ansible.builtin.command"])
++        self.assertIn(
++            "m.entry_points(group='masakari.task_flow.tasks')",
++            command,
++        )
++        self.assertIn("assert 'ironic_fence' in found", command)
++
++    def test_keystone_v3_authentication_is_scoped_and_secret(self):
++        tasks = _load_yaml(MISTRAL_POWEROPS)
++        auth = _named(tasks, "Authenticate PowerOps workbook reconciliation")
++        store = _named(tasks, "Store protected PowerOps token")
++        _assert_controller_secret_task(self, auth)
++        _assert_controller_secret_task(self, store)
++
++        uri = auth["ansible.builtin.uri"]
++        environment = jinja2.Environment(  # nosec: local expression fixture
++            undefined=jinja2.StrictUndefined,
++        )
++        environment.filters["regex_replace"] = (
++            lambda value, pattern, replacement: re.sub(
++                pattern,
++                replacement,
++                value,
++            )
++        )
++        template = environment.from_string(uri["url"])
++        for source in (
++                "https://keystone.internal:5000",
++                "https://keystone.internal:5000/",
++                "https://keystone.internal:5000/v3",
++                "https://keystone.internal:5000/v3/"):
++            with self.subTest(source=source):
++                self.assertEqual(
++                    "https://keystone.internal:5000/v3/auth/tokens",
++                    template.render(
++                        openstack_mistral_auth={"auth_url": source},
++                    ),
++                )
++
++        self.assertEqual("POST", uri["method"])
++        self.assertEqual("json", uri["body_format"])
++        self.assertEqual(201, uri["status_code"])
++        auth_body = uri["body"]["auth"]
++        self.assertEqual(["password"], auth_body["identity"]["methods"])
++        user = auth_body["identity"]["password"]["user"]
++        project = auth_body["scope"]["project"]
++        self.assertEqual(
++            "{{ openstack_mistral_auth.user_domain_name }}",
++            user["domain"]["name"],
++        )
++        self.assertEqual(
++            "{{ openstack_mistral_auth.domain_name }}",
++            project["domain"]["name"],
++        )
++        self.assertNotIn("project_domain_name", yaml.safe_dump(auth))
++
++        expected_guard = (
++            "powerops_reconcile_workbook | bool or "
++            "powerops_validate_registration | bool"
++        )
++        self.assertEqual(expected_guard, _normalise(auth["when"]))
++        self.assertEqual(expected_guard, _normalise(store["when"]))
++        self.assertEqual(
++            "{{ powerops_keystone_auth.x_subject_token }}",
++            _normalise(
++                store["ansible.builtin.set_fact"][
++                    "powerops_keystone_token"
++                ]
++            ),
++        )
++        self.assertEqual(
++            "{{ powerops_keystone_auth.json.token.project.id }}",
++            _normalise(
++                store["ansible.builtin.set_fact"][
++                    "powerops_keystone_project_id"
++                ]
++            ),
++        )
++
++    def test_workbook_reconciliation_is_raw_public_and_idempotent(self):
++        tasks = _load_yaml(MISTRAL_POWEROPS)
++        load = _named(tasks, "Load PowerOps workbook definition")
++        read = _named(tasks, "List matching PowerOps workbooks")
++        store = _named(tasks, "Store matching PowerOps workbooks")
++        ownership = _named(tasks, "Validate PowerOps workbook ownership")
++        create = _named(tasks, "Create PowerOps workbook")
++        update = _named(tasks, "Update changed PowerOps workbook")
++
++        fact = load["ansible.builtin.set_fact"][
++            "powerops_workbook_definition"
++        ]
++        self.assertIn("lookup('ansible.builtin.file'", _normalise(fact))
++        self.assertIn("rstrip=False", _normalise(fact))
++        self.assertEqual("powerops_reconcile_workbook | bool", load["when"])
++        self.assertIs(load.get("run_once"), True)
++        self.assertEqual("localhost", load.get("delegate_to"))
++
++        for task in (read, store, ownership, create, update):
++            _assert_controller_secret_task(self, task)
++        read_uri = read["ansible.builtin.uri"]
++        self.assertEqual(
++            "{{ mistral_internal_endpoint }}"
++            "/workbooks?name=power_ops&namespace=",
++            read_uri["url"],
++        )
++        self.assertEqual("GET", read_uri["method"])
++        self.assertEqual(200, read_uri["status_code"])
++        self.assertNotIn("limit=", read_uri["url"])
++
++        matching = store["ansible.builtin.set_fact"][
++            "powerops_matching_workbooks"
++        ]
++        self.assertIn(
++            "powerops_workbook_list.json.workbooks | default([])",
++            _normalise(matching),
++        )
++        self.assertIn(
++            "selectattr('name', 'equalto', 'power_ops')",
++            _normalise(matching),
++        )
++        self.assertIn(
++            "selectattr('namespace', 'equalto', '')",
++            _normalise(matching),
++        )
++        ownership_assertions = [
++            _normalise(item)
++            for item in ownership["ansible.builtin.assert"]["that"]
++        ]
++        self.assertEqual(
++            [
++                "powerops_matching_workbooks | length <= 1",
++                "powerops_matching_workbooks | length == 0 or "
++                "powerops_matching_workbooks[0].project_id == "
++                "powerops_keystone_project_id",
++            ],
++            ownership_assertions,
++        )
++        self.assertLess(tasks.index(read), tasks.index(store))
++        self.assertLess(tasks.index(store), tasks.index(ownership))
++        self.assertLess(tasks.index(ownership), tasks.index(create))
++        self.assertLess(tasks.index(ownership), tasks.index(update))
++        self.assertNotIn("/workbooks/power_ops", yaml.safe_dump(tasks))
++
++        for task, method, status in (
++                (create, "POST", 201),
++                (update, "PUT", 200)):
++            uri = task["ansible.builtin.uri"]
++            self.assertEqual(
++                "{{ mistral_internal_endpoint }}/workbooks?scope=public",
++                uri["url"],
++            )
++            self.assertEqual(method, uri["method"])
++            self.assertEqual(status, uri["status_code"])
++            self.assertEqual("text/plain", uri["headers"]["Content-Type"])
++            self.assertEqual("raw", uri["body_format"])
++            self.assertEqual(
++                "{{ powerops_workbook_definition }}",
++                uri["body"],
++            )
++
++        create_when = [_normalise(item) for item in create["when"]]
++        update_when = [_normalise(item) for item in update["when"]]
++        self.assertEqual(
++            [
++                "powerops_reconcile_workbook | bool",
++                "powerops_matching_workbooks | length == 0",
++            ],
++            create_when,
++        )
++        self.assertEqual(
++            [
++                "powerops_reconcile_workbook | bool",
++                "powerops_matching_workbooks | length == 1",
++                "powerops_matching_workbooks[0].project_id == "
++                "powerops_keystone_project_id",
++                "powerops_matching_workbooks[0].definition | "
++                "default('') != powerops_workbook_definition or "
++                "powerops_matching_workbooks[0].scope | default('') "
++                "!= 'public'",
++            ],
++            update_when,
++        )
++
++    def test_workbook_ownership_guards_use_ansible_semantics(self):
++        tasks = _load_yaml(MISTRAL_POWEROPS)
++        store = _named(tasks, "Store matching PowerOps workbooks")
++        ownership = _named(tasks, "Validate PowerOps workbook ownership")
++        create = _named(tasks, "Create PowerOps workbook")
++        update = _named(tasks, "Update changed PowerOps workbook")
++        own_exact = {
++            "name": "power_ops",
++            "namespace": "",
++            "project_id": "project-own",
++            "definition": "expected definition",
++            "scope": "public",
++        }
++        own_changed = dict(own_exact, definition="old definition")
++        own_private = dict(own_exact, scope="private")
++        foreign = dict(own_exact, project_id="project-foreign")
++        cases = (
++            ("none", [], "passed", True, False),
++            ("own exact public", [own_exact], "passed", False, False),
++            ("own changed", [own_changed], "passed", False, True),
++            ("own private", [own_private], "passed", False, True),
++            ("foreign only", [foreign], "failed", False, False),
++            (
++                "own and foreign",
++                [own_exact, foreign],
++                "failed",
++                False,
++                False,
++            ),
++        )
++        for name, matches, assertion, creates, updates in cases:
++            with self.subTest(name=name):
++                variables = {
++                    "powerops_reconcile_workbook": "yes",
++                    "powerops_matching_workbooks": matches,
++                    "powerops_keystone_project_id": "project-own",
++                    "powerops_workbook_definition": "expected definition",
++                }
++                self.assertEqual(
++                    assertion,
++                    _assertion_outcome(ownership, variables),
++                )
++                self.assertIs(creates, _task_runs(create, variables))
++                self.assertIs(updates, _task_runs(update, variables))
++
++        raw_workbooks = [
++            own_exact,
++            foreign,
++            dict(own_exact, name="not_power_ops"),
++            dict(own_exact, namespace="other"),
++        ]
++        selected = _template(
++            store["ansible.builtin.set_fact"][
++                "powerops_matching_workbooks"
++            ],
++            {
++                "powerops_workbook_list": {
++                    "json": {"workbooks": raw_workbooks},
++                },
++            },
++        )
++        self.assertEqual([own_exact, foreign], selected)
++
++    def test_update_declares_companion_owner_scope_dependency(self):
++        text = MISTRAL_POWEROPS.read_text(encoding="utf-8")
++
++        self.assertIn(
++            "SECURITY CONTRACT: the companion Mistral owner-scoped update "
++            "patch",
++            text,
++        )
++        self.assertIn(
++            "The preceding ownership assertion does not close the TOCTOU "
++            "window.",
++            text,
++        )
++
++    def test_validation_reads_each_exact_catalogue_resource(self):
++        tasks = _load_yaml(MISTRAL_POWEROPS)
++        actions = _named(tasks, "Read registered PowerOps actions")
++        workflows = _named(tasks, "Read registered PowerOps workflows")
++        validate_actions = _named(
++            tasks, "Validate registered PowerOps actions"
++        )
++        validate_workflows = _named(
++            tasks, "Validate each registered PowerOps workflow"
++        )
++        for task in (
++                actions, workflows, validate_actions, validate_workflows):
++            _assert_controller_secret_task(self, task)
++            self.assertEqual(
++                "powerops_validate_registration | bool",
++                task["when"],
++            )
++
++        self.assertEqual(ACTION_NAMES, actions["loop"])
++        self.assertEqual(WORKFLOW_NAMES, workflows["loop"])
++        self.assertEqual(
++            "{{ mistral_internal_endpoint }}/actions/{{ item }}",
++            actions["ansible.builtin.uri"]["url"],
++        )
++        self.assertEqual(
++            "{{ mistral_internal_endpoint }}"
++            "/workflows?name={{ item }}&namespace=",
++            workflows["ansible.builtin.uri"]["url"],
++        )
++        self.assertNotIn("limit=", workflows["ansible.builtin.uri"]["url"])
++        self.assertEqual("GET", actions["ansible.builtin.uri"]["method"])
++        self.assertEqual("GET", workflows["ansible.builtin.uri"]["method"])
++        self.assertEqual(200, actions["ansible.builtin.uri"]["status_code"])
++        self.assertEqual(200, workflows["ansible.builtin.uri"]["status_code"])
++
++        action_assertions = [
++            _normalise(item)
++            for item in validate_actions["ansible.builtin.assert"]["that"]
++        ]
++        self.assertEqual(1, len(action_assertions))
++        self.assertIn("powerops_action_reads.results", action_assertions[0])
++        self.assertIn(repr(sorted(ACTION_NAMES)), action_assertions[0])
++
++        workflow_assertions = [
++            _normalise(item)
++            for item in validate_workflows[
++                "ansible.builtin.assert"
++            ]["that"]
++        ]
++        self.assertEqual(
++            "{{ powerops_workflow_reads.results | default([]) }}",
++            validate_workflows["loop"],
++        )
++        self.assertEqual(3, len(workflow_assertions))
++        self.assertIn("item.json.workflows", workflow_assertions[0])
++        self.assertIn("length == 1", workflow_assertions[0])
++        self.assertIn("map(attribute='name')", workflow_assertions[1])
++        self.assertIn("== [item.item]", workflow_assertions[1])
++        self.assertIn("map(attribute='project_id')", workflow_assertions[2])
++        self.assertIn(
++            "== [powerops_keystone_project_id]",
++            workflow_assertions[2],
++        )
++
++    def test_every_token_consumer_is_hidden_on_the_controller(self):
++        tasks = _load_yaml(MISTRAL_POWEROPS)
++        secret_task_names = {
++            "Authenticate PowerOps workbook reconciliation",
++            "Store protected PowerOps token",
++            "List matching PowerOps workbooks",
++            "Store matching PowerOps workbooks",
++            "Validate PowerOps workbook ownership",
++            "Create PowerOps workbook",
++            "Update changed PowerOps workbook",
++            "Read registered PowerOps actions",
++            "Read registered PowerOps workflows",
++            "Validate registered PowerOps actions",
++            "Validate each registered PowerOps workflow",
++        }
++        token_consumers = {
++            task["name"] for task in tasks
++            if "powerops_keystone_token" in yaml.safe_dump(task)
++        }
++        self.assertLessEqual(token_consumers, secret_task_names)
++        for name in secret_task_names:
++            _assert_controller_secret_task(self, _named(tasks, name))
++
++    def test_all_http_calls_verify_tls_and_mistral_calls_use_token(self):
++        tasks = _load_yaml(MISTRAL_POWEROPS)
++        uri_tasks = [
++            task for task in tasks if "ansible.builtin.uri" in task
++        ]
++        self.assertEqual(6, len(uri_tasks))
++        ca_expression = uri_tasks[0]["ansible.builtin.uri"]["ca_path"]
++        self.assertEqual(
++            "__omit__",
++            _template(
++                ca_expression,
++                {"kolla_admin_openrc_cacert": "", "omit": "__omit__"},
++            ),
++        )
++        self.assertEqual(
++            "/etc/ssl/controller-ca.pem",
++            _template(
++                ca_expression,
++                {
++                    "kolla_admin_openrc_cacert": (
++                        "/etc/ssl/controller-ca.pem"
++                    ),
++                    "omit": "__omit__",
++                },
++            ),
++        )
++        for task in uri_tasks:
++            uri = task["ansible.builtin.uri"]
++            self.assertIs(uri.get("validate_certs"), True)
++            self.assertEqual(
++                "{{ kolla_admin_openrc_cacert "
++                "if kolla_admin_openrc_cacert else omit }}",
++                _normalise(uri.get("ca_path")),
++            )
++            self.assertNotIn("openstack_cacert", uri["ca_path"])
++            if "mistral_internal_endpoint" in uri["url"]:
++                self.assertEqual(
++                    "{{ powerops_keystone_token }}",
++                    uri.get("headers", {}).get("X-Auth-Token"),
++                )
++
++    def test_controller_ca_preflight_fails_closed_when_configured(self):
++        tasks = _load_yaml(MISTRAL_POWEROPS)
++        check = _named(tasks, "Check PowerOps controller CA certificate")
++        validate = _named(
++            tasks, "Validate PowerOps controller CA certificate"
++        )
++        self.assertIs(check.get("run_once"), True)
++        self.assertEqual("localhost", check.get("delegate_to"))
++        self.assertIs(validate.get("run_once"), True)
++        self.assertEqual("localhost", validate.get("delegate_to"))
++        self.assertEqual(
++            "{{ kolla_admin_openrc_cacert }}",
++            check["ansible.builtin.stat"]["path"],
++        )
++        self.assertFalse(check["ansible.builtin.stat"]["get_checksum"])
++        self.assertIs(check["ansible.builtin.stat"]["follow"], True)
++        self.assertEqual(
++            [
++                "powerops_controller_ca.stat.exists | default(false)",
++                "powerops_controller_ca.stat.isreg | default(false)",
++                "powerops_controller_ca.stat.readable | default(false)",
++            ],
++            [
++                _normalise(item)
++                for item in validate["ansible.builtin.assert"]["that"]
++            ],
++        )
++
++        disabled = {
++            "powerops_reconcile_workbook": "yes",
++            "powerops_validate_registration": "yes",
++            "kolla_admin_openrc_cacert": "",
++        }
++        self.assertFalse(_task_runs(check, disabled))
++        self.assertFalse(_task_runs(validate, disabled))
++
++        configured = dict(
++            disabled,
++            kolla_admin_openrc_cacert="/etc/ssl/controller-ca.pem",
++        )
++        self.assertTrue(_task_runs(check, configured))
++        readable_target = dict(
++            configured,
++            powerops_controller_ca={
++                "stat": {
++                    "exists": True,
++                    "isreg": True,
++                    "readable": True,
++                },
++            },
++        )
++        unreadable_target = dict(
++            configured,
++            powerops_controller_ca={
++                "stat": {
++                    "exists": True,
++                    "isreg": True,
++                    "readable": False,
++                },
++            },
++        )
++        symlink_follow_result = dict(
++            configured,
++            powerops_controller_ca={
++                "stat": {
++                    "exists": True,
++                    "isreg": True,
++                    "readable": True,
++                    "islnk": True,
++                },
++            },
++        )
++        self.assertEqual(
++            "passed",
++            _assertion_outcome(validate, readable_target),
++        )
++        self.assertEqual(
++            "failed",
++            _assertion_outcome(validate, unreadable_target),
++        )
++        self.assertEqual(
++            "passed",
++            _assertion_outcome(validate, symlink_follow_result),
++        )
++
++    def test_readiness_reads_retry_but_mutations_do_not(self):
++        tasks = _load_yaml(MISTRAL_POWEROPS)
++        retry_reads = {
++            "List matching PowerOps workbooks": "powerops_workbook_list",
++            "Read registered PowerOps actions": "powerops_action_reads",
++            "Read registered PowerOps workflows": "powerops_workflow_reads",
++        }
++        for name, result in retry_reads.items():
++            task = _named(tasks, name)
++            self.assertEqual(f"{result} is success", task.get("until"))
++            self.assertEqual(12, task.get("retries"))
++            self.assertEqual(5, task.get("delay"))
++
++        for name in (
++                "Create PowerOps workbook",
++                "Update changed PowerOps workbook"):
++            task = _named(tasks, name)
++            self.assertNotIn("until", task)
++            self.assertNotIn("retries", task)
++            self.assertNotIn("delay", task)
++
++    def test_registration_never_executes_workflows_or_cloud_mutations(self):
++        allowed_modules = {
++            "ansible.builtin.assert",
++            "ansible.builtin.command",
++            "ansible.builtin.set_fact",
++            "ansible.builtin.stat",
++            "ansible.builtin.uri",
++        }
++        all_tasks = []
++        for path in (MISTRAL_POWEROPS, MASAKARI_POWEROPS):
++            all_tasks.extend(_load_yaml(path))
++        modules = {
++            key for task in all_tasks for key in task
++            if key.startswith("ansible.builtin.")
++        }
++        self.assertLessEqual(modules, allowed_modules)
++
++        role_tasks = []
++        for role in ("mistral", "masakari"):
++            task_directory = ROOT / "ansible/roles" / role / "tasks"
++            for path in task_directory.glob("*.yml"):
++                role_tasks.extend(_load_yaml(path) or [])
++        serialised = yaml.safe_dump(role_tasks).lower()
++        for forbidden in (
++                "/executions",
++                "workflow create execution",
++                "baremetal node power",
++                "server evacuate",
++                "server migrate",
++                "server stop",
++                "server start"):
++            self.assertNotIn(forbidden, serialised)
++
++        for task in all_tasks:
++            uri = task.get("ansible.builtin.uri")
++            if not uri or uri.get("method") == "GET":
++                continue
++            self.assertIn(
++                _normalise(uri["url"]),
++                {
++                    "{{ openstack_mistral_auth.auth_url | "
++                    "regex_replace('/v3/?$', '') | "
++                    "regex_replace('/+$', '') }}/v3/auth/tokens",
++                    "{{ mistral_internal_endpoint }}"
++                    "/workbooks?scope=public",
++                },
++            )
++
++    def test_workbook_is_exact_and_preserves_operator_return_gate(self):
++        content = WORKBOOK.read_bytes()
++        self.assertEqual(
++            "26c9f2a072827b5c342dcc1d51aacf5995110054a400efe3d68df0563f3e7921",
++            hashlib.sha256(content).hexdigest(),
++        )
++        workbook = yaml.safe_load(content)
++        self.assertEqual("2.0", workbook["version"])
++        self.assertEqual("power_ops", workbook["name"])
++        self.assertEqual(
++            {name.removeprefix("power_ops.") for name in WORKFLOW_NAMES},
++            set(workbook["workflows"]),
++        )
++
++        expected_actions = {
++            "host_power_status": ("status", "powerops.host_power_status"),
++            "planned_power_off": ("power_off", "powerops.planned_power_off"),
++            "planned_reboot": ("reboot", "powerops.planned_reboot"),
++        }
++        for workflow_name, action_details in expected_actions.items():
++            task_name, action_name = action_details
++            self.assertEqual(
++                action_name,
++                workbook["workflows"][workflow_name]["tasks"][task_name][
++                    "action"
++                ],
++            )
++
++        return_tasks = workbook["workflows"]["power_on_and_return"]["tasks"]
++        self.assertEqual(
++            "powerops.power_on_for_inspection",
++            return_tasks["power_on_for_inspection"]["action"],
++        )
++        self.assertEqual(
++            "std.noop",
++            return_tasks["operator_inspection_gate"]["action"],
++        )
++        self.assertIs(
++            return_tasks["operator_inspection_gate"]["pause-before"],
++            True,
++        )
++        self.assertEqual(
++            "powerops.return_to_service",
++            return_tasks["return_to_service"]["action"],
++        )
++        self.assertEqual(
++            "<% env().get('stale_domains_checked', false) %>",
++            return_tasks["return_to_service"]["input"][
++                "stale_domains_checked"
++            ],
++        )
++
++
++if __name__ == "__main__":
++    unittest.main()
+-- 
+2.49.0
+

@@ -1,0 +1,850 @@
+From 110b99e08169e100e511fefb677731d844238bfc Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Tue, 1 Sep 2026 09:05:49 +0300
+Subject: [PATCH 2/5] feat: define Kolla PowerOps deployment contract
+
+---
+ ansible/group_vars/all.yml                    |  33 ++
+ ansible/roles/masakari/defaults/main.yml      |   4 +-
+ ansible/roles/masakari/tasks/precheck.yml     |  56 ++
+ ansible/roles/mistral/defaults/main.yml       |  12 +-
+ ansible/roles/mistral/tasks/precheck.yml      |  65 +++
+ ansible/roles/prechecks/tasks/main.yml        |   2 +
+ .../roles/prechecks/tasks/powerops_checks.yml |  12 +
+ etc/kolla/globals.yml                         |  35 ++
+ .../test_powerops_configuration_contract.py   | 510 ++++++++++++++++++
+ 9 files changed, 725 insertions(+), 4 deletions(-)
+ create mode 100644 ansible/roles/prechecks/tasks/powerops_checks.yml
+ create mode 100644 kolla_ansible/tests/unit/test_powerops_configuration_contract.py
+
+diff --git a/ansible/group_vars/all.yml b/ansible/group_vars/all.yml
+index 2e518111a8a202afa6170a92cd148ada08ba5be0..ce0f7c63b95fdc18f96d38c812bb9696ea67e4e1 100644
+--- a/ansible/group_vars/all.yml
++++ b/ansible/group_vars/all.yml
+@@ -1214,6 +1214,39 @@ enable_venus: "no"
+ enable_watcher: "yes"
+ enable_zun: "no"
+ 
++####################
++# PowerOps options
++####################
++enable_powerops: "no"
++
++powerops_coordination_url: >-
++  etcd3+{{ internal_protocol }}://{{ kolla_internal_fqdn }}:{{ etcd_client_port }}?api_version=v3{% if openstack_cacert %}&ca_cert={{ openstack_cacert }}{% endif %}
++powerops_host_lock_timeout: 30
++powerops_evacuation_lock_timeout: 3600
++powerops_evacuation_interval: 5
++powerops_power_timeout: 180
++powerops_poll_interval: 5
++powerops_stable_observations: 3
++powerops_graceful_shutdown_timeout: 300
++powerops_vm_action_timeout: 600
++powerops_service_timeout: 300
++powerops_instance_interval: 5
++powerops_reconcile_workbook: "yes"
++powerops_validate_registration: "yes"
++powerops_allowed_project_names:
++  - "{{ openstack_auth.project_name }}"
++powerops_allowed_user_names:
++  - "{{ openstack_auth.username }}"
++
++powerops_masakari_engine_image: ""
++powerops_masakari_engine_tag: ""
++powerops_mistral_api_image: ""
++powerops_mistral_api_tag: ""
++powerops_mistral_engine_image: ""
++powerops_mistral_engine_tag: ""
++powerops_mistral_executor_image: ""
++powerops_mistral_executor_tag: ""
++
+ ovs_datapath: "{{ 'netdev' if enable_ovs_dpdk | bool else 'system' }}"
+ designate_keystone_user: "designate"
+ ironic_keystone_user: "ironic"
+diff --git a/ansible/roles/masakari/defaults/main.yml b/ansible/roles/masakari/defaults/main.yml
+index 3cdfaaa008da12b8545c8379440edb4a4024f96e..8fc16accfd0528702b3049cf002253fee26ccd68 100644
+--- a/ansible/roles/masakari/defaults/main.yml
++++ b/ansible/roles/masakari/defaults/main.yml
+@@ -29,7 +29,9 @@ masakari_services:
+     container_name: masakari_engine
+     group: masakari-engine
+     enabled: true
+-    image: "{{ masakari_engine_image_full }}"
++    image: >-
++      {{ powerops_masakari_engine_image ~ ':' ~ powerops_masakari_engine_tag
++         if enable_powerops | bool else masakari_engine_image_full }}
+     volumes: "{{ masakari_engine_default_volumes + masakari_engine_extra_volumes }}"
+     dimensions: "{{ masakari_engine_dimensions }}"
+   masakari-instancemonitor:
+diff --git a/ansible/roles/masakari/tasks/precheck.yml b/ansible/roles/masakari/tasks/precheck.yml
+index 65fce1794c518efe345c98ec5d2bd6117edbd0c4..5afa541cb14cb58dafd74c9c26e8ffe327c5e8dd 100644
+--- a/ansible/roles/masakari/tasks/precheck.yml
++++ b/ansible/roles/masakari/tasks/precheck.yml
+@@ -1,4 +1,60 @@
+ ---
++- name: Validate PowerOps service and coordination dependencies
++  ansible.builtin.assert:
++    that:
++      - enable_ironic | bool
++      - enable_masakari | bool
++      - enable_mistral | bool
++      - enable_etcd | bool
++      - powerops_coordination_url is string
++      - powerops_coordination_url | trim | length > 0
++      - powerops_coordination_url | regex_findall('\?') | length == 1
++      - >-
++        powerops_coordination_url |
++        regex_search(
++          '^etcd3\+https?://(?:\[[0-9A-Fa-f:]+\]|[^\s:/?]+):[0-9]+\?api_version=v3(?:&ca_cert=[^\s&?]+)?$'
++        ) is not none
++      - (powerops_allowed_project_names | type_debug) == 'list'
++      - powerops_allowed_project_names | length > 0
++      - >-
++        powerops_allowed_project_names | select('string') | list | length
++        == powerops_allowed_project_names | length
++      - >-
++        powerops_allowed_project_names | select('string') | map('trim') |
++        reject('equalto', '') | list | length
++        == powerops_allowed_project_names | length
++      - >-
++        powerops_allowed_project_names | select('string') | map('trim') | list
++        == powerops_allowed_project_names
++      - >-
++        powerops_allowed_project_names |
++        select('string') | select('match', '^[^,]*$') | list | length
++        == powerops_allowed_project_names | length
++      - (powerops_allowed_user_names | type_debug) == 'list'
++      - powerops_allowed_user_names | length > 0
++      - >-
++        powerops_allowed_user_names | select('string') | list | length
++        == powerops_allowed_user_names | length
++      - >-
++        powerops_allowed_user_names | select('string') | map('trim') |
++        reject('equalto', '') | list | length
++        == powerops_allowed_user_names | length
++      - >-
++        powerops_allowed_user_names | select('string') | map('trim') | list
++        == powerops_allowed_user_names
++      - >-
++        powerops_allowed_user_names |
++        select('string') | select('match', '^[^,]*$') | list | length
++        == powerops_allowed_user_names | length
++      - powerops_masakari_engine_image is string
++      - powerops_masakari_engine_image | trim | length > 0
++      - powerops_masakari_engine_tag is string
++      - powerops_masakari_engine_tag | trim | length > 0
++    fail_msg: >-
++      PowerOps requires Ironic, Masakari, Mistral and etcd coordination,
++      exact non-empty caller allowlists, and a patched Masakari Engine image.
++  when: enable_powerops | bool
++
+ - import_role:
+     name: service-precheck
+   vars:
+diff --git a/ansible/roles/mistral/defaults/main.yml b/ansible/roles/mistral/defaults/main.yml
+index 563efb8ef0c7b7955bbd0e12c5c82becc2144ee5..cf81259ebf58d1de7dff5dd9887b079db69e538e 100644
+--- a/ansible/roles/mistral/defaults/main.yml
++++ b/ansible/roles/mistral/defaults/main.yml
+@@ -4,7 +4,9 @@ mistral_services:
+     container_name: mistral_api
+     group: mistral-api
+     enabled: true
+-    image: "{{ mistral_api_image_full }}"
++    image: >-
++      {{ powerops_mistral_api_image ~ ':' ~ powerops_mistral_api_tag
++         if enable_powerops | bool else mistral_api_image_full }}
+     volumes: "{{ mistral_api_default_volumes + mistral_api_extra_volumes }}"
+     dimensions: "{{ mistral_api_dimensions }}"
+     healthcheck: "{{ mistral_api_healthcheck }}"
+@@ -30,7 +32,9 @@ mistral_services:
+     container_name: mistral_engine
+     group: mistral-engine
+     enabled: true
+-    image: "{{ mistral_engine_image_full }}"
++    image: >-
++      {{ powerops_mistral_engine_image ~ ':' ~ powerops_mistral_engine_tag
++         if enable_powerops | bool else mistral_engine_image_full }}
+     volumes: "{{ mistral_engine_default_volumes + mistral_engine_extra_volumes }}"
+     dimensions: "{{ mistral_engine_dimensions }}"
+     healthcheck: "{{ mistral_engine_healthcheck }}"
+@@ -46,7 +50,9 @@ mistral_services:
+     container_name: mistral_executor
+     group: mistral-executor
+     enabled: true
+-    image: "{{ mistral_executor_image_full }}"
++    image: >-
++      {{ powerops_mistral_executor_image ~ ':' ~ powerops_mistral_executor_tag
++         if enable_powerops | bool else mistral_executor_image_full }}
+     volumes: "{{ mistral_executor_default_volumes + mistral_executor_extra_volumes }}"
+     dimensions: "{{ mistral_executor_dimensions }}"
+     healthcheck: "{{ mistral_executor_healthcheck }}"
+diff --git a/ansible/roles/mistral/tasks/precheck.yml b/ansible/roles/mistral/tasks/precheck.yml
+index 5ffb84ae7af8e5f7676596189f99ba2a66b5db13..70301fba898cc5414ad60f9e3c41f7656f067492 100644
+--- a/ansible/roles/mistral/tasks/precheck.yml
++++ b/ansible/roles/mistral/tasks/precheck.yml
+@@ -1,4 +1,69 @@
+ ---
++- name: Validate PowerOps service and coordination dependencies
++  ansible.builtin.assert:
++    that:
++      - enable_ironic | bool
++      - enable_masakari | bool
++      - enable_mistral | bool
++      - enable_etcd | bool
++      - powerops_coordination_url is string
++      - powerops_coordination_url | trim | length > 0
++      - powerops_coordination_url | regex_findall('\?') | length == 1
++      - >-
++        powerops_coordination_url |
++        regex_search(
++          '^etcd3\+https?://(?:\[[0-9A-Fa-f:]+\]|[^\s:/?]+):[0-9]+\?api_version=v3(?:&ca_cert=[^\s&?]+)?$'
++        ) is not none
++      - (powerops_allowed_project_names | type_debug) == 'list'
++      - powerops_allowed_project_names | length > 0
++      - >-
++        powerops_allowed_project_names | select('string') | list | length
++        == powerops_allowed_project_names | length
++      - >-
++        powerops_allowed_project_names | select('string') | map('trim') |
++        reject('equalto', '') | list | length
++        == powerops_allowed_project_names | length
++      - >-
++        powerops_allowed_project_names | select('string') | map('trim') | list
++        == powerops_allowed_project_names
++      - >-
++        powerops_allowed_project_names |
++        select('string') | select('match', '^[^,]*$') | list | length
++        == powerops_allowed_project_names | length
++      - (powerops_allowed_user_names | type_debug) == 'list'
++      - powerops_allowed_user_names | length > 0
++      - >-
++        powerops_allowed_user_names | select('string') | list | length
++        == powerops_allowed_user_names | length
++      - >-
++        powerops_allowed_user_names | select('string') | map('trim') |
++        reject('equalto', '') | list | length
++        == powerops_allowed_user_names | length
++      - >-
++        powerops_allowed_user_names | select('string') | map('trim') | list
++        == powerops_allowed_user_names
++      - >-
++        powerops_allowed_user_names |
++        select('string') | select('match', '^[^,]*$') | list | length
++        == powerops_allowed_user_names | length
++      - powerops_mistral_api_image is string
++      - powerops_mistral_api_image | trim | length > 0
++      - powerops_mistral_api_tag is string
++      - powerops_mistral_api_tag | trim | length > 0
++      - powerops_mistral_engine_image is string
++      - powerops_mistral_engine_image | trim | length > 0
++      - powerops_mistral_engine_tag is string
++      - powerops_mistral_engine_tag | trim | length > 0
++      - powerops_mistral_executor_image is string
++      - powerops_mistral_executor_image | trim | length > 0
++      - powerops_mistral_executor_tag is string
++      - powerops_mistral_executor_tag | trim | length > 0
++    fail_msg: >-
++      PowerOps requires Ironic, Masakari, Mistral and etcd coordination,
++      exact non-empty caller allowlists, and patched Mistral API, Engine and
++      Executor images.
++  when: enable_powerops | bool
++
+ - import_role:
+     name: service-precheck
+   vars:
+diff --git a/ansible/roles/prechecks/tasks/main.yml b/ansible/roles/prechecks/tasks/main.yml
+index 01bf0e16cd91aadad77eb43ce6942de34bb7fc38..5d5daae12aa15c93917baa8f342fa685cf20b370 100644
+--- a/ansible/roles/prechecks/tasks/main.yml
++++ b/ansible/roles/prechecks/tasks/main.yml
+@@ -1,6 +1,8 @@
+ ---
+ - import_tasks: inventory_checks.yml
+ 
++- import_tasks: powerops_checks.yml
++
+ - include_tasks: host_os_checks.yml
+   when: prechecks_enable_host_os_checks | bool
+ 
+diff --git a/ansible/roles/prechecks/tasks/powerops_checks.yml b/ansible/roles/prechecks/tasks/powerops_checks.yml
+new file mode 100644
+index 0000000000000000000000000000000000000000..74eae76921780cfb5c7b236d27a318ce8e1ce0f0
+--- /dev/null
++++ b/ansible/roles/prechecks/tasks/powerops_checks.yml
+@@ -0,0 +1,12 @@
++---
++- name: Validate global PowerOps dependencies
++  ansible.builtin.assert:
++    that:
++      - enable_ironic | bool
++      - enable_masakari | bool
++      - enable_mistral | bool
++      - enable_etcd | bool
++    fail_msg: >-
++      PowerOps requires Ironic, Masakari, Mistral and etcd coordination.
++  run_once: true
++  when: enable_powerops | bool
+diff --git a/etc/kolla/globals.yml b/etc/kolla/globals.yml
+index 235e3e5be7ed1ac1bb1bba2037c0d61c86b321e0..b941052ae7b25d800640fb3d4a4a7f9e34605c05 100644
+--- a/etc/kolla/globals.yml
++++ b/etc/kolla/globals.yml
+@@ -452,6 +452,41 @@ ironic_conductor_extra_volumes: []
+ #enable_watcher: "no"
+ #enable_zun: "no"
+ 
++####################
++# PowerOps options
++####################
++#enable_powerops: "no"
++
++#powerops_coordination_url: >-
++#  etcd3+{{ internal_protocol }}://{{ kolla_internal_fqdn }}:{{ etcd_client_port }}?api_version=v3{% if openstack_cacert %}&ca_cert={{ openstack_cacert }}{% endif %}
++#powerops_host_lock_timeout: 30
++#powerops_evacuation_lock_timeout: 3600
++#powerops_evacuation_interval: 5
++#powerops_power_timeout: 180
++#powerops_poll_interval: 5
++#powerops_stable_observations: 3
++#powerops_graceful_shutdown_timeout: 300
++#powerops_vm_action_timeout: 600
++#powerops_service_timeout: 300
++#powerops_instance_interval: 5
++#powerops_reconcile_workbook: "yes"
++#powerops_validate_registration: "yes"
++#powerops_allowed_project_names:
++#  - "{{ openstack_auth.project_name }}"
++#powerops_allowed_user_names:
++#  - "{{ openstack_auth.username }}"
++
++# Patched image repositories and tags are operator-supplied when PowerOps is
++# enabled. Empty examples intentionally prevent accidental image selection.
++#powerops_masakari_engine_image: ""
++#powerops_masakari_engine_tag: ""
++#powerops_mistral_api_image: ""
++#powerops_mistral_api_tag: ""
++#powerops_mistral_engine_image: ""
++#powerops_mistral_engine_tag: ""
++#powerops_mistral_executor_image: ""
++#powerops_mistral_executor_tag: ""
++
+ #############
+ # S3 options
+ #############
+diff --git a/kolla_ansible/tests/unit/test_powerops_configuration_contract.py b/kolla_ansible/tests/unit/test_powerops_configuration_contract.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..69d95c56a36f408930450f2cabc7900ef819b1cc
+--- /dev/null
++++ b/kolla_ansible/tests/unit/test_powerops_configuration_contract.py
+@@ -0,0 +1,510 @@
++# Licensed under the Apache License, Version 2.0 (the "License"); you may
++# not use this file except in compliance with the License. You may obtain
++# a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++import copy
++from pathlib import Path
++import re
++import unittest
++import warnings
++
++from ansible.parsing.dataloader import DataLoader
++from ansible.template import Templar
++import jinja2
++import yaml
++
++
++ROOT = Path(__file__).resolve().parents[3]
++GROUP_VARS = ROOT / "ansible/group_vars/all.yml"
++GLOBALS_EXAMPLE = ROOT / "etc/kolla/globals.yml"
++GLOBAL_PRECHECK_MAIN = ROOT / "ansible/roles/prechecks/tasks/main.yml"
++GLOBAL_POWEROPS_PRECHECK = (
++    ROOT / "ansible/roles/prechecks/tasks/powerops_checks.yml"
++)
++
++POWEROPS_TIMING_DEFAULTS = {
++    "powerops_host_lock_timeout": 30,
++    "powerops_evacuation_lock_timeout": 3600,
++    "powerops_evacuation_interval": 5,
++    "powerops_power_timeout": 180,
++    "powerops_poll_interval": 5,
++    "powerops_stable_observations": 3,
++    "powerops_graceful_shutdown_timeout": 300,
++    "powerops_vm_action_timeout": 600,
++    "powerops_service_timeout": 300,
++    "powerops_instance_interval": 5,
++}
++
++POWEROPS_IMAGE_DEFAULTS = {
++    "powerops_masakari_engine_image": "",
++    "powerops_masakari_engine_tag": "",
++    "powerops_mistral_api_image": "",
++    "powerops_mistral_api_tag": "",
++    "powerops_mistral_engine_image": "",
++    "powerops_mistral_engine_tag": "",
++    "powerops_mistral_executor_image": "",
++    "powerops_mistral_executor_tag": "",
++}
++
++POWEROPS_DEFAULTS = {
++    "enable_powerops": "no",
++    "powerops_coordination_url": (
++        "etcd3+{{ internal_protocol }}://{{ kolla_internal_fqdn }}:"
++        "{{ etcd_client_port }}?api_version=v3{% if openstack_cacert %}"
++        "&ca_cert={{ openstack_cacert }}{% endif %}"
++    ),
++    **POWEROPS_TIMING_DEFAULTS,
++    "powerops_reconcile_workbook": "yes",
++    "powerops_validate_registration": "yes",
++    "powerops_allowed_project_names": [
++        "{{ openstack_auth.project_name }}",
++    ],
++    "powerops_allowed_user_names": [
++        "{{ openstack_auth.username }}",
++    ],
++    **POWEROPS_IMAGE_DEFAULTS,
++}
++
++ROLE_PATHS = {
++    "masakari": {
++        "defaults": ROOT / "ansible/roles/masakari/defaults/main.yml",
++        "precheck": ROOT / "ansible/roles/masakari/tasks/precheck.yml",
++    },
++    "mistral": {
++        "defaults": ROOT / "ansible/roles/mistral/defaults/main.yml",
++        "precheck": ROOT / "ansible/roles/mistral/tasks/precheck.yml",
++    },
++}
++
++PATCHED_SERVICES = {
++    "masakari": {
++        "masakari-engine": (
++            "powerops_masakari_engine_image",
++            "powerops_masakari_engine_tag",
++            "masakari_engine_image_full",
++        ),
++    },
++    "mistral": {
++        "mistral-api": (
++            "powerops_mistral_api_image",
++            "powerops_mistral_api_tag",
++            "mistral_api_image_full",
++        ),
++        "mistral-engine": (
++            "powerops_mistral_engine_image",
++            "powerops_mistral_engine_tag",
++            "mistral_engine_image_full",
++        ),
++        "mistral-executor": (
++            "powerops_mistral_executor_image",
++            "powerops_mistral_executor_tag",
++            "mistral_executor_image_full",
++        ),
++    },
++}
++
++COMMON_PRECHECK_VARIABLES = {
++    "enable_ironic",
++    "enable_masakari",
++    "enable_mistral",
++    "enable_etcd",
++    "powerops_coordination_url",
++    "powerops_allowed_project_names",
++    "powerops_allowed_user_names",
++}
++
++
++def _load_yaml(path):
++    return yaml.safe_load(path.read_text(encoding="utf-8"))
++
++
++def _ansible_bool(value):
++    if isinstance(value, str):
++        return value.lower() in {"1", "on", "true", "yes"}
++    return bool(value)
++
++
++def _jinja_environment():
++    environment = jinja2.Environment(  # nosec: static local test input
++        undefined=jinja2.StrictUndefined,
++    )
++    environment.filters.update({
++        "bool": _ansible_bool,
++    })
++    return environment
++
++
++def _normalize_jinja(expression):
++    return " ".join(expression.split())
++
++
++def _powerops_assertion(role):
++    tasks = _load_yaml(ROLE_PATHS[role]["precheck"])
++    matches = [
++        task for task in tasks
++        if task.get("name") == (
++            "Validate PowerOps service and coordination dependencies"
++        )
++    ]
++    if len(matches) != 1:
++        return None
++    return matches[0]
++
++
++def _conditions_pass(conditions, variables):
++    templar = Templar(loader=DataLoader(), variables=variables)
++    with warnings.catch_warnings():
++        warnings.filterwarnings(
++            "ignore",
++            message="'crypt' is deprecated.*",
++            category=DeprecationWarning,
++            module="passlib.utils",
++        )
++        return all(
++            templar.template(
++                "{{ (%s) }}" % condition,
++                fail_on_undefined=True,
++            ) is True
++            for condition in conditions
++        )
++
++
++def _assertion_outcome(task, variables):
++    when = task.get("when", True)
++    if not _conditions_pass([when], variables):
++        return "skipped"
++    conditions = task["ansible.builtin.assert"]["that"]
++    return "passed" if _conditions_pass(conditions, variables) else "failed"
++
++
++class PowerOpsConfigurationContractTest(unittest.TestCase):
++
++    def test_powerops_is_disabled_by_default(self):
++        variables = _load_yaml(GROUP_VARS)
++
++        self.assertEqual("no", variables.get("enable_powerops"))
++
++    def test_powerops_defaults_are_exact(self):
++        variables = _load_yaml(GROUP_VARS)
++        actual = {
++            name: variables.get(name)
++            for name in POWEROPS_DEFAULTS
++        }
++
++        self.assertEqual(POWEROPS_DEFAULTS, actual)
++
++    def test_etcd3gw_url_has_one_query_separator(self):
++        variables = _load_yaml(GROUP_VARS)
++        expression = variables.get("powerops_coordination_url", "")
++        environment = _jinja_environment()
++
++        plain = environment.from_string(expression).render(
++            internal_protocol="http",
++            kolla_internal_fqdn="controller.internal",
++            etcd_client_port="2379",
++            openstack_cacert="",
++        )
++        tls = environment.from_string(expression).render(
++            internal_protocol="https",
++            kolla_internal_fqdn="controller.internal",
++            etcd_client_port="2379",
++            openstack_cacert="/etc/kolla/certificates/ca.pem",
++        )
++
++        self.assertEqual(
++            "etcd3+http://controller.internal:2379?api_version=v3",
++            plain,
++        )
++        self.assertEqual(
++            "etcd3+https://controller.internal:2379?api_version=v3"
++            "&ca_cert=/etc/kolla/certificates/ca.pem",
++            tls,
++        )
++        self.assertEqual(1, plain.count("?"))
++        self.assertEqual(1, tls.count("?"))
++        self.assertNotIn("?ca_cert=", tls)
++
++    def test_globals_has_safe_commented_operator_examples(self):
++        text = GLOBALS_EXAMPLE.read_text(encoding="utf-8")
++        commented_names = set(re.findall(
++            r"^#(powerops_[a-z0-9_]+|enable_powerops):",
++            text,
++            flags=re.MULTILINE,
++        ))
++
++        self.assertEqual(set(POWEROPS_DEFAULTS), commented_names)
++        for name in POWEROPS_IMAGE_DEFAULTS:
++            self.assertRegex(
++                text,
++                rf"(?m)^#{name}: \"\"$",
++                f"{name} must not contain a concrete repository or tag",
++            )
++
++    def test_patched_images_are_selected_for_exact_service_scope(self):
++        environment = _jinja_environment()
++
++        for role, services in PATCHED_SERVICES.items():
++            defaults = _load_yaml(ROLE_PATHS[role]["defaults"])
++            role_services = defaults[f"{role}_services"]
++            for service, (image_var, tag_var, normal_var) in services.items():
++                expression = role_services[service]["image"]
++                expected = (
++                    "{{ " + image_var + " ~ ':' ~ " + tag_var
++                    + " if enable_powerops | bool else " + normal_var
++                    + " }}"
++                )
++                self.assertEqual(
++                    _normalize_jinja(expected),
++                    _normalize_jinja(expression),
++                )
++
++                disabled = environment.from_string(expression).render(**{
++                    "enable_powerops": "no",
++                    normal_var: "upstream/service:2025.1",
++                })
++                enabled = environment.from_string(expression).render(**{
++                    "enable_powerops": "yes",
++                    image_var: "patched/service",
++                    tag_var: "powerops",
++                    normal_var: "upstream/service:2025.1",
++                })
++                self.assertEqual("upstream/service:2025.1", disabled)
++                self.assertEqual("patched/service:powerops", enabled)
++
++        mistral = _load_yaml(ROLE_PATHS["mistral"]["defaults"])
++        self.assertEqual(
++            "{{ mistral_event_engine_image_full }}",
++            mistral["mistral_services"]["mistral-event-engine"]["image"],
++        )
++
++    def test_unpatched_service_image_expressions_are_unchanged(self):
++        masakari = _load_yaml(ROLE_PATHS["masakari"]["defaults"])
++        mistral = _load_yaml(ROLE_PATHS["mistral"]["defaults"])
++
++        self.assertEqual(
++            {
++                "masakari-api": "{{ masakari_api_image_full }}",
++                "masakari-instancemonitor": (
++                    "{{ masakari_monitors_image_full }}"
++                ),
++                "masakari-hostmonitor": "{{ masakari_monitors_image_full }}",
++                "masakari-processmonitor": (
++                    "{{ masakari_monitors_image_full }}"
++                ),
++            },
++            {
++                service: values["image"]
++                for service, values in masakari["masakari_services"].items()
++                if service != "masakari-engine"
++            },
++        )
++        self.assertEqual(
++            "{{ mistral_event_engine_image_full }}",
++            mistral["mistral_services"]["mistral-event-engine"]["image"],
++        )
++
++    def test_prechecks_are_guarded_and_cover_the_full_contract(self):
++        role_image_variables = {
++            "masakari": {
++                "powerops_masakari_engine_image",
++                "powerops_masakari_engine_tag",
++            },
++            "mistral": {
++                "powerops_mistral_api_image",
++                "powerops_mistral_api_tag",
++                "powerops_mistral_engine_image",
++                "powerops_mistral_engine_tag",
++                "powerops_mistral_executor_image",
++                "powerops_mistral_executor_tag",
++            },
++        }
++
++        for role, image_variables in role_image_variables.items():
++            task = _powerops_assertion(role)
++            self.assertIsNotNone(task, f"missing {role} PowerOps assertion")
++            self.assertEqual("enable_powerops | bool", task.get("when"))
++            conditions = task["ansible.builtin.assert"]["that"]
++            combined = "\n".join(conditions)
++
++            for name in COMMON_PRECHECK_VARIABLES | image_variables:
++                self.assertIn(name, combined)
++            self.assertIn("type_debug", combined)
++            self.assertIn("select('string')", combined)
++            self.assertIn("map('trim')", combined)
++            self.assertIn("regex_search", combined)
++            self.assertIn("regex_findall", combined)
++            self.assertNotIn("enable_redis", combined)
++
++    def test_global_precheck_is_reachable_and_fail_closed(self):
++        main_tasks = _load_yaml(GLOBAL_PRECHECK_MAIN)
++        self.assertIn(
++            "powerops_checks.yml",
++            [task.get("import_tasks") for task in main_tasks],
++        )
++        self.assertTrue(GLOBAL_POWEROPS_PRECHECK.exists())
++
++        tasks = _load_yaml(GLOBAL_POWEROPS_PRECHECK)
++        matches = [
++            task for task in tasks
++            if task.get("name") == "Validate global PowerOps dependencies"
++        ]
++        self.assertEqual(1, len(matches))
++        task = matches[0]
++        self.assertEqual("enable_powerops | bool", task.get("when"))
++        self.assertIs(True, task.get("run_once"))
++
++        disabled_services = {
++            "enable_powerops": "yes",
++            "enable_ironic": "no",
++            "enable_masakari": "no",
++            "enable_mistral": "no",
++            "enable_etcd": "no",
++        }
++        self.assertEqual(
++            "failed",
++            _assertion_outcome(task, disabled_services),
++        )
++        self.assertEqual(
++            "skipped",
++            _assertion_outcome(
++                task,
++                {**disabled_services, "enable_powerops": "no"},
++            ),
++        )
++        self.assertEqual(
++            "passed",
++            _assertion_outcome(
++                task,
++                {
++                    **disabled_services,
++                    "enable_ironic": "yes",
++                    "enable_masakari": "yes",
++                    "enable_mistral": "yes",
++                    "enable_etcd": "yes",
++                },
++            ),
++        )
++
++    def test_prechecks_accept_valid_contract_values(self):
++        valid = {
++            "enable_ironic": "yes",
++            "enable_masakari": "yes",
++            "enable_mistral": "yes",
++            "enable_etcd": "yes",
++            "powerops_coordination_url": (
++                "etcd3+https://controller.internal:2379?api_version=v3"
++                "&ca_cert=/etc/kolla/certificates/ca.pem"
++            ),
++            "powerops_allowed_project_names": ["powerops-project"],
++            "powerops_allowed_user_names": ["powerops-user"],
++            **{
++                name: "patched-image" if name.endswith("_image") else "v1"
++                for name in POWEROPS_IMAGE_DEFAULTS
++            },
++        }
++
++        for role in ROLE_PATHS:
++            task = _powerops_assertion(role)
++            self.assertIsNotNone(task, f"missing {role} PowerOps assertion")
++            conditions = task["ansible.builtin.assert"]["that"]
++            self.assertTrue(_conditions_pass(conditions, valid))
++
++    def test_prechecks_reject_malformed_values(self):
++        valid = {
++            "enable_ironic": "yes",
++            "enable_masakari": "yes",
++            "enable_mistral": "yes",
++            "enable_etcd": "yes",
++            "powerops_coordination_url": (
++                "etcd3+http://controller.internal:2379?api_version=v3"
++            ),
++            "powerops_allowed_project_names": ["powerops-project"],
++            "powerops_allowed_user_names": ["powerops-user"],
++            **{
++                name: "patched-image" if name.endswith("_image") else "v1"
++                for name in POWEROPS_IMAGE_DEFAULTS
++            },
++        }
++        invalid_overrides = (
++            {"enable_ironic": "no"},
++            {"enable_masakari": "no"},
++            {"enable_mistral": "no"},
++            {"enable_etcd": "no"},
++            {"powerops_coordination_url": ""},
++            {"powerops_coordination_url": "   "},
++            {
++                "powerops_coordination_url": (
++                    "redis://controller.internal:6379"
++                ),
++            },
++            {
++                "powerops_coordination_url": (
++                    "etcd3+https://controller.internal:2379?api_version=v3"
++                    "?ca_cert=/etc/kolla/ca.pem"
++                ),
++            },
++            {"powerops_allowed_project_names": "powerops-project"},
++            {"powerops_allowed_project_names": 123},
++            {"powerops_allowed_project_names": {}},
++            {"powerops_allowed_project_names": []},
++            {"powerops_allowed_project_names": ["   "]},
++            {"powerops_allowed_project_names": [123]},
++            {"powerops_allowed_project_names": ["team,ops"]},
++            {"powerops_allowed_project_names": [" team "]},
++            {"powerops_allowed_user_names": "powerops-user"},
++            {"powerops_allowed_user_names": 123},
++            {"powerops_allowed_user_names": {}},
++            {"powerops_allowed_user_names": []},
++            {"powerops_allowed_user_names": ["\t"]},
++            {"powerops_allowed_user_names": [123]},
++            {"powerops_allowed_user_names": ["operator,backup"]},
++            {"powerops_allowed_user_names": [" operator\t"]},
++            {"powerops_masakari_engine_image": "   "},
++            {"powerops_masakari_engine_tag": " \t "},
++            {"powerops_mistral_api_image": "   "},
++            {"powerops_mistral_api_tag": " \t "},
++            {"powerops_mistral_engine_image": "   "},
++            {"powerops_mistral_engine_tag": " \t "},
++            {"powerops_mistral_executor_image": "   "},
++            {"powerops_mistral_executor_tag": " \t "},
++        )
++
++        conditions_by_role = {}
++        for role in ROLE_PATHS:
++            task = _powerops_assertion(role)
++            self.assertIsNotNone(task, f"missing {role} PowerOps assertion")
++            conditions_by_role[role] = task["ansible.builtin.assert"]["that"]
++
++        for override in invalid_overrides:
++            variables = copy.deepcopy(valid)
++            variables.update(override)
++            relevant_roles = (
++                ["masakari"]
++                if any(
++                    name.startswith("powerops_masakari")
++                    for name in override
++                )
++                else ["mistral"]
++                if any(
++                    name.startswith("powerops_mistral")
++                    for name in override
++                )
++                else list(ROLE_PATHS)
++            )
++            for role in relevant_roles:
++                with self.subTest(role=role, override=override):
++                    self.assertFalse(
++                        _conditions_pass(conditions_by_role[role], variables)
++                    )
++
++
++if __name__ == "__main__":
++    unittest.main()
+-- 
+2.49.0
+

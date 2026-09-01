@@ -1,7 +1,7 @@
 From ef15717cfe6d09e23ab440c93f871dcbb4fb5072 Mon Sep 17 00:00:00 2001
 From: Lebt <lebtmalorny@gmail.com>
 Date: Tue, 1 Sep 2026 03:32:01 +0300
-Subject: [PATCH 2/9] fix: declare PowerOps etcd backend
+Subject: [PATCH 02/10] fix: declare PowerOps etcd backend
 
 ---
  .../actions/powerops/test_coordination.py     | 28 +++++++++++++++++++
@@ -9,7 +9,7 @@ Subject: [PATCH 2/9] fix: declare PowerOps etcd backend
  2 files changed, 29 insertions(+), 1 deletion(-)
 
 diff --git a/mistral/tests/unit/actions/powerops/test_coordination.py b/mistral/tests/unit/actions/powerops/test_coordination.py
-index 2e030f6..45f0cda 100644
+index 2e030f61239ae142845647a9981ca4e84564a83e..45f0cdadaa0f7789bb8f2c3cf65796e540989c70 100644
 --- a/mistral/tests/unit/actions/powerops/test_coordination.py
 +++ b/mistral/tests/unit/actions/powerops/test_coordination.py
 @@ -307,6 +307,34 @@ class OperationCoordinatorTest(base.BaseTest):
@@ -48,7 +48,7 @@ index 2e030f6..45f0cda 100644
      def test_stop_is_idempotent(self, get_coordinator):
          backend, _lock = self._backend()
 diff --git a/requirements.txt b/requirements.txt
-index 0fde366..5c06ed0 100644
+index 0fde366ad04a9adde3055f7758ca4195ac121f50..5c06ed026b84f4b73570609503f3435abdbd3050 100644
 --- a/requirements.txt
 +++ b/requirements.txt
 @@ -38,4 +38,4 @@ stevedore>=1.20.0 # Apache-2.0

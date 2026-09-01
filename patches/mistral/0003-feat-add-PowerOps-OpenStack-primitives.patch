@@ -1,7 +1,7 @@
 From a4b7c998f7e14398b8414bdd2c7fcc47e9fba552 Mon Sep 17 00:00:00 2001
 From: Lebt <lebtmalorny@gmail.com>
 Date: Tue, 1 Sep 2026 04:05:31 +0300
-Subject: [PATCH 3/9] feat: add PowerOps OpenStack primitives
+Subject: [PATCH 03/10] feat: add PowerOps OpenStack primitives
 
 ---
  mistral/actions/powerops/clients.py           | 759 ++++++++++++++++++
@@ -17,7 +17,7 @@ Subject: [PATCH 3/9] feat: add PowerOps OpenStack primitives
 
 diff --git a/mistral/actions/powerops/clients.py b/mistral/actions/powerops/clients.py
 new file mode 100644
-index 0000000..f2d6250
+index 0000000000000000000000000000000000000000..f2d62501f3f7646c8ac226ba4ccc57fc84bf079a
 --- /dev/null
 +++ b/mistral/actions/powerops/clients.py
 @@ -0,0 +1,759 @@
@@ -782,7 +782,7 @@ index 0000000..f2d6250
 +        self.health_check()
 diff --git a/mistral/actions/powerops/exceptions.py b/mistral/actions/powerops/exceptions.py
 new file mode 100644
-index 0000000..e7b0c0f
+index 0000000000000000000000000000000000000000..e7b0c0f94e0c7bb9d320d84e870aab8b4ff9c5df
 --- /dev/null
 +++ b/mistral/actions/powerops/exceptions.py
 @@ -0,0 +1,57 @@
@@ -845,7 +845,7 @@ index 0000000..e7b0c0f
 +    """The operator inspection gate has not been acknowledged."""
 diff --git a/mistral/tests/unit/actions/powerops/fakes.py b/mistral/tests/unit/actions/powerops/fakes.py
 new file mode 100644
-index 0000000..0207833
+index 0000000000000000000000000000000000000000..0207833c6b078478d0cb2a7d82c485a843d17610
 --- /dev/null
 +++ b/mistral/tests/unit/actions/powerops/fakes.py
 @@ -0,0 +1,182 @@
@@ -1033,7 +1033,7 @@ index 0000000..0207833
 +    return _RecordingCoordinator(events)
 diff --git a/mistral/tests/unit/actions/powerops/test_clients.py b/mistral/tests/unit/actions/powerops/test_clients.py
 new file mode 100644
-index 0000000..57d9f68
+index 0000000000000000000000000000000000000000..57d9f6850c66cedbcd2a4e7be1dd97fcd7d83797
 --- /dev/null
 +++ b/mistral/tests/unit/actions/powerops/test_clients.py
 @@ -0,0 +1,651 @@
@@ -1689,7 +1689,7 @@ index 0000000..57d9f68
 +        self.assertEqual(17, cloud.connection.session.timeout)
 +        self.assertEqual(1, cloud.ha_adapter.put.call_count)
 diff --git a/requirements.txt b/requirements.txt
-index 5c06ed0..cdc58c7 100644
+index 5c06ed026b84f4b73570609503f3435abdbd3050..cdc58c7cb1e2dea1abb991cc5e1eac4622c6ff24 100644
 --- a/requirements.txt
 +++ b/requirements.txt
 @@ -9,10 +9,12 @@ dogpile.cache>=0.6.2 # BSD

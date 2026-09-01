@@ -1,7 +1,7 @@
 From bfc3a3fe77620ce871f1e4cc5d2748dbaa020d9c Mon Sep 17 00:00:00 2001
 From: Lebt <lebtmalorny@gmail.com>
 Date: Tue, 1 Sep 2026 03:17:03 +0300
-Subject: [PATCH 1/9] feat: add PowerOps action coordination
+Subject: [PATCH 01/10] feat: add PowerOps action coordination
 
 ---
  mistral/actions/powerops/__init__.py          |   0
@@ -17,10 +17,10 @@ Subject: [PATCH 1/9] feat: add PowerOps action coordination
 
 diff --git a/mistral/actions/powerops/__init__.py b/mistral/actions/powerops/__init__.py
 new file mode 100644
-index 0000000..e69de29
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/mistral/actions/powerops/coordination.py b/mistral/actions/powerops/coordination.py
 new file mode 100644
-index 0000000..f2a41ed
+index 0000000000000000000000000000000000000000..f2a41ed9b21cb110157ba3ab9f56566454eb1421
 --- /dev/null
 +++ b/mistral/actions/powerops/coordination.py
 @@ -0,0 +1,264 @@
@@ -289,7 +289,7 @@ index 0000000..f2a41ed
 +
 +        return False
 diff --git a/mistral/config.py b/mistral/config.py
-index 69f30b2..374edcf 100644
+index 69f30b2c6e06eec91dda38361565e0b40ea342b3..374edcf663cd33bedef4839e5ddf4e919d6d2fca 100644
 --- a/mistral/config.py
 +++ b/mistral/config.py
 @@ -632,6 +632,92 @@ context_versioning_opts = [
@@ -411,10 +411,10 @@ index 69f30b2..374edcf 100644
          (PROFILER_GROUP, profiler_opts),
 diff --git a/mistral/tests/unit/actions/powerops/__init__.py b/mistral/tests/unit/actions/powerops/__init__.py
 new file mode 100644
-index 0000000..e69de29
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/mistral/tests/unit/actions/powerops/test_coordination.py b/mistral/tests/unit/actions/powerops/test_coordination.py
 new file mode 100644
-index 0000000..2e030f6
+index 0000000000000000000000000000000000000000..2e030f61239ae142845647a9981ca4e84564a83e
 --- /dev/null
 +++ b/mistral/tests/unit/actions/powerops/test_coordination.py
 @@ -0,0 +1,343 @@

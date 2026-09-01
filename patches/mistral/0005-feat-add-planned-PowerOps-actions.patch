@@ -1,7 +1,7 @@
 From 057bd86f79ee76d169775dd5fd89ae0dca33c696 Mon Sep 17 00:00:00 2001
 From: Lebt <lebtmalorny@gmail.com>
 Date: Tue, 1 Sep 2026 04:44:51 +0300
-Subject: [PATCH 5/9] feat: add planned PowerOps actions
+Subject: [PATCH 05/10] feat: add planned PowerOps actions
 
 ---
  mistral/actions/powerops/base.py              | 116 ++++
@@ -14,7 +14,7 @@ Subject: [PATCH 5/9] feat: add planned PowerOps actions
 
 diff --git a/mistral/actions/powerops/base.py b/mistral/actions/powerops/base.py
 new file mode 100644
-index 0000000..ec6a15f
+index 0000000000000000000000000000000000000000..ec6a15fd86a2c2aedf4f3c6d9a8394b6af8fe67f
 --- /dev/null
 +++ b/mistral/actions/powerops/base.py
 @@ -0,0 +1,116 @@
@@ -136,7 +136,7 @@ index 0000000..ec6a15f
 +        )
 diff --git a/mistral/actions/powerops/planned.py b/mistral/actions/powerops/planned.py
 new file mode 100644
-index 0000000..b4f992f
+index 0000000000000000000000000000000000000000..b4f992f9b14bcf35925e11bee9480167810f840e
 --- /dev/null
 +++ b/mistral/actions/powerops/planned.py
 @@ -0,0 +1,126 @@
@@ -268,7 +268,7 @@ index 0000000..b4f992f
 +        return self._run_locked(context, 'planned_reboot', operation)
 diff --git a/mistral/tests/unit/actions/powerops/test_planned.py b/mistral/tests/unit/actions/powerops/test_planned.py
 new file mode 100644
-index 0000000..184a38b
+index 0000000000000000000000000000000000000000..184a38b68932755168d0830a5d9958c461c8bf89
 --- /dev/null
 +++ b/mistral/tests/unit/actions/powerops/test_planned.py
 @@ -0,0 +1,569 @@

@@ -1,0 +1,147 @@
+From 665cde880127f56c8335e6f8b210362f87ae19d9 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Tue, 1 Sep 2026 10:25:18 +0300
+Subject: [PATCH 10/10] fix: scope workbook updates to request project
+
+---
+ mistral/db/v2/sqlalchemy/api.py               | 17 +++-
+ .../unit/db/v2/test_sqlalchemy_db_api.py      | 95 +++++++++++++++++++
+ 2 files changed, 111 insertions(+), 1 deletion(-)
+
+diff --git a/mistral/db/v2/sqlalchemy/api.py b/mistral/db/v2/sqlalchemy/api.py
+index bec4e37b2c9e225db2ea8acfba43051c770e477d..43d3825fd8b487bcba75e2a67db627770c920a78 100644
+--- a/mistral/db/v2/sqlalchemy/api.py
++++ b/mistral/db/v2/sqlalchemy/api.py
+@@ -432,7 +432,22 @@ def create_workbook(values, session=None):
+ @b.session_aware()
+ def update_workbook(name, values, session=None):
+     namespace = values.get('namespace')
+-    wb = get_workbook(name, namespace=namespace)
++
++    if namespace is None:
++        namespace = ''
++
++    wb = b.model_query(models.Workbook, session=session).filter(
++        sa.and_(
++            models.Workbook.project_id == security.get_project_id(),
++            models.Workbook.name == name,
++            models.Workbook.namespace == namespace
++        )
++    ).first()
++
++    if not wb:
++        raise exc.DBEntityNotFoundError(
++            "Workbook not found [name=%s, namespace=%s]" % (name, namespace)
++        )
+ 
+     wb.update(values.copy())
+ 
+diff --git a/mistral/tests/unit/db/v2/test_sqlalchemy_db_api.py b/mistral/tests/unit/db/v2/test_sqlalchemy_db_api.py
+index c8b610684ae3cf3732af03dbf9db15d790f9ce1b..198e8ffa94853b8923441ac2508c425aacfec380 100644
+--- a/mistral/tests/unit/db/v2/test_sqlalchemy_db_api.py
++++ b/mistral/tests/unit/db/v2/test_sqlalchemy_db_api.py
+@@ -162,6 +162,101 @@ class WorkbookTest(SQLAlchemyTest):
+         self.assertEqual(updated, fetched)
+         self.assertIsNotNone(fetched.updated_at)
+ 
++    def test_update_workbook_selects_request_project(self):
++        foreign_values = copy.deepcopy(WORKBOOKS[0])
++        foreign_values['definition'] = 'foreign definition'
++        foreign = db_api.create_workbook(foreign_values)
++
++        auth_context.set_ctx(ADM_CTX)
++
++        own_values = copy.deepcopy(WORKBOOKS[0])
++        own_values['definition'] = 'own definition'
++        own_values['scope'] = 'private'
++        own = db_api.create_workbook(own_values)
++
++        updated = db_api.update_workbook(
++            own.name,
++            {
++                'definition': 'updated own definition',
++                'namespace': own.namespace
++            }
++        )
++
++        workbooks = db_api.get_workbooks(
++            insecure=True,
++            name=own.name,
++            namespace=own.namespace
++        )
++        workbooks_by_project = {wb.project_id: wb for wb in workbooks}
++
++        self.assertEqual(own.id, updated.id)
++        self.assertEqual(
++            'updated own definition',
++            workbooks_by_project[ADM_CTX.project_id].definition
++        )
++        self.assertEqual(
++            'foreign definition',
++            workbooks_by_project[foreign.project_id].definition
++        )
++
++    def test_update_workbook_rejects_foreign_public_workbook(self):
++        foreign_values = copy.deepcopy(WORKBOOKS[0])
++        foreign_values['definition'] = 'foreign definition'
++        foreign = db_api.create_workbook(foreign_values)
++
++        auth_context.set_ctx(ADM_CTX)
++
++        with self.assertRaisesRegex(
++            exc.DBEntityNotFoundError,
++            r'^Workbook not found \[name=my_workbook1, namespace=test\]$'
++        ):
++            db_api.update_workbook(
++                foreign.name,
++                {
++                    'definition': 'unauthorized definition',
++                    'namespace': foreign.namespace
++                }
++            )
++
++        persisted = db_api.get_workbooks(
++            insecure=True,
++            id=foreign.id
++        )[0]
++
++        self.assertEqual('foreign definition', persisted.definition)
++
++    def test_update_workbook_scopes_default_namespace_exactly(self):
++        default_values = copy.deepcopy(WORKBOOKS[0])
++        default_values['namespace'] = ''
++        default_values['definition'] = 'default definition'
++        default = db_api.create_workbook(default_values)
++
++        namespaced_values = copy.deepcopy(WORKBOOKS[0])
++        namespaced_values['namespace'] = 'other'
++        namespaced_values['definition'] = 'namespaced definition'
++        namespaced = db_api.create_workbook(namespaced_values)
++
++        updated = db_api.update_workbook(
++            default.name,
++            {'definition': 'updated default definition'}
++        )
++
++        workbooks = db_api.get_workbooks(
++            insecure=True,
++            name=default.name
++        )
++        workbooks_by_namespace = {wb.namespace: wb for wb in workbooks}
++
++        self.assertEqual(default.id, updated.id)
++        self.assertEqual(
++            'updated default definition',
++            workbooks_by_namespace[''].definition
++        )
++        self.assertEqual(
++            'namespaced definition',
++            workbooks_by_namespace[namespaced.namespace].definition
++        )
++
+     def test_create_or_update_workbook(self):
+         name = WORKBOOKS[0]['name']
+         namespace = WORKBOOKS[0]['namespace']
+-- 
+2.49.0
+

@@ -1,7 +1,7 @@
 From e4ce9e9be80d33fd4f3beecc777883cfbe7219fb Mon Sep 17 00:00:00 2001
 From: Lebt <lebtmalorny@gmail.com>
 Date: Tue, 1 Sep 2026 05:26:33 +0300
-Subject: [PATCH 7/9] feat: add guarded host return actions
+Subject: [PATCH 07/10] feat: add guarded host return actions
 
 ---
  mistral/actions/powerops/return_host.py       | 159 ++++
@@ -12,7 +12,7 @@ Subject: [PATCH 7/9] feat: add guarded host return actions
 
 diff --git a/mistral/actions/powerops/return_host.py b/mistral/actions/powerops/return_host.py
 new file mode 100644
-index 0000000..539ceb9
+index 0000000000000000000000000000000000000000..539ceb94053928a45025f776482dd200648d705a
 --- /dev/null
 +++ b/mistral/actions/powerops/return_host.py
 @@ -0,0 +1,159 @@
@@ -177,7 +177,7 @@ index 0000000..539ceb9
 +        return self._run_locked(context, 'return_to_service', operation)
 diff --git a/mistral/tests/unit/actions/powerops/test_return_host.py b/mistral/tests/unit/actions/powerops/test_return_host.py
 new file mode 100644
-index 0000000..f5b0e24
+index 0000000000000000000000000000000000000000..f5b0e2485fa23f6550319ff25a482b15cf79fac6
 --- /dev/null
 +++ b/mistral/tests/unit/actions/powerops/test_return_host.py
 @@ -0,0 +1,900 @@

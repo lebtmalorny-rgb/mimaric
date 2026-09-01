@@ -1,7 +1,7 @@
 From 2fad67d570e19542b93959f5d0d1b40fcece2651 Mon Sep 17 00:00:00 2001
 From: Lebt <lebtmalorny@gmail.com>
 Date: Tue, 1 Sep 2026 04:28:26 +0300
-Subject: [PATCH 4/9] fix: align PowerOps with SDK resources
+Subject: [PATCH 04/10] fix: align PowerOps with SDK resources
 
 ---
  mistral/actions/powerops/clients.py           | 182 +++++++++--
@@ -10,7 +10,7 @@ Subject: [PATCH 4/9] fix: align PowerOps with SDK resources
  3 files changed, 465 insertions(+), 34 deletions(-)
 
 diff --git a/mistral/actions/powerops/clients.py b/mistral/actions/powerops/clients.py
-index f2d6250..7db0478 100644
+index f2d62501f3f7646c8ac226ba4ccc57fc84bf079a..7db04781be578743f374864de73163502b3254c5 100644
 --- a/mistral/actions/powerops/clients.py
 +++ b/mistral/actions/powerops/clients.py
 @@ -12,6 +12,7 @@
@@ -301,7 +301,7 @@ index f2d6250..7db0478 100644
  
          self.health_check()
 diff --git a/mistral/tests/unit/actions/powerops/fakes.py b/mistral/tests/unit/actions/powerops/fakes.py
-index 0207833..77e48c0 100644
+index 0207833c6b078478d0cb2a7d82c485a843d17610..77e48c0a6ed4e75394ebc676987bde8a841f223e 100644
 --- a/mistral/tests/unit/actions/powerops/fakes.py
 +++ b/mistral/tests/unit/actions/powerops/fakes.py
 @@ -28,16 +28,19 @@ def node(node_id, name, power_state="power on",
@@ -349,7 +349,7 @@ index 0207833..77e48c0 100644
      connection.compute.get_server.side_effect = get_server
      connection.compute.stop_server.side_effect = stop_server
 diff --git a/mistral/tests/unit/actions/powerops/test_clients.py b/mistral/tests/unit/actions/powerops/test_clients.py
-index 57d9f68..71b4a66 100644
+index 57d9f6850c66cedbcd2a4e7be1dd97fcd7d83797..71b4a66f8ac713770a015c51dc0f9734edcb5e8a 100644
 --- a/mistral/tests/unit/actions/powerops/test_clients.py
 +++ b/mistral/tests/unit/actions/powerops/test_clients.py
 @@ -16,6 +16,8 @@ from types import SimpleNamespace

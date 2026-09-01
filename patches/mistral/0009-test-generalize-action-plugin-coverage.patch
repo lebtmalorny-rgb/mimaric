@@ -1,7 +1,7 @@
 From 8a2db56eb5779a1ec59b5f257b7b3b6d50dde9ac Mon Sep 17 00:00:00 2001
 From: Lebt <lebtmalorny@gmail.com>
 Date: Tue, 1 Sep 2026 06:22:15 +0300
-Subject: [PATCH 9/9] test: generalize action plugin coverage
+Subject: [PATCH 09/10] test: generalize action plugin coverage
 
 ---
  .../actions/powerops/test_registration.py     | 53 +++++++++++++++++++
@@ -11,7 +11,7 @@ Subject: [PATCH 9/9] test: generalize action plugin coverage
  4 files changed, 129 insertions(+), 14 deletions(-)
 
 diff --git a/mistral/tests/unit/actions/powerops/test_registration.py b/mistral/tests/unit/actions/powerops/test_registration.py
-index 9aa8edf..6d0408b 100644
+index 9aa8edff3dafaa5dba5a359612567ff80878b594..6d0408baa3440e5da77e1974820f739a6b2ac604 100644
 --- a/mistral/tests/unit/actions/powerops/test_registration.py
 +++ b/mistral/tests/unit/actions/powerops/test_registration.py
 @@ -14,9 +14,11 @@
@@ -89,7 +89,7 @@ index 9aa8edf..6d0408b 100644
 +                    action_desc.params_spec
 +                )
 diff --git a/mistral/tests/unit/actions/test_legacy_action_provider.py b/mistral/tests/unit/actions/test_legacy_action_provider.py
-index 3136805..6bab871 100644
+index 3136805fe5341e995a1d0abfb28a8563ea13f3fa..6bab871374b5786f07f61b62331ca81594baa7dc 100644
 --- a/mistral/tests/unit/actions/test_legacy_action_provider.py
 +++ b/mistral/tests/unit/actions/test_legacy_action_provider.py
 @@ -12,6 +12,7 @@
@@ -154,7 +154,7 @@ index 3136805..6bab871 100644
      @mock.patch.object(
          legacy.LegacyActionProvider,
 diff --git a/mistral/tests/unit/api/v2/test_actions.py b/mistral/tests/unit/api/v2/test_actions.py
-index e91586b..688e291 100644
+index e91586be5e6010c58317e991fd20e01fd6464141..688e2911d94b7256a229704b4d99a91712cf0d27 100644
 --- a/mistral/tests/unit/api/v2/test_actions.py
 +++ b/mistral/tests/unit/api/v2/test_actions.py
 @@ -507,6 +507,13 @@ class TestActionsController(base.APITest):
@@ -190,7 +190,7 @@ index e91586b..688e291 100644
      def test_get_all_pagination_limit_negative(self):
          resp = self.app.get(
 diff --git a/mistral/tests/unit/api/v2/test_executions.py b/mistral/tests/unit/api/v2/test_executions.py
-index a54c14e..9bed703 100644
+index a54c14e17db19d352b00f8d7d36b264571ed4bc4..9bed7031b0efc3d3e94f7bd841ef87d05ac2d3a9 100644
 --- a/mistral/tests/unit/api/v2/test_executions.py
 +++ b/mistral/tests/unit/api/v2/test_executions.py
 @@ -338,6 +338,36 @@ class TestExecutionsController(base.APITest):
