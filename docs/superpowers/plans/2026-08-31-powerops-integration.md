@@ -88,7 +88,8 @@ copy must come from the completed Mistral worktree and compare byte-for-byte.
 - Produces: source-only contract evidence without importing service packages or contacting APIs.
 - Verifies: entry points, workflow bytes, lock scopes, fencing order, exact
   allowlists, etcd selection, patched image placement, workbook ownership,
-  deterministic VM pacing and deploy non-mutation.
+  child-definition ownership, deterministic VM pacing and deploy
+  non-mutation.
 
 - [ ] **Step 1: Write the failing contract suite**
 
@@ -101,6 +102,19 @@ The suite must cover the actual completed source contracts, including the
 companion Mistral owner-scoped workbook update and Kolla's fail-closed handling
 of ambiguous or foreign public workbook rows. Missing environment variables
 or required source files must produce explicit assertion messages.
+
+Workbook child ownership must be checked end-to-end with AST assertions. The
+workbook service must pass `project_id=wb_db.project_id` for both action and
+workflow definitions, the DB facade must preserve that argument, and both SQL
+backend operations must validate it against the request project before an
+exact `project_id + name + namespace` lookup using the same transaction
+session. Require the direct AST chain
+`model_query(..., session=session).filter(sa.and_(project, name,
+namespace)).first()` with exactly those three comparison predicates. The
+common lookup must reject every `sa.or_`, extra predicate, alternate filter and
+public-aware fallback. Do not require or reject secure-model assignment of
+`project_id` in the values mapping: that is owned by Mistral's existing
+secure-model hook.
 
 Lock and pacing checks must assert AST parent/child scope at the real mutation
 call sites, not only the presence or textual order of tokens. Kolla checks must
@@ -117,8 +131,10 @@ python3 -m unittest tests.test_cross_repository_contract -v
 ```
 
 Expected: the pinned, unpatched trees fail because the PowerOps contracts are
-absent; the old Mistral workbook update also fails the exact owner-scope
-assertion.
+absent. Against the otherwise patched Mistral commit
+`665cde880127f56c8335e6f8b210362f87ae19d9`, the child owner-scope test must
+also fail because ownership is not propagated to generated action and workflow
+definitions.
 
 - [ ] **Step 3: Run after all repositories are complete and verify GREEN**
 
@@ -131,11 +147,18 @@ python3 -m unittest tests.test_cross_repository_contract -v
 
 Expected: PASS with no network or service access.
 
+The completed Mistral source for this check is
+`3e4fe82455de7473809b0e0bc677fa3df3a3d1e2`. Mutation checks must independently
+remove the project argument from either child-definition call and replace the
+exact direct filter with an outer public-aware `sa.or_`; removing
+`session=session` from the model query must also fail. Each mutation must fail
+the child owner-scope test.
+
 - [ ] **Step 4: Commit the contract suite in the artifact repository**
 
 ```bash
-git add tests
-git commit -m "test: verify cross-repository PowerOps contracts"
+git add tests docs/superpowers/plans/2026-08-31-powerops-integration.md
+git commit -m "test: cover workbook child ownership contract"
 ```
 
 ---

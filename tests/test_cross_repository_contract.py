@@ -1171,6 +1171,308 @@ class CrossRepositoryContractTest(unittest.TestCase):
             "owner-scoped Mistral workbook update",
         )
 
+    def test_mistral_workbook_children_are_owner_scoped_end_to_end(self):
+        _, service_module = _python_module(
+            self.mistral, "mistral/services/workbooks.py"
+        )
+        _, facade_module = _python_module(
+            self.mistral, "mistral/db/v2/api.py"
+        )
+        _, backend_module = _python_module(
+            self.mistral, "mistral/db/v2/sqlalchemy/api.py"
+        )
+
+        child_contracts = (
+            (
+                "_create_or_update_actions",
+                "create_or_update_action_definition",
+                "models.ActionDefinition",
+            ),
+            (
+                "_create_or_update_workflows",
+                "create_or_update_workflow_definition",
+                "models.WorkflowDefinition",
+            ),
+        )
+
+        for service_name, operation_name, model_name in child_contracts:
+            with self.subTest(child=operation_name):
+                service = _function(service_module, service_name)
+                service_calls = [
+                    node for node in ast.walk(service)
+                    if isinstance(node, ast.Call)
+                    and ast.unparse(node.func) == (
+                        "db_api_v2." + operation_name
+                    )
+                ]
+                self.assertEqual(
+                    1,
+                    len(service_calls),
+                    "workbook service must issue exactly one {} call".format(
+                        operation_name
+                    ),
+                )
+                service_project_args = [
+                    keyword.value
+                    for keyword in service_calls[0].keywords
+                    if keyword.arg == "project_id"
+                ]
+                self.assertEqual(
+                    ["wb_db.project_id"],
+                    [ast.unparse(value) for value in service_project_args],
+                    (
+                        "workbook service must pass the persisted workbook "
+                        "owner to {}"
+                    ).format(operation_name),
+                )
+
+                facade = _function(facade_module, operation_name)
+                facade_parameters = [
+                    argument.arg
+                    for argument in (
+                        facade.args.posonlyargs + facade.args.args
+                    )
+                ]
+                self.assertIn(
+                    "project_id",
+                    facade_parameters,
+                    "DB facade must accept the workbook owner",
+                )
+                facade_calls = [
+                    node for node in ast.walk(facade)
+                    if isinstance(node, ast.Call)
+                    and ast.unparse(node.func) == "IMPL." + operation_name
+                ]
+                self.assertEqual(
+                    1,
+                    len(facade_calls),
+                    "DB facade must issue exactly one backend call",
+                )
+                facade_project_args = [
+                    keyword.value
+                    for keyword in facade_calls[0].keywords
+                    if keyword.arg == "project_id"
+                ]
+                self.assertEqual(
+                    ["project_id"],
+                    [ast.unparse(value) for value in facade_project_args],
+                    "DB facade must preserve the explicit owner argument",
+                )
+
+                backend = _function(backend_module, operation_name)
+                backend_parameters = [
+                    argument.arg
+                    for argument in (
+                        backend.args.posonlyargs + backend.args.args
+                    )
+                ]
+                self.assertIn("project_id", backend_parameters)
+                self.assertIn("session", backend_parameters)
+                self.assertIn(
+                    "b.session_aware()",
+                    {ast.unparse(item) for item in backend.decorator_list},
+                    "owner lookup must use the transaction session",
+                )
+                owner_branches = [
+                    node for node in backend.body
+                    if isinstance(node, ast.If)
+                    and ast.unparse(node.test) == "project_id is not None"
+                ]
+                self.assertEqual(
+                    1,
+                    len(owner_branches),
+                    "explicit owner handling must have one guarded branch",
+                )
+                owner_branch = owner_branches[0]
+                validation_calls = [
+                    node for node in ast.walk(owner_branch)
+                    if isinstance(node, ast.Call)
+                    and ast.unparse(node.func) == "_check_request_project"
+                ]
+                self.assertEqual(
+                    1,
+                    len(validation_calls),
+                    "backend must validate the supplied owner exactly once",
+                )
+                self.assertEqual(
+                    ["project_id"],
+                    [
+                        ast.unparse(argument)
+                        for argument in validation_calls[0].args
+                    ],
+                )
+                lookup_calls = [
+                    node for node in ast.walk(owner_branch)
+                    if isinstance(node, ast.Call)
+                    and ast.unparse(node.func) == (
+                        "_get_db_object_by_name_namespace_and_project"
+                    )
+                ]
+                self.assertEqual(
+                    1,
+                    len(lookup_calls),
+                    (
+                        "{} must use the exact owner-aware lookup"
+                    ).format(operation_name),
+                )
+                self.assertEqual(
+                    [
+                        model_name,
+                        "name",
+                        "namespace",
+                        "project_id",
+                        "session",
+                    ],
+                    [
+                        ast.unparse(argument)
+                        for argument in lookup_calls[0].args
+                    ],
+                    (
+                        "{} must bind model, key, owner and the same session"
+                    ).format(operation_name),
+                )
+                self.assertLess(
+                    validation_calls[0].lineno,
+                    lookup_calls[0].lineno,
+                    "request owner validation must precede the DB lookup",
+                )
+
+        checker = _function(backend_module, "_check_request_project")
+        checker_branches = [
+            node for node in checker.body
+            if isinstance(node, ast.If)
+        ]
+        self.assertEqual(1, len(checker_branches))
+        self.assertEqual(
+            "project_id != security.get_project_id()",
+            ast.unparse(checker_branches[0].test),
+            "the supplied owner must equal the request project",
+        )
+        checker_raises = [
+            node for node in checker_branches[0].body
+            if isinstance(node, ast.Raise)
+        ]
+        self.assertEqual(
+            1,
+            len(checker_raises),
+            "a mismatched request project must be rejected",
+        )
+        self.assertEqual(
+            "exc.NotAllowedException",
+            ast.unparse(checker_raises[0].exc.func),
+        )
+
+        lookup = _function(
+            backend_module,
+            "_get_db_object_by_name_namespace_and_project",
+        )
+        lookup_parameters = [
+            argument.arg
+            for argument in lookup.args.posonlyargs + lookup.args.args
+        ]
+        self.assertEqual(
+            ["model", "name", "namespace", "project_id", "session"],
+            lookup_parameters,
+        )
+        returns = [
+            node for node in lookup.body
+            if isinstance(node, ast.Return)
+        ]
+        self.assertEqual(1, len(returns))
+        lookup_calls = [
+            node for node in ast.walk(lookup)
+            if isinstance(node, ast.Call)
+        ]
+        self.assertFalse(
+            any(
+                ast.unparse(node.func) == "sa.or_"
+                for node in lookup_calls
+            ),
+            "owner lookup must not include a public-aware alternative",
+        )
+        filter_calls = [
+            node for node in lookup_calls
+            if isinstance(node.func, ast.Attribute)
+            and node.func.attr == "filter"
+        ]
+        self.assertEqual(
+            1,
+            len(filter_calls),
+            "owner lookup must contain exactly one filter",
+        )
+
+        first_call = returns[0].value
+        self.assertIsInstance(first_call, ast.Call)
+        self.assertEqual([], first_call.args)
+        self.assertEqual([], first_call.keywords)
+        self.assertIsInstance(first_call.func, ast.Attribute)
+        self.assertEqual("first", first_call.func.attr)
+
+        direct_filter = first_call.func.value
+        self.assertIs(
+            filter_calls[0],
+            direct_filter,
+            "the exact owner filter must be the direct source of first()",
+        )
+        self.assertEqual([], direct_filter.keywords)
+        self.assertEqual(1, len(direct_filter.args))
+        self.assertIsInstance(direct_filter.func, ast.Attribute)
+        self.assertEqual("filter", direct_filter.func.attr)
+
+        query_call = direct_filter.func.value
+        self.assertIsInstance(query_call, ast.Call)
+        self.assertEqual(
+            "b.model_query",
+            ast.unparse(query_call.func),
+            "owner filter must directly follow b.model_query",
+        )
+        self.assertEqual(
+            ["model"],
+            [ast.unparse(argument) for argument in query_call.args],
+        )
+        query_session_args = [
+            keyword.value
+            for keyword in query_call.keywords
+            if keyword.arg == "session"
+        ]
+        self.assertEqual(
+            ["session"],
+            [ast.unparse(value) for value in query_session_args],
+            "owner lookup must query through its supplied session",
+        )
+        self.assertEqual(
+            ["session"],
+            [keyword.arg for keyword in query_call.keywords],
+            "model query must have no alternate scope arguments",
+        )
+
+        conjunction = direct_filter.args[0]
+        self.assertIsInstance(conjunction, ast.Call)
+        self.assertEqual(
+            "sa.and_",
+            ast.unparse(conjunction.func),
+            "the direct filter predicate must be the owner conjunction",
+        )
+        self.assertEqual([], conjunction.keywords)
+        self.assertEqual(3, len(conjunction.args))
+        self.assertTrue(
+            all(isinstance(argument, ast.Compare)
+                for argument in conjunction.args),
+            "owner predicates must be direct comparisons",
+        )
+        self.assertEqual(
+            {
+                "model.project_id == project_id",
+                "model.name == name",
+                "model.namespace == namespace",
+            },
+            {ast.unparse(argument) for argument in conjunction.args},
+            (
+                "owner lookup must use only exact project, name and "
+                "namespace predicates"
+            ),
+        )
+
     def test_emergency_evacuation_is_deterministic_serial_and_paced(self):
         source, module = _python_module(
             self.masakari,
