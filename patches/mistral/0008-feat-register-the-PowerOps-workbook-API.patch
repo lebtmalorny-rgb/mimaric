@@ -1,0 +1,474 @@
+From c7bea65f4ccb86dc18a7c29d8972acf7bbedd2b6 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Tue, 1 Sep 2026 05:57:06 +0300
+Subject: [PATCH 8/9] feat: register the PowerOps workbook API
+
+---
+ etc/mistral/power_ops.yaml                    |  88 ++++++
+ .../actions/powerops/test_registration.py     |  49 ++++
+ .../unit/actions/powerops/test_workbook.py    | 251 ++++++++++++++++++
+ .../notes/powerops-planned-host-actions.yaml  |  26 ++
+ setup.cfg                                     |   5 +
+ 5 files changed, 419 insertions(+)
+ create mode 100644 etc/mistral/power_ops.yaml
+ create mode 100644 mistral/tests/unit/actions/powerops/test_registration.py
+ create mode 100644 mistral/tests/unit/actions/powerops/test_workbook.py
+ create mode 100644 releasenotes/notes/powerops-planned-host-actions.yaml
+
+diff --git a/etc/mistral/power_ops.yaml b/etc/mistral/power_ops.yaml
+new file mode 100644
+index 0000000..119be4e
+--- /dev/null
++++ b/etc/mistral/power_ops.yaml
+@@ -0,0 +1,88 @@
++---
++version: '2.0'
++name: power_ops
++
++workflows:
++  host_power_status:
++    input:
++      - host
++      - segment_uuid
++    tasks:
++      status:
++        action: powerops.host_power_status
++        input:
++          host: <% $.host %>
++          segment_uuid: <% $.segment_uuid %>
++        publish:
++          result: <% task().result %>
++    output:
++      result: <% $.result %>
++
++  planned_power_off:
++    input:
++      - host
++      - segment_uuid
++      - instance_policy: require_empty
++      - allow_hard_off: false
++    tasks:
++      power_off:
++        action: powerops.planned_power_off
++        input:
++          host: <% $.host %>
++          segment_uuid: <% $.segment_uuid %>
++          instance_policy: <% $.instance_policy %>
++          allow_hard_off: <% $.allow_hard_off %>
++        publish:
++          result: <% task().result %>
++    output:
++      result: <% $.result %>
++      stopped_instance_ids: <% $.result.stopped_instance_ids %>
++
++  planned_reboot:
++    input:
++      - host
++      - segment_uuid
++      - instance_policy: require_empty
++      - allow_hard_off: false
++    tasks:
++      reboot:
++        action: powerops.planned_reboot
++        input:
++          host: <% $.host %>
++          segment_uuid: <% $.segment_uuid %>
++          instance_policy: <% $.instance_policy %>
++          allow_hard_off: <% $.allow_hard_off %>
++        publish:
++          result: <% task().result %>
++    output:
++      result: <% $.result %>
++
++  power_on_and_return:
++    input:
++      - host
++      - segment_uuid
++      - stopped_instance_ids: []
++    tasks:
++      power_on_for_inspection:
++        action: powerops.power_on_for_inspection
++        input:
++          host: <% $.host %>
++          segment_uuid: <% $.segment_uuid %>
++        on-success: operator_inspection_gate
++
++      operator_inspection_gate:
++        action: std.noop
++        pause-before: true
++        on-success: return_to_service
++
++      return_to_service:
++        action: powerops.return_to_service
++        input:
++          host: <% $.host %>
++          segment_uuid: <% $.segment_uuid %>
++          stopped_instance_ids: <% $.stopped_instance_ids %>
++          stale_domains_checked: <% env().get('stale_domains_checked', false) %>
++        publish:
++          result: <% task().result %>
++    output:
++      result: <% $.result %>
+diff --git a/mistral/tests/unit/actions/powerops/test_registration.py b/mistral/tests/unit/actions/powerops/test_registration.py
+new file mode 100644
+index 0000000..9aa8edf
+--- /dev/null
++++ b/mistral/tests/unit/actions/powerops/test_registration.py
+@@ -0,0 +1,49 @@
++# Copyright 2026 OpenStack Foundation
++#
++# Licensed under the Apache License, Version 2.0 (the "License"); you may
++# not use this file except in compliance with the License. You may obtain
++# a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++# License for the specific language governing permissions and limitations
++# under the License.
++
++import importlib.metadata
++
++from mistral.actions.powerops import planned
++from mistral.actions.powerops import return_host
++from mistral.tests.unit import base
++
++
++EXPECTED_ACTIONS = {
++    'powerops.host_power_status': return_host.HostPowerStatusAction,
++    'powerops.planned_power_off': planned.PlannedPowerOffAction,
++    'powerops.planned_reboot': planned.PlannedRebootAction,
++    'powerops.power_on_for_inspection': (
++        return_host.PowerOnForInspectionAction
++    ),
++    'powerops.return_to_service': return_host.ReturnToServiceAction,
++}
++
++
++class PowerOpsRegistrationTest(base.BaseTest):
++    def test_installed_distribution_exposes_exact_powerops_actions(self):
++        distribution = importlib.metadata.distribution('mistral')
++        entry_points = {
++            entry_point.name: entry_point
++            for entry_point in distribution.entry_points
++            if (
++                entry_point.group == 'mistral.actions'
++                and entry_point.name.startswith('powerops.')
++            )
++        }
++
++        self.assertEqual(set(EXPECTED_ACTIONS), set(entry_points))
++
++        for name, expected_class in EXPECTED_ACTIONS.items():
++            with self.subTest(action=name):
++                self.assertIs(expected_class, entry_points[name].load())
+diff --git a/mistral/tests/unit/actions/powerops/test_workbook.py b/mistral/tests/unit/actions/powerops/test_workbook.py
+new file mode 100644
+index 0000000..4cd8e72
+--- /dev/null
++++ b/mistral/tests/unit/actions/powerops/test_workbook.py
+@@ -0,0 +1,251 @@
++# Copyright 2026 OpenStack Foundation
++#
++# Licensed under the Apache License, Version 2.0 (the "License"); you may
++# not use this file except in compliance with the License. You may obtain
++# a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++# License for the specific language governing permissions and limitations
++# under the License.
++
++import pathlib
++
++from mistral import expressions
++from mistral.lang import parser
++from mistral.tests.unit import base
++from mistral.workflow import states
++from mistral_lib import utils as ml_utils
++
++
++WORKBOOK_PATH = pathlib.Path('etc/mistral/power_ops.yaml')
++EXPECTED_WORKFLOWS = {
++    'host_power_status',
++    'planned_power_off',
++    'planned_reboot',
++    'power_on_and_return',
++}
++EXPECTED_TASK_ACTIONS = {
++    'host_power_status': {
++        'status': 'powerops.host_power_status',
++    },
++    'planned_power_off': {
++        'power_off': 'powerops.planned_power_off',
++    },
++    'planned_reboot': {
++        'reboot': 'powerops.planned_reboot',
++    },
++    'power_on_and_return': {
++        'power_on_for_inspection': 'powerops.power_on_for_inspection',
++        'operator_inspection_gate': 'std.noop',
++        'return_to_service': 'powerops.return_to_service',
++    },
++}
++EXPECTED_TASK_INPUTS = {
++    'host_power_status': {
++        'status': {
++            'host': '<% $.host %>',
++            'segment_uuid': '<% $.segment_uuid %>',
++        },
++    },
++    'planned_power_off': {
++        'power_off': {
++            'host': '<% $.host %>',
++            'segment_uuid': '<% $.segment_uuid %>',
++            'instance_policy': '<% $.instance_policy %>',
++            'allow_hard_off': '<% $.allow_hard_off %>',
++        },
++    },
++    'planned_reboot': {
++        'reboot': {
++            'host': '<% $.host %>',
++            'segment_uuid': '<% $.segment_uuid %>',
++            'instance_policy': '<% $.instance_policy %>',
++            'allow_hard_off': '<% $.allow_hard_off %>',
++        },
++    },
++    'power_on_and_return': {
++        'power_on_for_inspection': {
++            'host': '<% $.host %>',
++            'segment_uuid': '<% $.segment_uuid %>',
++        },
++        'operator_inspection_gate': {},
++        'return_to_service': {
++            'host': '<% $.host %>',
++            'segment_uuid': '<% $.segment_uuid %>',
++            'stopped_instance_ids': '<% $.stopped_instance_ids %>',
++            'stale_domains_checked': (
++                "<% env().get('stale_domains_checked', false) %>"
++            ),
++        },
++    },
++}
++RESULT_TASKS = {
++    'host_power_status': 'status',
++    'planned_power_off': 'power_off',
++    'planned_reboot': 'reboot',
++    'power_on_and_return': 'return_to_service',
++}
++STALE_DOMAINS_EXPRESSION = (
++    "<% env().get('stale_domains_checked', false) %>"
++)
++
++
++class PowerOpsWorkbookTest(base.BaseTest):
++    def setUp(self):
++        super(PowerOpsWorkbookTest, self).setUp()
++
++        definition = WORKBOOK_PATH.read_text(encoding='utf-8')
++        self.workbook = parser.get_workbook_spec_from_yaml(definition)
++        self.workflows = self.workbook.get_workflows()
++
++    def test_workbook_exposes_exact_public_api(self):
++        self.assertEqual('power_ops', self.workbook.get_name())
++        self.assertEqual(
++            EXPECTED_WORKFLOWS, set(self.workflows.item_keys())
++        )
++
++        expected_inputs = {
++            'host_power_status': {
++                'host': ml_utils.NotDefined,
++                'segment_uuid': ml_utils.NotDefined,
++            },
++            'planned_power_off': {
++                'host': ml_utils.NotDefined,
++                'segment_uuid': ml_utils.NotDefined,
++                'instance_policy': 'require_empty',
++                'allow_hard_off': False,
++            },
++            'planned_reboot': {
++                'host': ml_utils.NotDefined,
++                'segment_uuid': ml_utils.NotDefined,
++                'instance_policy': 'require_empty',
++                'allow_hard_off': False,
++            },
++            'power_on_and_return': {
++                'host': ml_utils.NotDefined,
++                'segment_uuid': ml_utils.NotDefined,
++                'stopped_instance_ids': [],
++            },
++        }
++
++        for workflow_name, task_actions in EXPECTED_TASK_ACTIONS.items():
++            with self.subTest(workflow=workflow_name):
++                workflow = self.workflows[workflow_name]
++                tasks = workflow.get_tasks()
++                self.assertEqual(expected_inputs[workflow_name],
++                                 workflow.get_input())
++                self.assertEqual(set(task_actions), set(tasks.item_keys()))
++                self.assertEqual(
++                    task_actions,
++                    {
++                        task_name: tasks[task_name].get_action_name()
++                        for task_name in tasks.item_keys()
++                    },
++                )
++                self.assertEqual(
++                    EXPECTED_TASK_INPUTS[workflow_name],
++                    {
++                        task_name: tasks[task_name].get_input()
++                        for task_name in tasks.item_keys()
++                    },
++                )
++                result_publish = tasks[
++                    RESULT_TASKS[workflow_name]
++                ].get_publish(states.SUCCESS)
++                self.assertEqual(
++                    {'result': '<% task().result %>'},
++                    result_publish.get_branch(),
++                )
++
++        self.assertEqual(
++            {'result': '<% $.result %>'},
++            self.workflows['host_power_status'].get_output(),
++        )
++        self.assertEqual(
++            {
++                'result': '<% $.result %>',
++                'stopped_instance_ids': (
++                    '<% $.result.stopped_instance_ids %>'
++                ),
++            },
++            self.workflows['planned_power_off'].get_output(),
++        )
++        self.assertEqual(
++            {'result': '<% $.result %>'},
++            self.workflows['planned_reboot'].get_output(),
++        )
++        self.assertEqual(
++            {'result': '<% $.result %>'},
++            self.workflows['power_on_and_return'].get_output(),
++        )
++
++    def test_return_graph_has_real_boolean_operator_pause(self):
++        tasks = self.workflows['power_on_and_return'].get_tasks()
++        inspection = tasks['power_on_for_inspection']
++        gate = tasks['operator_inspection_gate']
++        return_task = tasks['return_to_service']
++
++        self.assertEqual(
++            [('operator_inspection_gate', '', {})],
++            inspection.get_on_success().get_next(),
++        )
++        self.assertIs(True, gate.get_policies().get_pause_before())
++        self.assertEqual(
++            [('return_to_service', '', {})],
++            gate.get_on_success().get_next(),
++        )
++        self.assertEqual(
++            '<% $.stopped_instance_ids %>',
++            return_task.get_input()['stopped_instance_ids'],
++        )
++        self.assertEqual(
++            STALE_DOMAINS_EXPRESSION,
++            return_task.get_input()['stale_domains_checked'],
++        )
++
++    def test_operator_gate_expression_defaults_false_and_requires_boolean(
++            self):
++        self.assertIs(
++            False,
++            expressions.evaluate(
++                STALE_DOMAINS_EXPRESSION,
++                {'__env': {}},
++            ),
++        )
++        self.assertIs(
++            True,
++            expressions.evaluate(
++                STALE_DOMAINS_EXPRESSION,
++                {'__env': {'stale_domains_checked': True}},
++            ),
++        )
++        self.assertEqual(
++            'true',
++            expressions.evaluate(
++                STALE_DOMAINS_EXPRESSION,
++                {'__env': {'stale_domains_checked': 'true'}},
++            ),
++        )
++
++    def test_planned_workflows_expose_no_evacuation_or_lock_task(self):
++        action_names = []
++        task_names = []
++
++        for workflow_name in self.workflows.item_keys():
++            tasks = self.workflows[workflow_name].get_tasks()
++
++            for task_name in tasks.item_keys():
++                task_names.append(task_name.lower())
++                action_names.append(
++                    tasks[task_name].get_action_name().lower()
++                )
++
++        exposed_names = action_names + task_names
++
++        self.assertFalse(any('evacuat' in name for name in exposed_names))
++        self.assertFalse(any('coordinat' in name for name in exposed_names))
++        self.assertFalse(any('lock' in name for name in exposed_names))
+diff --git a/releasenotes/notes/powerops-planned-host-actions.yaml b/releasenotes/notes/powerops-planned-host-actions.yaml
+new file mode 100644
+index 0000000..653fb79
+--- /dev/null
++++ b/releasenotes/notes/powerops-planned-host-actions.yaml
+@@ -0,0 +1,26 @@
++---
++features:
++  - |
++    Adds five planned-host PowerOps actions and the ``power_ops`` workbook.
++    The public workflows provide read-only host status, planned power-off,
++    planned reboot, and a two-phase power-on and return-to-service path.
++    The return path pauses for operator inspection and resumes only when the
++    workflow environment contains the real Boolean
++    ``stale_domains_checked=true`` assertion.
++security:
++  - |
++    Mutating PowerOps actions coordinate through an etcd-backed per-host
++    lock and fail closed when coordination health or ownership cannot be
++    proved.  Instance migration, stop, and restart operations are performed
++    sequentially with configured pacing; planned workflows never evacuate.
++upgrade:
++  - |
++    PowerOps remains disabled by default, and registered actions are inert
++    until an authorized caller explicitly invokes them.  Kolla-Ansible is
++    responsible for deployment-time action-catalogue population and workbook
++    registration; those reconciliation steps do not execute PowerOps actions.
++other:
++  - |
++    This change has static and unit-test coverage only.  It does not claim
++    live OpenStack, etcd, BMC, virtual-machine, migration, or physical-host
++    verification.
+diff --git a/setup.cfg b/setup.cfg
+index 41c9d14..b49ab88 100644
+--- a/setup.cfg
++++ b/setup.cfg
+@@ -58,6 +58,11 @@ mistral.action.providers =
+     dynamic = mistral.actions.dynamic_action:DynamicActionProvider
+ 
+ mistral.actions =
++    powerops.host_power_status = mistral.actions.powerops.return_host:HostPowerStatusAction
++    powerops.planned_power_off = mistral.actions.powerops.planned:PlannedPowerOffAction
++    powerops.planned_reboot = mistral.actions.powerops.planned:PlannedRebootAction
++    powerops.power_on_for_inspection = mistral.actions.powerops.return_host:PowerOnForInspectionAction
++    powerops.return_to_service = mistral.actions.powerops.return_host:ReturnToServiceAction
+     std.async_noop = mistral.actions.std_actions:AsyncNoOpAction
+     std.noop = mistral.actions.std_actions:NoOpAction
+     std.fail = mistral.actions.std_actions:FailAction
+-- 
+2.49.0
+

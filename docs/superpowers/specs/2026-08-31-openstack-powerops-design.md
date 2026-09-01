@@ -275,6 +275,12 @@ acquire host lock for power_on_for_inspection
 - A lock is released only by the execution that owns it.
 - Failure to write a success audit record is treated as workflow failure and
   retains the fail-safe host state.
+- A coordinator release or stop error that occurs only after the final health
+  proof and durable success audit is a terminal cleanup warning, not a failed
+  power transition. The action records a separate
+  `completed_with_coordination_cleanup_error` audit and returns its completed
+  result so a retry cannot repeat an already completed power cycle. It never
+  attempts fail-safe mutations after ownership is no longer proven.
 - Conflicting Ironic `target_power_state`, a non-empty `last_error`, timeout,
   duplicate node match or unknown power state is a hard failure.
 - Emergency fencing failures stop TaskFlow before instance preparation and

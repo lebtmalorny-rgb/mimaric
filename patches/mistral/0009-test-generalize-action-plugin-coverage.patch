@@ -1,0 +1,235 @@
+From 8a2db56eb5779a1ec59b5f257b7b3b6d50dde9ac Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Tue, 1 Sep 2026 06:22:15 +0300
+Subject: [PATCH 9/9] test: generalize action plugin coverage
+
+---
+ .../actions/powerops/test_registration.py     | 53 +++++++++++++++++++
+ .../actions/test_legacy_action_provider.py    | 42 ++++++++++-----
+ mistral/tests/unit/api/v2/test_actions.py     | 18 ++++++-
+ mistral/tests/unit/api/v2/test_executions.py  | 30 +++++++++++
+ 4 files changed, 129 insertions(+), 14 deletions(-)
+
+diff --git a/mistral/tests/unit/actions/powerops/test_registration.py b/mistral/tests/unit/actions/powerops/test_registration.py
+index 9aa8edf..6d0408b 100644
+--- a/mistral/tests/unit/actions/powerops/test_registration.py
++++ b/mistral/tests/unit/actions/powerops/test_registration.py
+@@ -14,9 +14,11 @@
+ 
+ import importlib.metadata
+ 
++from mistral.actions import legacy
+ from mistral.actions.powerops import planned
+ from mistral.actions.powerops import return_host
+ from mistral.tests.unit import base
++from mistral_lib import actions as ml_actions
+ 
+ 
+ EXPECTED_ACTIONS = {
+@@ -28,6 +30,22 @@ EXPECTED_ACTIONS = {
+     ),
+     'powerops.return_to_service': return_host.ReturnToServiceAction,
+ }
++EXPECTED_PARAMS_SPECS = {
++    'powerops.host_power_status': 'host, segment_uuid',
++    'powerops.planned_power_off': (
++        'host, segment_uuid, instance_policy="require_empty", '
++        'allow_hard_off=false'
++    ),
++    'powerops.planned_reboot': (
++        'host, segment_uuid, instance_policy="require_empty", '
++        'allow_hard_off=false'
++    ),
++    'powerops.power_on_for_inspection': 'host, segment_uuid',
++    'powerops.return_to_service': (
++        'host, segment_uuid, stopped_instance_ids, '
++        'stale_domains_checked=false'
++    ),
++}
+ 
+ 
+ class PowerOpsRegistrationTest(base.BaseTest):
+@@ -47,3 +65,38 @@ class PowerOpsRegistrationTest(base.BaseTest):
+         for name, expected_class in EXPECTED_ACTIONS.items():
+             with self.subTest(action=name):
+                 self.assertIs(expected_class, entry_points[name].load())
++
++    def test_legacy_provider_discovers_catalogue_ready_powerops_actions(self):
++        self.override_config(
++            'load_action_plugins',
++            True,
++            'legacy_action_provider'
++        )
++        self.override_config(
++            'load_action_generators',
++            False,
++            'legacy_action_provider'
++        )
++
++        provider = legacy.LegacyActionProvider()
++        action_descs = {
++            action_desc.name: action_desc
++            for action_desc in provider.find_all()
++            if action_desc.name.startswith('powerops.')
++        }
++
++        self.assertEqual(set(EXPECTED_ACTIONS), set(action_descs))
++
++        for name, expected_class in EXPECTED_ACTIONS.items():
++            with self.subTest(action=name):
++                action_desc = action_descs[name]
++
++                self.assertIsInstance(
++                    action_desc,
++                    ml_actions.PythonActionDescriptor
++                )
++                self.assertIs(expected_class, action_desc.action_class)
++                self.assertEqual(
++                    EXPECTED_PARAMS_SPECS[name],
++                    action_desc.params_spec
++                )
+diff --git a/mistral/tests/unit/actions/test_legacy_action_provider.py b/mistral/tests/unit/actions/test_legacy_action_provider.py
+index 3136805..6bab871 100644
+--- a/mistral/tests/unit/actions/test_legacy_action_provider.py
++++ b/mistral/tests/unit/actions/test_legacy_action_provider.py
+@@ -12,6 +12,7 @@
+ #    See the License for the specific language governing permissions and
+ #    limitations under the License.
+ 
++import importlib.metadata
+ from unittest import mock
+ 
+ from mistral_lib import actions as ml_actions
+@@ -131,23 +132,40 @@ class LegacyActionProviderTest(base.BaseTest):
+             False,
+             'legacy_action_provider'
+         )
++        self.override_config(
++            'only_builtin_actions',
++            False,
++            'legacy_action_provider'
++        )
+ 
+         provider = legacy.LegacyActionProvider()
+ 
+-        action_descs = provider.find_all()
+-
+-        prefix = 'mistral.actions.std_actions'
++        action_descs = {
++            action_desc.name: action_desc
++            for action_desc in provider.find_all()
++        }
++        plugin_names = {
++            entry_point.name
++            for distribution in importlib.metadata.distributions()
++            for entry_point in distribution.entry_points
++            if entry_point.group == 'mistral.actions'
++        }
++
++        self.assertEqual(plugin_names, set(action_descs))
++        self.assertTrue(all(
++            isinstance(action_desc, ml_actions.PythonActionDescriptor)
++            for action_desc in action_descs.values()
++        ))
++        self.assertNotIn('hello', action_descs)
++        self.assertNotIn('goodbye', action_descs)
++
++        echo_action_desc = action_descs['std.echo']
+ 
+-        self.assertTrue(
+-            all(
+-                [
+-                    a_d.action_class.__module__ == prefix
+-                    for a_d in action_descs
+-                ]
+-            )
++        self.assertEqual(
++            'mistral.actions.std_actions.EchoAction',
++            echo_action_desc.action_class_name
+         )
+-
+-        self._assert_single_item(action_descs, name='std.echo')
++        self.assertEqual('output, delay=0', echo_action_desc.params_spec)
+ 
+     @mock.patch.object(
+         legacy.LegacyActionProvider,
+diff --git a/mistral/tests/unit/api/v2/test_actions.py b/mistral/tests/unit/api/v2/test_actions.py
+index e91586b..688e291 100644
+--- a/mistral/tests/unit/api/v2/test_actions.py
++++ b/mistral/tests/unit/api/v2/test_actions.py
+@@ -507,6 +507,13 @@ class TestActionsController(base.APITest):
+         adhoc_actions.create_actions(ADHOC_ACTION_YAML_A)
+         adhoc_actions.create_actions(ADHOC_ACTION_YAML)
+ 
++        all_resp = self.app.get('/v2/actions')
++        all_names = [
++            action['name'] for action in all_resp.json['actions']
++        ]
++
++        self.assertEqual(sorted(all_names), all_names)
++
+         resp = self.app.get('/v2/actions?limit=1')
+ 
+         self.assertEqual(200, resp.status_int)
+@@ -517,8 +524,15 @@ class TestActionsController(base.APITest):
+ 
+         self.assertEqual(200, resp.status_int)
+         self.assertEqual(2, len(resp.json['actions']))
+-        self.assertEqual(resp.json['actions'][0]['name'], 'my_action')
+-        self.assertEqual(resp.json['actions'][1]['name'], 'std.async_noop')
++
++        marker_index = all_names.index('my_action')
++        expected_names = all_names[marker_index:marker_index + 2]
++        actual_names = [
++            action['name'] for action in resp.json['actions']
++        ]
++
++        self.assertEqual(['my_action'], expected_names[:1])
++        self.assertEqual(expected_names, actual_names)
+ 
+     def test_get_all_pagination_limit_negative(self):
+         resp = self.app.get(
+diff --git a/mistral/tests/unit/api/v2/test_executions.py b/mistral/tests/unit/api/v2/test_executions.py
+index a54c14e..9bed703 100644
+--- a/mistral/tests/unit/api/v2/test_executions.py
++++ b/mistral/tests/unit/api/v2/test_executions.py
+@@ -338,6 +338,36 @@ class TestExecutionsController(base.APITest):
+         self.assertDictEqual(expected_exec, resp.json)
+         mock_resume_wf.assert_called_once_with('123', env=None)
+ 
++    @mock.patch.object(
++        db_api,
++        'get_workflow_execution',
++        mock.MagicMock(return_value=WF_EX)
++    )
++    @mock.patch.object(rpc_clients.EngineClient, 'resume_workflow')
++    def test_put_state_resume_with_nested_env(self, mock_resume_wf):
++        update_exec = {
++            'id': WF_EX['id'],
++            'state': states.RUNNING,
++            'params': {
++                'env': {
++                    'stale_domains_checked': True
++                }
++            }
++        }
++
++        wf_ex = copy.deepcopy(WF_EX)
++        wf_ex['state'] = states.RUNNING
++        wf_ex['state_info'] = None
++        mock_resume_wf.return_value = wf_ex
++
++        resp = self.app.put_json('/v2/executions/123', update_exec)
++
++        self.assertEqual(200, resp.status_int)
++        mock_resume_wf.assert_called_once_with(
++            '123',
++            env={'stale_domains_checked': True}
++        )
++
+     @mock.patch.object(
+         db_api,
+         'get_workflow_execution',
+-- 
+2.49.0
+

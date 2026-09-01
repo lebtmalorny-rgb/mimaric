@@ -1,0 +1,62 @@
+From ef15717cfe6d09e23ab440c93f871dcbb4fb5072 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Tue, 1 Sep 2026 03:32:01 +0300
+Subject: [PATCH 2/9] fix: declare PowerOps etcd backend
+
+---
+ .../actions/powerops/test_coordination.py     | 28 +++++++++++++++++++
+ requirements.txt                              |  2 +-
+ 2 files changed, 29 insertions(+), 1 deletion(-)
+
+diff --git a/mistral/tests/unit/actions/powerops/test_coordination.py b/mistral/tests/unit/actions/powerops/test_coordination.py
+index 2e030f6..45f0cda 100644
+--- a/mistral/tests/unit/actions/powerops/test_coordination.py
++++ b/mistral/tests/unit/actions/powerops/test_coordination.py
+@@ -307,6 +307,34 @@ class OperationCoordinatorTest(base.BaseTest):
+             )
+             self.assertRaises(RuntimeError, coordinator.assert_healthy)
+ 
++    @mock.patch.object(tooz_coordination, "get_coordinator")
++    def test_release_failure_does_not_replace_protected_error(
++            self, get_coordinator):
++        for release_failure in (False, RuntimeError("etcd down")):
++            backend, lock = self._backend()
++
++            if release_failure is False:
++                lock.release.return_value = False
++            else:
++                lock.release.side_effect = release_failure
++
++            get_coordinator.return_value = backend
++            coordinator = coordination.OperationCoordinator("action-1")
++
++            try:
++                with coordinator:
++                    with coordinator.lock_host("compute-01"):
++                        raise ValueError("protected failure")
++            except Exception as error:
++                self.assertIsInstance(error, ValueError)
++                self.assertEqual("protected failure", str(error))
++            else:
++                self.fail("release failure replaced protected failure")
++
++            self.assertRaises(RuntimeError, coordinator.assert_healthy)
++            lock.release.assert_called_once_with()
++            backend.stop.assert_called_once_with()
++
+     @mock.patch.object(tooz_coordination, "get_coordinator")
+     def test_stop_is_idempotent(self, get_coordinator):
+         backend, _lock = self._backend()
+diff --git a/requirements.txt b/requirements.txt
+index 0fde366..5c06ed0 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -38,4 +38,4 @@ stevedore>=1.20.0 # Apache-2.0
+ WSME>=0.8.0 # MIT
+ yaql>=1.1.3 # Apache 2.0 License
+ tooz>=1.58.0 # Apache-2.0
+-
++etcd3gw!=0.2.2,!=0.2.3,!=0.2.6 # Apache-2.0
+-- 
+2.49.0
+

@@ -1,0 +1,766 @@
+From bfc3a3fe77620ce871f1e4cc5d2748dbaa020d9c Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Tue, 1 Sep 2026 03:17:03 +0300
+Subject: [PATCH 1/9] feat: add PowerOps action coordination
+
+---
+ mistral/actions/powerops/__init__.py          |   0
+ mistral/actions/powerops/coordination.py      | 264 ++++++++++++++
+ mistral/config.py                             |  89 +++++
+ .../tests/unit/actions/powerops/__init__.py   |   0
+ .../actions/powerops/test_coordination.py     | 343 ++++++++++++++++++
+ 5 files changed, 696 insertions(+)
+ create mode 100644 mistral/actions/powerops/__init__.py
+ create mode 100644 mistral/actions/powerops/coordination.py
+ create mode 100644 mistral/tests/unit/actions/powerops/__init__.py
+ create mode 100644 mistral/tests/unit/actions/powerops/test_coordination.py
+
+diff --git a/mistral/actions/powerops/__init__.py b/mistral/actions/powerops/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/mistral/actions/powerops/coordination.py b/mistral/actions/powerops/coordination.py
+new file mode 100644
+index 0000000..f2a41ed
+--- /dev/null
++++ b/mistral/actions/powerops/coordination.py
+@@ -0,0 +1,264 @@
++# Copyright 2026 OpenStack Foundation
++#
++# Licensed under the Apache License, Version 2.0 (the "License"); you may
++# not use this file except in compliance with the License. You may obtain
++# a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++# License for the specific language governing permissions and limitations
++# under the License.
++
++import contextlib
++import re
++from urllib import parse
++
++from oslo_config import cfg
++from tooz import coordination as tooz_coordination
++
++
++CONF = cfg.CONF
++
++HOST_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]*$')
++REQUIRED_CHARACTERISTICS = frozenset({
++    tooz_coordination.Characteristics.DISTRIBUTED_ACROSS_PROCESSES,
++    tooz_coordination.Characteristics.LINEARIZABLE,
++})
++_SUPPORTED_SCHEMES = frozenset({'etcd3+http', 'etcd3+https'})
++
++
++def host_lock_name(host):
++    if not isinstance(host, str) or not HOST_RE.fullmatch(host):
++        raise ValueError('host must be a canonical Nova hostname')
++
++    return 'powerops/host/{}'.format(host)
++
++
++class OperationCoordinator:
++    def __init__(self, member_id):
++        self.member_id = member_id
++        self.backend = None
++        self._active_lock = None
++        self._started = False
++        self._unhealthy_reason = None
++
++    def _mark_unhealthy(self, reason):
++        if self._unhealthy_reason is None:
++            self._unhealthy_reason = reason
++
++        return RuntimeError(self._unhealthy_reason)
++
++    def start(self):
++        if self._unhealthy_reason is not None:
++            raise RuntimeError(self._unhealthy_reason)
++
++        if self._started:
++            raise RuntimeError('PowerOps coordinator is already started')
++
++        url = CONF.powerops.coordination_url
++
++        if not CONF.powerops.enabled or not url:
++            raise RuntimeError('PowerOps etcd coordination is not configured')
++
++        if parse.urlsplit(url).scheme not in _SUPPORTED_SCHEMES:
++            raise RuntimeError('PowerOps requires an etcd3 HTTP(S) backend')
++
++        try:
++            backend = tooz_coordination.get_coordinator(
++                url,
++                self.member_id.encode('utf-8'),
++                characteristics=REQUIRED_CHARACTERISTICS,
++            )
++        except Exception as exc:
++            raise self._mark_unhealthy(
++                'could not create the PowerOps coordinator'
++            ) from exc
++
++        try:
++            characteristics = set(backend.CHARACTERISTICS)
++        except Exception as exc:
++            raise self._mark_unhealthy(
++                'PowerOps coordinator characteristics are unavailable'
++            ) from exc
++
++        if not REQUIRED_CHARACTERISTICS.issubset(characteristics):
++            raise self._mark_unhealthy(
++                'PowerOps coordinator lacks required characteristics'
++            )
++
++        self.backend = backend
++
++        try:
++            self.backend.start(start_heart=True)
++        except Exception as exc:
++            raise self._mark_unhealthy(
++                'could not start the PowerOps coordinator'
++            ) from exc
++
++        self._started = True
++
++        try:
++            self.assert_healthy()
++        except Exception:
++            try:
++                self.stop()
++            except Exception:
++                pass
++            raise
++
++        return self
++
++    def stop(self):
++        if not self._started:
++            return
++
++        self._started = False
++
++        try:
++            self.backend.stop()
++        except Exception as exc:
++            raise self._mark_unhealthy(
++                'could not stop the PowerOps coordinator'
++            ) from exc
++
++    def _validate_lock(self, lock):
++        try:
++            compatible = (
++                lock._coord is self.backend
++                and isinstance(lock._key_b64, str)
++                and isinstance(lock._uuid, str)
++                and callable(lock._coord.client.transaction)
++                and callable(lock.acquire)
++                and callable(lock.release)
++            )
++        except (AttributeError, TypeError):
++            compatible = False
++
++        if not compatible:
++            raise self._mark_unhealthy(
++                'PowerOps lock cannot prove etcd ownership'
++            )
++
++    @staticmethod
++    def _ownership_transaction(lock):
++        return {
++            'compare': [{
++                'key': lock._key_b64,
++                'result': 'EQUAL',
++                'target': 'VALUE',
++                'value': lock._uuid,
++            }],
++            'success': [{
++                'request_range': {'key': lock._key_b64}
++            }],
++            'failure': [],
++        }
++
++    def assert_healthy(self):
++        if self._unhealthy_reason is not None:
++            raise RuntimeError(self._unhealthy_reason)
++
++        if not self._started or self.backend is None:
++            raise self._mark_unhealthy(
++                'PowerOps coordinator is not running'
++            )
++
++        try:
++            heartbeat_alive = self.backend.heart.is_alive()
++        except Exception as exc:
++            raise self._mark_unhealthy(
++                'PowerOps coordinator heartbeat state is unavailable'
++            ) from exc
++
++        if heartbeat_alive is not True:
++            raise self._mark_unhealthy(
++                'PowerOps coordinator heartbeat is not alive'
++            )
++
++        if self._active_lock is None:
++            return
++
++        try:
++            result = self.backend.client.transaction(
++                self._ownership_transaction(self._active_lock)
++            )
++        except Exception as exc:
++            raise self._mark_unhealthy(
++                'could not prove PowerOps lock ownership'
++            ) from exc
++
++        if not isinstance(result, dict) or result.get('succeeded') is not True:
++            raise self._mark_unhealthy(
++                'PowerOps host lock ownership was lost'
++            )
++
++    @contextlib.contextmanager
++    def lock_host(self, host):
++        self.assert_healthy()
++
++        if self._active_lock is not None:
++            raise self._mark_unhealthy(
++                'PowerOps coordinator already owns a host lock'
++            )
++
++        lock = self.backend.get_lock(
++            host_lock_name(host).encode('utf-8')
++        )
++        self._validate_lock(lock)
++
++        try:
++            acquired = lock.acquire(
++                blocking=CONF.powerops.host_lock_timeout
++            )
++        except Exception as exc:
++            raise RuntimeError(
++                'could not acquire the PowerOps host lock'
++            ) from exc
++
++        if acquired is not True:
++            raise RuntimeError('timed out acquiring host PowerOps lock')
++
++        self._active_lock = lock
++        protected_error = False
++
++        try:
++            self.assert_healthy()
++            yield self
++        except BaseException:
++            protected_error = True
++            raise
++        finally:
++            release_error = None
++
++            try:
++                released = lock.release()
++            except Exception as exc:
++                release_error = self._mark_unhealthy(
++                    'could not release the PowerOps host lock'
++                )
++                release_error.__cause__ = exc
++            else:
++                if released is not True:
++                    release_error = self._mark_unhealthy(
++                        'PowerOps host lock release was not confirmed'
++                    )
++
++            if release_error is None:
++                self._active_lock = None
++            elif not protected_error:
++                raise release_error
++
++    def __enter__(self):
++        return self.start()
++
++    def __exit__(self, exc_type, exc_value, traceback):
++        try:
++            self.stop()
++        except Exception:
++            if exc_type is None:
++                raise
++
++        return False
+diff --git a/mistral/config.py b/mistral/config.py
+index 69f30b2..374edcf 100644
+--- a/mistral/config.py
++++ b/mistral/config.py
+@@ -632,6 +632,92 @@ context_versioning_opts = [
+     )
+ ]
+ 
++powerops_opts = [
++    cfg.BoolOpt(
++        'enabled',
++        default=False,
++        help=_('Enable planned host power operations.')
++    ),
++    cfg.StrOpt(
++        'coordination_url',
++        secret=True,
++        help=_('Etcd3 coordination URL for PowerOps host locks.')
++    ),
++    cfg.FloatOpt(
++        'host_lock_timeout',
++        default=30.0,
++        min=0.1,
++        help=_('Seconds to wait for a PowerOps host lock.')
++    ),
++    cfg.IntOpt(
++        'power_timeout',
++        default=180,
++        min=1,
++        help=_('Seconds to wait for a physical power transition.')
++    ),
++    cfg.IntOpt(
++        'poll_interval',
++        default=5,
++        min=1,
++        help=_('Seconds between PowerOps state observations.')
++    ),
++    cfg.IntOpt(
++        'stable_observations',
++        default=3,
++        min=2,
++        help=_('Consecutive observations required for a stable state.')
++    ),
++    cfg.IntOpt(
++        'graceful_shutdown_timeout',
++        default=300,
++        min=1,
++        help=_('Seconds allowed for a graceful host shutdown.')
++    ),
++    cfg.IntOpt(
++        'vm_action_timeout',
++        default=600,
++        min=1,
++        help=_('Seconds allowed for one planned instance operation.')
++    ),
++    cfg.IntOpt(
++        'service_timeout',
++        default=300,
++        min=1,
++        help=_('Seconds to wait for compute service state changes.')
++    ),
++    cfg.IntOpt(
++        'instance_interval',
++        default=5,
++        min=0,
++        help=_('Seconds to pace sequential instance operations.')
++    ),
++    cfg.StrOpt(
++        'region_name',
++        default='RegionOne',
++        help=_('OpenStack region used by PowerOps actions.')
++    ),
++    cfg.StrOpt(
++        'interface',
++        default='internal',
++        help=_('OpenStack endpoint interface used by PowerOps actions.')
++    ),
++    cfg.StrOpt(
++        'nova_disable_reason',
++        default='PowerOps planned operation',
++        help=_('Reason recorded when PowerOps disables nova-compute.')
++    ),
++    cfg.ListOpt(
++        'allowed_project_names',
++        default=[],
++        help=_('Exact project names authorized to invoke PowerOps actions.')
++    ),
++    cfg.ListOpt(
++        'allowed_user_names',
++        default=[],
++        help=_('Exact user names authorized to invoke PowerOps actions.')
++    ),
++]
++
+ coordination_opts = [
+     cfg.StrOpt(
+         'backend_url',
+@@ -807,6 +893,7 @@ CRON_TRIGGER_GROUP = 'cron_trigger'
+ EVENT_ENGINE_GROUP = 'event_engine'
+ NOTIFIER_GROUP = 'notifier'
+ PECAN_GROUP = 'pecan'
++POWEROPS_GROUP = 'powerops'
+ COORDINATION_GROUP = 'coordination'
+ EXECUTION_EXPIRATION_POLICY_GROUP = 'execution_expiration_policy'
+ ACTION_HEARTBEAT_GROUP = 'action_heartbeat'
+@@ -851,6 +938,7 @@ CONF.register_opts(context_versioning_opts, group=CONTEXT_VERSIONING_GROUP)
+ CONF.register_opts(event_engine_opts, group=EVENT_ENGINE_GROUP)
+ CONF.register_opts(notifier_opts, group=NOTIFIER_GROUP)
+ CONF.register_opts(pecan_opts, group=PECAN_GROUP)
++CONF.register_opts(powerops_opts, group=POWEROPS_GROUP)
+ CONF.register_opts(coordination_opts, group=COORDINATION_GROUP)
+ CONF.register_opts(profiler_opts, group=PROFILER_GROUP)
+ CONF.register_opts(keycloak_oidc_opts, group=KEYCLOAK_OIDC_GROUP)
+@@ -896,6 +984,7 @@ def list_opts():
+         (CRON_TRIGGER_GROUP, cron_trigger_opts),
+         (NOTIFIER_GROUP, notifier_opts),
+         (PECAN_GROUP, pecan_opts),
++        (POWEROPS_GROUP, powerops_opts),
+         (COORDINATION_GROUP, coordination_opts),
+         (EXECUTION_EXPIRATION_POLICY_GROUP, execution_expiration_policy_opts),
+         (PROFILER_GROUP, profiler_opts),
+diff --git a/mistral/tests/unit/actions/powerops/__init__.py b/mistral/tests/unit/actions/powerops/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/mistral/tests/unit/actions/powerops/test_coordination.py b/mistral/tests/unit/actions/powerops/test_coordination.py
+new file mode 100644
+index 0000000..2e030f6
+--- /dev/null
++++ b/mistral/tests/unit/actions/powerops/test_coordination.py
+@@ -0,0 +1,343 @@
++# Copyright 2026 OpenStack Foundation
++#
++# Licensed under the Apache License, Version 2.0 (the "License"); you may
++# not use this file except in compliance with the License. You may obtain
++# a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++# License for the specific language governing permissions and limitations
++# under the License.
++
++from unittest import mock
++
++from tooz import coordination as tooz_coordination
++from tooz.drivers import etcd3gw
++
++from mistral.actions.powerops import coordination
++from mistral import config
++from mistral.tests.unit import base
++
++
++_REQUIRED_CHARACTERISTICS = frozenset({
++    tooz_coordination.Characteristics.DISTRIBUTED_ACROSS_PROCESSES,
++    tooz_coordination.Characteristics.LINEARIZABLE,
++})
++
++
++class OperationCoordinatorTest(base.BaseTest):
++    def setUp(self):
++        super().setUp()
++
++        self.override_config("enabled", True, "powerops")
++        self.override_config(
++            "coordination_url",
++            "etcd3+http://etcd:2379?api_version=v3",
++            "powerops",
++        )
++
++    @staticmethod
++    def _backend():
++        backend = mock.Mock()
++        backend.CHARACTERISTICS = tuple(_REQUIRED_CHARACTERISTICS)
++        backend.heart.is_alive.return_value = True
++
++        lock = mock.Mock()
++        lock._coord = backend
++        lock._key_b64 = "encoded-host-lock-key"
++        lock._uuid = "encoded-owner-uuid"
++        lock.acquire.return_value = True
++        lock.release.return_value = True
++
++        backend.get_lock.return_value = lock
++        backend.client.transaction.return_value = {"succeeded": True}
++
++        return backend, lock
++
++    def test_powerops_config_is_exported_in_list_opts_shape(self):
++        exported = config.list_opts()
++        entries = [entry for entry in exported if entry[0] == "powerops"]
++
++        self.assertIsInstance(exported, list)
++        self.assertEqual(
++            [(config.POWEROPS_GROUP, config.powerops_opts)],
++            entries,
++        )
++
++        options = {option.name: option for option in entries[0][1]}
++        expected_defaults = {
++            "enabled": False,
++            "coordination_url": None,
++            "host_lock_timeout": 30.0,
++            "power_timeout": 180,
++            "poll_interval": 5,
++            "stable_observations": 3,
++            "graceful_shutdown_timeout": 300,
++            "vm_action_timeout": 600,
++            "service_timeout": 300,
++            "instance_interval": 5,
++            "region_name": "RegionOne",
++            "interface": "internal",
++            "nova_disable_reason": "PowerOps planned operation",
++            "allowed_project_names": [],
++            "allowed_user_names": [],
++        }
++
++        self.assertEqual(expected_defaults, {
++            name: option.default for name, option in options.items()
++        })
++        self.assertTrue(options["coordination_url"].secret)
++
++    def test_host_lock_name_accepts_only_canonical_host(self):
++        self.assertEqual(
++            "powerops/host/compute-01.example",
++            coordination.host_lock_name("compute-01.example"),
++        )
++
++        for host in (" host-1", "host-1 ", "host/1", "", None):
++            self.assertRaises(ValueError, coordination.host_lock_name, host)
++
++    @mock.patch.object(tooz_coordination, "get_coordinator")
++    def test_action_owns_exact_host_lock(self, get_coordinator):
++        backend, lock = self._backend()
++        get_coordinator.return_value = backend
++
++        with coordination.OperationCoordinator("action-1") as coordinator:
++            with coordinator.lock_host("compute-01"):
++                coordinator.assert_healthy()
++
++        get_coordinator.assert_called_once_with(
++            "etcd3+http://etcd:2379?api_version=v3",
++            b"action-1",
++            characteristics=_REQUIRED_CHARACTERISTICS,
++        )
++        backend.start.assert_called_once_with(start_heart=True)
++        backend.get_lock.assert_called_once_with(
++            b"powerops/host/compute-01"
++        )
++        lock.acquire.assert_called_once_with(blocking=30.0)
++        self.assertEqual(2, backend.client.transaction.call_count)
++        backend.client.transaction.assert_called_with({
++            "compare": [{
++                "key": "encoded-host-lock-key",
++                "result": "EQUAL",
++                "target": "VALUE",
++                "value": "encoded-owner-uuid",
++            }],
++            "success": [{
++                "request_range": {"key": "encoded-host-lock-key"}
++            }],
++            "failure": [],
++        })
++        lock.release.assert_called_once_with()
++        backend.stop.assert_called_once_with()
++
++    @mock.patch.object(tooz_coordination, "get_coordinator")
++    def test_pinned_etcd3_lock_owner_fields_are_supported(
++            self, get_coordinator):
++        backend, _lock = self._backend()
++        lock = etcd3gw.Etcd3Lock(
++            backend,
++            b"powerops/host/compute-01",
++            30,
++        )
++        lock.acquire = mock.Mock(return_value=True)
++        lock.release = mock.Mock(return_value=True)
++        backend.get_lock.return_value = lock
++        get_coordinator.return_value = backend
++
++        with coordination.OperationCoordinator("action-1") as coordinator:
++            with coordinator.lock_host("compute-01"):
++                pass
++
++        transaction = backend.client.transaction.call_args.args[0]
++        self.assertIsInstance(transaction["compare"][0]["key"], str)
++        self.assertIsInstance(transaction["compare"][0]["value"], str)
++
++    @mock.patch.object(tooz_coordination, "get_coordinator")
++    def test_disabled_powerops_fails_before_backend_creation(
++            self, get_coordinator):
++        self.override_config("enabled", False, "powerops")
++
++        self.assertRaises(
++            RuntimeError,
++            coordination.OperationCoordinator("action-1").start,
++        )
++        get_coordinator.assert_not_called()
++
++    @mock.patch.object(tooz_coordination, "get_coordinator")
++    def test_enabled_powerops_requires_coordination_url(
++            self, get_coordinator):
++        self.override_config("coordination_url", None, "powerops")
++
++        self.assertRaises(
++            RuntimeError,
++            coordination.OperationCoordinator("action-1").start,
++        )
++        get_coordinator.assert_not_called()
++
++    @mock.patch.object(tooz_coordination, "get_coordinator")
++    def test_unsupported_backend_scheme_is_rejected(self, get_coordinator):
++        for url in (
++                "redis://redis:6379",
++                "etcd3://etcd:2379",
++                "zake://"):
++            self.override_config("coordination_url", url, "powerops")
++
++            self.assertRaises(
++                RuntimeError,
++                coordination.OperationCoordinator("action-1").start,
++            )
++
++        get_coordinator.assert_not_called()
++
++    @mock.patch.object(tooz_coordination, "get_coordinator")
++    def test_missing_required_characteristics_fails_closed(
++            self, get_coordinator):
++        backend, _lock = self._backend()
++        backend.CHARACTERISTICS = (
++            tooz_coordination.Characteristics.DISTRIBUTED_ACROSS_PROCESSES,
++        )
++        get_coordinator.return_value = backend
++
++        coordinator = coordination.OperationCoordinator("action-1")
++
++        self.assertRaises(RuntimeError, coordinator.start)
++        backend.start.assert_not_called()
++
++    @mock.patch.object(tooz_coordination, "get_coordinator")
++    def test_dead_heartbeat_makes_failure_sticky(self, get_coordinator):
++        backend, _lock = self._backend()
++        get_coordinator.return_value = backend
++        coordinator = coordination.OperationCoordinator("action-1")
++        coordinator.start()
++        self.addCleanup(coordinator.stop)
++        backend.heart.is_alive.return_value = False
++
++        self.assertRaises(RuntimeError, coordinator.assert_healthy)
++
++        backend.heart.is_alive.return_value = True
++        self.assertRaises(RuntimeError, coordinator.assert_healthy)
++        backend.client.transaction.assert_not_called()
++
++    @mock.patch.object(tooz_coordination, "get_coordinator")
++    def test_failed_owner_compare_releases_and_stays_unhealthy(
++            self, get_coordinator):
++        backend, lock = self._backend()
++        backend.client.transaction.return_value = {"succeeded": False}
++        get_coordinator.return_value = backend
++        coordinator = coordination.OperationCoordinator("action-1")
++
++        with coordinator:
++            self.assertRaises(
++                RuntimeError,
++                self._enter_host_lock,
++                coordinator,
++            )
++
++            calls = backend.client.transaction.call_count
++            backend.client.transaction.return_value = {"succeeded": True}
++            self.assertRaises(RuntimeError, coordinator.assert_healthy)
++            self.assertEqual(calls, backend.client.transaction.call_count)
++
++        lock.release.assert_called_once_with()
++
++    @mock.patch.object(tooz_coordination, "get_coordinator")
++    def test_owner_compare_error_fails_closed(self, get_coordinator):
++        backend, lock = self._backend()
++        backend.client.transaction.side_effect = RuntimeError("etcd down")
++        get_coordinator.return_value = backend
++
++        with coordination.OperationCoordinator("action-1") as coordinator:
++            self.assertRaises(
++                RuntimeError,
++                self._enter_host_lock,
++                coordinator,
++            )
++
++        lock.release.assert_called_once_with()
++
++    @mock.patch.object(tooz_coordination, "get_coordinator")
++    def test_incompatible_lock_is_rejected_before_acquire(
++            self, get_coordinator):
++        backend, lock = self._backend()
++        del lock._uuid
++        get_coordinator.return_value = backend
++
++        with coordination.OperationCoordinator("action-1") as coordinator:
++            self.assertRaises(
++                RuntimeError,
++                self._enter_host_lock,
++                coordinator,
++            )
++
++        lock.acquire.assert_not_called()
++        lock.release.assert_not_called()
++
++    @mock.patch.object(tooz_coordination, "get_coordinator")
++    def test_false_release_makes_coordinator_unhealthy(
++            self, get_coordinator):
++        backend, lock = self._backend()
++        lock.release.return_value = False
++        get_coordinator.return_value = backend
++
++        with coordination.OperationCoordinator("action-1") as coordinator:
++            self.assertRaises(
++                RuntimeError,
++                self._enter_host_lock,
++                coordinator,
++            )
++            self.assertRaises(RuntimeError, coordinator.assert_healthy)
++
++    @mock.patch.object(tooz_coordination, "get_coordinator")
++    def test_release_error_makes_coordinator_unhealthy(
++            self, get_coordinator):
++        backend, lock = self._backend()
++        lock.release.side_effect = RuntimeError("etcd down")
++        get_coordinator.return_value = backend
++
++        with coordination.OperationCoordinator("action-1") as coordinator:
++            self.assertRaises(
++                RuntimeError,
++                self._enter_host_lock,
++                coordinator,
++            )
++            self.assertRaises(RuntimeError, coordinator.assert_healthy)
++
++    @mock.patch.object(tooz_coordination, "get_coordinator")
++    def test_stop_is_idempotent(self, get_coordinator):
++        backend, _lock = self._backend()
++        get_coordinator.return_value = backend
++        coordinator = coordination.OperationCoordinator("action-1")
++        coordinator.start()
++
++        coordinator.stop()
++        coordinator.stop()
++
++        backend.stop.assert_called_once_with()
++
++    @mock.patch.object(tooz_coordination, "get_coordinator")
++    def test_stop_error_does_not_suppress_protected_error(
++            self, get_coordinator):
++        backend, _lock = self._backend()
++        backend.stop.side_effect = RuntimeError("etcd down")
++        get_coordinator.return_value = backend
++
++        def protected_operation():
++            with coordination.OperationCoordinator("action-1"):
++                raise ValueError("protected failure")
++
++        try:
++            protected_operation()
++        except ValueError as error:
++            self.assertEqual("protected failure", str(error))
++        else:
++            self.fail("protected failure was suppressed")
++
++    @staticmethod
++    def _enter_host_lock(coordinator):
++        with coordinator.lock_host("compute-01"):
++            pass
+-- 
+2.49.0
+

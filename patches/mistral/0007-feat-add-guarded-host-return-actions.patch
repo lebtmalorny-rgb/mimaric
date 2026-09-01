@@ -1,0 +1,1086 @@
+From e4ce9e9be80d33fd4f3beecc777883cfbe7219fb Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Tue, 1 Sep 2026 05:26:33 +0300
+Subject: [PATCH 7/9] feat: add guarded host return actions
+
+---
+ mistral/actions/powerops/return_host.py       | 159 ++++
+ .../unit/actions/powerops/test_return_host.py | 900 ++++++++++++++++++
+ 2 files changed, 1059 insertions(+)
+ create mode 100644 mistral/actions/powerops/return_host.py
+ create mode 100644 mistral/tests/unit/actions/powerops/test_return_host.py
+
+diff --git a/mistral/actions/powerops/return_host.py b/mistral/actions/powerops/return_host.py
+new file mode 100644
+index 0000000..539ceb9
+--- /dev/null
++++ b/mistral/actions/powerops/return_host.py
+@@ -0,0 +1,159 @@
++# Copyright 2026 OpenStack Foundation
++#
++# Licensed under the Apache License, Version 2.0 (the "License"); you may
++# not use this file except in compliance with the License. You may obtain
++# a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++# License for the specific language governing permissions and limitations
++# under the License.
++
++from oslo_config import cfg
++
++from mistral.actions.powerops import base
++# Keep dependency patch points local to the public composite action module.
++from mistral.actions.powerops import clients
++from mistral.actions.powerops import coordination  # noqa: F401
++from mistral.actions.powerops import exceptions
++
++
++CONF = cfg.CONF
++
++
++class HostPowerStatusAction(base.PowerOpsAction):
++    """Return one exact point-in-time host PowerOps observation."""
++
++    def __init__(self, host, segment_uuid):
++        super(HostPowerStatusAction, self).__init__()
++
++        self.host = host
++        self.segment_uuid = segment_uuid
++
++    def run(self, context):
++        if not CONF.powerops.enabled:
++            raise exceptions.PowerOpsDisabled()
++
++        self._authorize(context)
++        self._validate_inputs()
++        cloud = clients.CloudClients(clients.connection_from_conf())
++        node = cloud.ironic_node(self.host)
++        service = cloud.nova_service(self.host)
++        service_status = getattr(service, 'status', None)
++
++        if service_status not in ('enabled', 'disabled'):
++            raise exceptions.HostResolutionError(
++                'Nova compute service has an invalid administrative status'
++            )
++
++        masakari_host = cloud.masakari_host(
++            self.segment_uuid, self.host
++        )
++
++        return {
++            'host': self.host,
++            'ironic_node_uuid': node.id,
++            'power_state': node.power_state,
++            'target_power_state': node.target_power_state,
++            'ironic_last_error': node.last_error,
++            'nova_enabled': service_status == 'enabled',
++            'nova_state': service.state,
++            'masakari_maintenance': masakari_host.on_maintenance,
++        }
++
++
++class PowerOnForInspectionAction(base.PowerOpsAction):
++    """Power on one host while retaining its out-of-service state."""
++
++    def __init__(self, host, segment_uuid):
++        super(PowerOnForInspectionAction, self).__init__()
++
++        self.host = host
++        self.segment_uuid = segment_uuid
++
++    def run(self, context):
++        def operation(cloud):
++            cloud.resolve_host_set(self.segment_uuid, self.host)
++            cloud.set_masakari_maintenance(
++                self.segment_uuid, self.host, True
++            )
++            self._nova_disabled = True
++            cloud.disable_nova(
++                self.host, CONF.powerops.nova_disable_reason
++            )
++            node = cloud.power_on(self.host)
++            cloud.wait_nova_service(
++                self.host, enabled=False, up=True
++            )
++
++            return {
++                'host': self.host,
++                'operation': 'power_on_for_inspection',
++                'power_state': node.power_state,
++                'stopped_instance_ids': [],
++                'nova_enabled': False,
++                'masakari_maintenance': True,
++            }
++
++        return self._run_locked(
++            context, 'power_on_for_inspection', operation
++        )
++
++
++class ReturnToServiceAction(base.PowerOpsAction):
++    """Return an inspected host and its explicit VM manifest to service."""
++
++    def __init__(self, host, segment_uuid, stopped_instance_ids,
++                 stale_domains_checked=False):
++        super(ReturnToServiceAction, self).__init__()
++
++        self.host = host
++        self.segment_uuid = segment_uuid
++        self.stopped_instance_ids = stopped_instance_ids
++        self.stale_domains_checked = stale_domains_checked
++
++    def _validate_inputs(self):
++        super(ReturnToServiceAction, self)._validate_inputs()
++
++        if self.stale_domains_checked is not True:
++            raise exceptions.OperatorGateRequired(
++                'resume with env stale_domains_checked=true after host '
++                'inspection'
++            )
++
++        clients.CloudClients._validate_stopped_manifest(
++            self.stopped_instance_ids
++        )
++
++    def run(self, context):
++        def operation(cloud):
++            cloud.resolve_host_set(self.segment_uuid, self.host)
++            self._nova_disabled = True
++            cloud.require_stable_power_on(self.host)
++            cloud.wait_nova_service(
++                self.host, enabled=False, up=True
++            )
++            cloud.require_masakari_maintenance(
++                self.segment_uuid, self.host, expected=True
++            )
++            cloud.start_instances(self.stopped_instance_ids)
++            cloud.enable_nova(self.host)
++            cloud.set_masakari_maintenance(
++                self.segment_uuid, self.host, False
++            )
++
++            return {
++                'host': self.host,
++                'operation': 'return_to_service',
++                'power_state': 'power on',
++                'stopped_instance_ids': sorted(
++                    self.stopped_instance_ids
++                ),
++                'nova_enabled': True,
++                'masakari_maintenance': False,
++            }
++
++        return self._run_locked(context, 'return_to_service', operation)
+diff --git a/mistral/tests/unit/actions/powerops/test_return_host.py b/mistral/tests/unit/actions/powerops/test_return_host.py
+new file mode 100644
+index 0000000..f5b0e24
+--- /dev/null
++++ b/mistral/tests/unit/actions/powerops/test_return_host.py
+@@ -0,0 +1,900 @@
++# Copyright 2026 OpenStack Foundation
++#
++# Licensed under the Apache License, Version 2.0 (the "License"); you may
++# not use this file except in compliance with the License. You may obtain
++# a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++# License for the specific language governing permissions and limitations
++# under the License.
++
++from contextlib import contextmanager
++from unittest import mock
++
++from mistral.actions.powerops import exceptions
++from mistral.actions.powerops import return_host
++from mistral.tests.unit.actions.powerops import fakes
++from mistral.tests.unit import base
++
++
++class _CleanupFailureCoordinator:
++    def __init__(self, events, failure_mode):
++        self.events = events
++        self.failure_mode = failure_mode
++
++    def __enter__(self):
++        self.events.append('coordinator-start')
++
++        return self
++
++    def __exit__(self, exc_type, exc_value, traceback):
++        self.events.append('coordinator-stop')
++
++        if self.failure_mode == 'stop_exception' and exc_type is None:
++            raise RuntimeError('coordinator stop failed')
++
++        return False
++
++    @contextmanager
++    def lock_host(self, host):
++        self.events.append('host-lock-enter')
++
++        try:
++            yield
++        finally:
++            self.events.append('host-lock-exit')
++
++            if self.failure_mode == 'release_exception':
++                raise RuntimeError('lock release failed')
++
++    def assert_healthy(self):
++        self.events.append('final-health')
++
++
++class ReturnHostActionsTest(base.BaseTest):
++    def setUp(self):
++        super(ReturnHostActionsTest, self).setUp()
++
++        self.override_config('enabled', True, 'powerops')
++        self.override_config(
++            'allowed_project_names', ['operations'], 'powerops'
++        )
++        self.override_config(
++            'allowed_user_names', ['powerops-operator'], 'powerops'
++        )
++
++    @staticmethod
++    def _coordinator(events, health_side_effect=None):
++        coordinator = fakes.recording_coordinator(events)
++        coordinator.assert_healthy = mock.Mock(
++            side_effect=health_side_effect
++        )
++
++        return coordinator
++
++    @staticmethod
++    def _successful_inspection_cloud(cloud):
++        cloud.resolve_host_set.return_value = None
++        cloud.set_masakari_maintenance.return_value = None
++        cloud.disable_nova.return_value = None
++        cloud.power_on.return_value = fakes.node(
++            'n1', 'compute-01', 'power on'
++        )
++        cloud.wait_nova_service.return_value = None
++
++    @staticmethod
++    def _successful_return_cloud(cloud):
++        cloud.resolve_host_set.return_value = None
++        cloud.require_stable_power_on.return_value = fakes.node(
++            'n1', 'compute-01', 'power on'
++        )
++        cloud.wait_nova_service.return_value = None
++        cloud.require_masakari_maintenance.return_value = None
++        cloud.start_instances.return_value = None
++        cloud.enable_nova.return_value = None
++        cloud.set_masakari_maintenance.return_value = None
++        cloud.disable_nova.return_value = None
++
++    @mock.patch.object(return_host.coordination, 'OperationCoordinator')
++    @mock.patch.object(return_host.clients, 'connection_from_conf')
++    def test_status_disabled_gate_precedes_auth_and_external_objects(
++            self, connection_from_conf, coordinator_cls):
++        self.override_config('enabled', False, 'powerops')
++        action = return_host.HostPowerStatusAction(
++            'compute-01', 'segment-1'
++        )
++        action._authorize = mock.Mock()
++
++        self.assertRaises(
++            exceptions.PowerOpsDisabled,
++            action.run,
++            fakes.action_context('execution-status-disabled'),
++        )
++
++        action._authorize.assert_not_called()
++        coordinator_cls.assert_not_called()
++        connection_from_conf.assert_not_called()
++
++    @mock.patch.object(return_host.coordination, 'OperationCoordinator')
++    @mock.patch.object(return_host.clients, 'connection_from_conf')
++    def test_status_exact_authorization_precedes_canonical_preflight(
++            self, connection_from_conf, coordinator_cls):
++        callers = (
++            ('Operations', 'powerops-operator'),
++            ('operations', 'PowerOps-Operator'),
++        )
++
++        for project_name, user_name in callers:
++            with self.subTest(
++                    project_name=project_name, user_name=user_name):
++                action = return_host.HostPowerStatusAction(
++                    ' compute-01', 'segment/1'
++                )
++
++                self.assertRaises(
++                    exceptions.PowerOpsUnauthorized,
++                    action.run,
++                    fakes.action_context(
++                        'execution-status-auth',
++                        project_name=project_name,
++                        user_name=user_name,
++                    ),
++                )
++
++        coordinator_cls.assert_not_called()
++        connection_from_conf.assert_not_called()
++
++    @mock.patch.object(return_host.coordination, 'OperationCoordinator')
++    @mock.patch.object(return_host.clients, 'CloudClients')
++    @mock.patch.object(return_host.clients, 'connection_from_conf')
++    def test_status_canonical_preflight_precedes_connection(
++            self, connection_from_conf, cloud_cls, coordinator_cls):
++        cases = (
++            (' compute-01', 'segment-1'),
++            ('compute-01', 'segment/1'),
++        )
++
++        for host, segment_uuid in cases:
++            with self.subTest(host=host, segment_uuid=segment_uuid):
++                action = return_host.HostPowerStatusAction(
++                    host, segment_uuid
++                )
++
++                self.assertRaises(
++                    exceptions.HostResolutionError,
++                    action.run,
++                    fakes.action_context('execution-status-preflight'),
++                )
++
++        coordinator_cls.assert_not_called()
++        connection_from_conf.assert_not_called()
++        cloud_cls.assert_not_called()
++
++    @mock.patch.object(return_host.coordination, 'OperationCoordinator')
++    @mock.patch.object(return_host.clients, 'CloudClients')
++    @mock.patch.object(return_host.clients, 'connection_from_conf')
++    def test_status_returns_exact_read_only_point_in_time_snapshot(
++            self, connection_from_conf, cloud_cls, coordinator_cls):
++        connection = object()
++        connection_from_conf.return_value = connection
++        cloud = mock.Mock(unsafe=True)
++        cloud_cls.return_value = cloud
++        node = fakes.node(
++            'n1',
++            'compute-01',
++            power_state='power on',
++            target_power_state='power on',
++        )
++        service = fakes.service(
++            's1', 'compute-01', state='down', status='disabled'
++        )
++        masakari_host = fakes.masakari_host(
++            'h1', 'compute-01', on_maintenance=True
++        )
++        cloud.ironic_node.return_value = node
++        cloud.nova_service.return_value = service
++        cloud.masakari_host.return_value = masakari_host
++        action = return_host.HostPowerStatusAction(
++            'compute-01', 'segment-1'
++        )
++        action._audit = mock.Mock()
++
++        result = action.run(
++            fakes.action_context('execution-status-snapshot')
++        )
++
++        self.assertEqual(
++            {
++                'host': 'compute-01',
++                'ironic_node_uuid': 'n1',
++                'power_state': 'power on',
++                'target_power_state': 'power on',
++                'ironic_last_error': None,
++                'nova_enabled': False,
++                'nova_state': 'down',
++                'masakari_maintenance': True,
++            },
++            result,
++        )
++        cloud_cls.assert_called_once_with(connection)
++        cloud.ironic_node.assert_called_once_with('compute-01')
++        cloud.nova_service.assert_called_once_with('compute-01')
++        cloud.masakari_host.assert_called_once_with(
++            'segment-1', 'compute-01'
++        )
++        coordinator_cls.assert_not_called()
++        action._audit.assert_not_called()
++        cloud.resolve_host_set.assert_not_called()
++        cloud.disable_nova.assert_not_called()
++        cloud.enable_nova.assert_not_called()
++        cloud.set_masakari_maintenance.assert_not_called()
++        cloud.power_off.assert_not_called()
++        cloud.power_on.assert_not_called()
++        cloud.start_instances.assert_not_called()
++
++    @mock.patch.object(return_host.coordination, 'OperationCoordinator')
++    @mock.patch.object(return_host.clients, 'CloudClients')
++    @mock.patch.object(return_host.clients, 'connection_from_conf')
++    def test_status_rejects_non_pinned_nova_administrative_status(
++            self, connection_from_conf, cloud_cls, coordinator_cls):
++        invalid_statuses = (None, True, 'ENABLED', 'forced_down')
++
++        for status in invalid_statuses:
++            with self.subTest(status=status):
++                cloud = mock.Mock(unsafe=True)
++                cloud_cls.return_value = cloud
++                cloud.ironic_node.return_value = fakes.node(
++                    'n1', 'compute-01'
++                )
++                cloud.nova_service.return_value = fakes.service(
++                    's1', 'compute-01', status=status
++                )
++                action = return_host.HostPowerStatusAction(
++                    'compute-01', 'segment-1'
++                )
++
++                self.assertRaises(
++                    exceptions.HostResolutionError,
++                    action.run,
++                    fakes.action_context(
++                        'execution-status-invalid-{}'.format(status)
++                    ),
++                )
++
++                cloud.masakari_host.assert_not_called()
++                coordinator_cls.assert_not_called()
++
++    @mock.patch.object(return_host.coordination, 'OperationCoordinator')
++    @mock.patch.object(return_host.clients, 'CloudClients')
++    @mock.patch.object(return_host.clients, 'connection_from_conf')
++    def test_status_rejects_missing_nova_administrative_status(
++            self, connection_from_conf, cloud_cls, coordinator_cls):
++        cloud = mock.Mock(unsafe=True)
++        cloud_cls.return_value = cloud
++        cloud.ironic_node.return_value = fakes.node(
++            'n1', 'compute-01'
++        )
++        service = fakes.service('s1', 'compute-01')
++        del service.status
++        cloud.nova_service.return_value = service
++        action = return_host.HostPowerStatusAction(
++            'compute-01', 'segment-1'
++        )
++
++        self.assertRaises(
++            exceptions.HostResolutionError,
++            action.run,
++            fakes.action_context('execution-status-missing'),
++        )
++
++        cloud.masakari_host.assert_not_called()
++        coordinator_cls.assert_not_called()
++
++    @mock.patch.object(return_host.coordination, 'OperationCoordinator')
++    @mock.patch.object(return_host.clients, 'CloudClients')
++    @mock.patch.object(return_host.clients, 'connection_from_conf')
++    def test_power_on_for_inspection_keeps_host_out_of_service(
++            self, connection_from_conf, cloud_cls, coordinator_cls):
++        events = []
++        coordinator = self._coordinator(
++            events,
++            health_side_effect=lambda: events.append('final-health'),
++        )
++        coordinator_cls.return_value = coordinator
++        cloud = mock.Mock(unsafe=True)
++        cloud_cls.return_value = cloud
++        cloud.resolve_host_set.side_effect = (
++            lambda *args: events.append('resolve')
++        )
++        cloud.set_masakari_maintenance.side_effect = (
++            lambda *args: events.append('maintenance-true')
++        )
++        cloud.disable_nova.side_effect = (
++            lambda *args: events.append('nova-disable')
++        )
++        cloud.power_on.side_effect = lambda *args: (
++            events.append('power-on'),
++            fakes.node('n1', 'compute-01', 'power on'),
++        )[1]
++        cloud.wait_nova_service.side_effect = (
++            lambda *args, **kwargs: events.append('nova-disabled-up')
++        )
++        action = return_host.PowerOnForInspectionAction(
++            'compute-01', 'segment-1'
++        )
++        action._audit = mock.Mock(
++            side_effect=lambda *args: events.append('audit-success')
++        )
++
++        result = action.run(
++            fakes.action_context('execution-inspection-order')
++        )
++
++        self.assertEqual(
++            {
++                'host': 'compute-01',
++                'operation': 'power_on_for_inspection',
++                'power_state': 'power on',
++                'stopped_instance_ids': [],
++                'nova_enabled': False,
++                'masakari_maintenance': True,
++            },
++            result,
++        )
++        self.assertEqual(
++            [
++                'coordinator-start',
++                'host-lock-enter',
++                'resolve',
++                'maintenance-true',
++                'nova-disable',
++                'power-on',
++                'nova-disabled-up',
++                'final-health',
++                'audit-success',
++                'host-lock-exit',
++                'coordinator-stop',
++            ],
++            events,
++        )
++        cloud.resolve_host_set.assert_called_once_with(
++            'segment-1', 'compute-01'
++        )
++        cloud.wait_nova_service.assert_called_once_with(
++            'compute-01', enabled=False, up=True
++        )
++        cloud.enable_nova.assert_not_called()
++        cloud.start_instances.assert_not_called()
++        self.assertNotIn('maintenance-false', events)
++
++    @mock.patch.object(return_host.coordination, 'OperationCoordinator')
++    @mock.patch.object(return_host.clients, 'CloudClients')
++    @mock.patch.object(return_host.clients, 'connection_from_conf')
++    def test_inspection_disable_failure_enters_fail_safe_inside_lock(
++            self, connection_from_conf, cloud_cls, coordinator_cls):
++        events = []
++        coordinator_cls.return_value = self._coordinator(events)
++        cloud = mock.Mock(unsafe=True)
++        cloud_cls.return_value = cloud
++        cloud.resolve_host_set.return_value = None
++        cloud.set_masakari_maintenance.side_effect = lambda *args: (
++            events.append('maintenance-{}'.format(args[-1]))
++        )
++        original = exceptions.PowerStateError('disable outcome unknown')
++        disable_outcomes = iter((original, None))
++
++        def disable(*args):
++            events.append('nova-disable')
++            outcome = next(disable_outcomes)
++
++            if outcome is not None:
++                raise outcome
++
++        cloud.disable_nova.side_effect = disable
++        action = return_host.PowerOnForInspectionAction(
++            'compute-01', 'segment-1'
++        )
++        action._audit = mock.Mock(
++            side_effect=lambda *args: events.append('audit-failure')
++        )
++
++        raised = self.assertRaises(
++            exceptions.PowerStateError,
++            action.run,
++            fakes.action_context('execution-inspection-disable-failure'),
++        )
++
++        self.assertIs(original, raised)
++        self.assertEqual(
++            [
++                'coordinator-start',
++                'host-lock-enter',
++                'maintenance-True',
++                'nova-disable',
++                'maintenance-True',
++                'nova-disable',
++                'audit-failure',
++                'host-lock-exit',
++                'coordinator-stop',
++            ],
++            events,
++        )
++        cloud.power_on.assert_not_called()
++
++    @mock.patch.object(return_host.coordination, 'OperationCoordinator')
++    @mock.patch.object(return_host.clients, 'connection_from_conf')
++    def test_return_gate_and_manifest_fail_before_external_objects(
++            self, connection_from_conf, coordinator_cls):
++        invalid_cases = (
++            ('gate-false', ['vm-a'], False, exceptions.OperatorGateRequired),
++            ('gate-one', ['vm-a'], 1, exceptions.OperatorGateRequired),
++            ('gate-text', ['vm-a'], 'true', exceptions.OperatorGateRequired),
++            ('manifest-none', None, True,
++             exceptions.InstanceManifestError),
++            ('manifest-scalar', 'vm-a', True,
++             exceptions.InstanceManifestError),
++            ('manifest-nested', [['vm-a']], True,
++             exceptions.InstanceManifestError),
++            ('manifest-number', [1], True,
++             exceptions.InstanceManifestError),
++            ('manifest-empty-id', [''], True,
++             exceptions.InstanceManifestError),
++            ('manifest-slash', ['vm/a'], True,
++             exceptions.InstanceManifestError),
++            ('manifest-backslash', ['vm\\a'], True,
++             exceptions.InstanceManifestError),
++            ('manifest-dot', ['../vm-a'], True,
++             exceptions.InstanceManifestError),
++            ('manifest-dot-ambiguity', ['vm..a'], True,
++             exceptions.InstanceManifestError),
++            ('manifest-duplicate', ['vm-a', 'vm-a'], True,
++             exceptions.InstanceManifestError),
++        )
++
++        for name, manifest, gate, error_type in invalid_cases:
++            with self.subTest(case=name):
++                action = return_host.ReturnToServiceAction(
++                    'compute-01', 'segment-1', manifest, gate
++                )
++
++                self.assertRaises(
++                    error_type,
++                    action.run,
++                    fakes.action_context(
++                        'execution-return-invalid-{}'.format(name)
++                    ),
++                )
++
++        coordinator_cls.assert_not_called()
++        connection_from_conf.assert_not_called()
++
++    @mock.patch.object(return_host.coordination, 'OperationCoordinator')
++    @mock.patch.object(return_host.clients, 'connection_from_conf')
++    def test_return_authorization_precedes_gate_and_manifest_validation(
++            self, connection_from_conf, coordinator_cls):
++        action = return_host.ReturnToServiceAction(
++            ' compute-01', 'segment/1', None, False
++        )
++
++        self.assertRaises(
++            exceptions.PowerOpsUnauthorized,
++            action.run,
++            fakes.action_context(
++                'execution-return-auth',
++                project_name='other',
++                user_name='powerops-operator',
++            ),
++        )
++
++        coordinator_cls.assert_not_called()
++        connection_from_conf.assert_not_called()
++
++    @mock.patch.object(return_host.coordination, 'OperationCoordinator')
++    @mock.patch.object(return_host.clients, 'CloudClients')
++    @mock.patch.object(return_host.clients, 'connection_from_conf')
++    def test_return_starts_only_manifest_before_enabling_host(
++            self, connection_from_conf, cloud_cls, coordinator_cls):
++        events = []
++        coordinator = self._coordinator(
++            events,
++            health_side_effect=lambda: events.append('final-health'),
++        )
++        coordinator_cls.return_value = coordinator
++        cloud = mock.Mock(unsafe=True)
++        cloud_cls.return_value = cloud
++        cloud.resolve_host_set.side_effect = (
++            lambda *args: events.append('resolve')
++        )
++        cloud.require_stable_power_on.side_effect = (
++            lambda *args: events.append('stable-power-on')
++        )
++        cloud.wait_nova_service.side_effect = (
++            lambda *args, **kwargs: events.append('nova-disabled-up')
++        )
++        cloud.require_masakari_maintenance.side_effect = (
++            lambda *args, **kwargs: events.append('maintenance-required')
++        )
++        cloud.start_instances.side_effect = lambda instance_ids: (
++            events.extend(
++                [('start', item) for item in sorted(instance_ids)]
++            )
++        )
++        cloud.enable_nova.side_effect = (
++            lambda *args: events.append('nova-enable')
++        )
++        cloud.set_masakari_maintenance.side_effect = (
++            lambda *args: events.append('maintenance-false')
++        )
++        action = return_host.ReturnToServiceAction(
++            'compute-01', 'segment-1', ['vm-b', 'vm-a'], True
++        )
++        action._audit = mock.Mock(
++            side_effect=lambda *args: events.append('audit-success')
++        )
++
++        result = action.run(
++            fakes.action_context('execution-return-order')
++        )
++
++        self.assertEqual(
++            {
++                'host': 'compute-01',
++                'operation': 'return_to_service',
++                'power_state': 'power on',
++                'stopped_instance_ids': ['vm-a', 'vm-b'],
++                'nova_enabled': True,
++                'masakari_maintenance': False,
++            },
++            result,
++        )
++        transition = events[
++            events.index('host-lock-enter') + 1:
++            events.index('host-lock-exit')
++        ]
++        self.assertEqual(
++            [
++                'resolve',
++                'stable-power-on',
++                'nova-disabled-up',
++                'maintenance-required',
++                ('start', 'vm-a'),
++                ('start', 'vm-b'),
++                'nova-enable',
++                'maintenance-false',
++                'final-health',
++                'audit-success',
++            ],
++            transition,
++        )
++        cloud.resolve_host_set.assert_called_once_with(
++            'segment-1', 'compute-01'
++        )
++        cloud.wait_nova_service.assert_called_once_with(
++            'compute-01', enabled=False, up=True
++        )
++        cloud.require_masakari_maintenance.assert_called_once_with(
++            'segment-1', 'compute-01', expected=True
++        )
++        cloud.start_instances.assert_called_once_with(['vm-b', 'vm-a'])
++
++    @mock.patch.object(return_host.coordination, 'OperationCoordinator')
++    @mock.patch.object(return_host.clients, 'CloudClients')
++    @mock.patch.object(return_host.clients, 'connection_from_conf')
++    def test_return_failure_after_enable_reasserts_fail_safe_inside_lock(
++            self, connection_from_conf, cloud_cls, coordinator_cls):
++        events = []
++        coordinator_cls.return_value = self._coordinator(events)
++        cloud = mock.Mock(unsafe=True)
++        cloud_cls.return_value = cloud
++        self._successful_return_cloud(cloud)
++        cloud.enable_nova.side_effect = (
++            lambda *args: events.append('nova-enable')
++        )
++        original = exceptions.HostResolutionError(
++            'maintenance clear failed'
++        )
++
++        def maintenance(segment_uuid, host, expected):
++            events.append('maintenance-{}'.format(expected))
++
++            if expected is False:
++                raise original
++
++        cloud.set_masakari_maintenance.side_effect = maintenance
++        cloud.disable_nova.side_effect = (
++            lambda *args: events.append('nova-disable')
++        )
++        action = return_host.ReturnToServiceAction(
++            'compute-01', 'segment-1', ['vm-a'], True
++        )
++        action._audit = mock.Mock(
++            side_effect=lambda *args: events.append('audit-failure')
++        )
++
++        raised = self.assertRaises(
++            exceptions.HostResolutionError,
++            action.run,
++            fakes.action_context('execution-return-enable-failure'),
++        )
++
++        self.assertIs(original, raised)
++        self.assertLess(
++            events.index('nova-enable'), events.index('maintenance-False')
++        )
++        self.assertLess(
++            events.index('maintenance-False'), events.index('maintenance-True')
++        )
++        self.assertLess(
++            events.index('maintenance-True'), events.index('nova-disable')
++        )
++        self.assertLess(
++            events.index('nova-disable'), events.index('audit-failure')
++        )
++        self.assertLess(
++            events.index('audit-failure'), events.index('host-lock-exit')
++        )
++        cloud.disable_nova.assert_called_once_with(
++            'compute-01', 'PowerOps planned operation'
++        )
++
++    @mock.patch.object(return_host.coordination, 'OperationCoordinator')
++    @mock.patch.object(return_host.clients, 'CloudClients')
++    @mock.patch.object(return_host.clients, 'connection_from_conf')
++    def test_new_mutations_keep_final_health_and_success_audit_under_lock(
++            self, connection_from_conf, cloud_cls, coordinator_cls):
++        cases = (
++            (
++                return_host.PowerOnForInspectionAction(
++                    'compute-01', 'segment-1'
++                ),
++                'power_on_for_inspection',
++            ),
++            (
++                return_host.ReturnToServiceAction(
++                    'compute-01', 'segment-1', [], True
++                ),
++                'return_to_service',
++            ),
++        )
++
++        for action, operation_name in cases:
++            with self.subTest(operation=operation_name):
++                events = []
++                coordinator = self._coordinator(
++                    events,
++                    health_side_effect=lambda: events.append('final-health'),
++                )
++                coordinator_cls.return_value = coordinator
++                cloud = mock.Mock(unsafe=True)
++                cloud_cls.return_value = cloud
++
++                if operation_name == 'power_on_for_inspection':
++                    self._successful_inspection_cloud(cloud)
++                else:
++                    self._successful_return_cloud(cloud)
++
++                action._audit = mock.Mock(
++                    side_effect=lambda *args: events.append('audit-success')
++                )
++
++                result = action.run(
++                    fakes.action_context(
++                        'execution-final-{}'.format(operation_name)
++                    )
++                )
++
++                self.assertEqual(operation_name, result['operation'])
++                self.assertLess(
++                    events.index('final-health'),
++                    events.index('audit-success'),
++                )
++                self.assertLess(
++                    events.index('audit-success'),
++                    events.index('host-lock-exit'),
++                )
++
++    @mock.patch.object(return_host.coordination, 'OperationCoordinator')
++    @mock.patch.object(return_host.clients, 'CloudClients')
++    @mock.patch.object(return_host.clients, 'connection_from_conf')
++    def test_final_health_loss_reasserts_fail_safe_before_failure_audit(
++            self, connection_from_conf, cloud_cls, coordinator_cls):
++        cases = (
++            (
++                return_host.PowerOnForInspectionAction(
++                    'compute-01', 'segment-1'
++                ),
++                'power_on_for_inspection',
++            ),
++            (
++                return_host.ReturnToServiceAction(
++                    'compute-01', 'segment-1', [], True
++                ),
++                'return_to_service',
++            ),
++        )
++
++        for action, operation_name in cases:
++            with self.subTest(operation=operation_name):
++                events = []
++                lost = RuntimeError('coordinator lost')
++                coordinator_cls.return_value = self._coordinator(
++                    events, health_side_effect=lost
++                )
++                cloud = mock.Mock(unsafe=True)
++                cloud_cls.return_value = cloud
++
++                if operation_name == 'power_on_for_inspection':
++                    self._successful_inspection_cloud(cloud)
++                else:
++                    self._successful_return_cloud(cloud)
++
++                action._audit = mock.Mock()
++                context = fakes.action_context(
++                    'execution-final-loss-{}'.format(operation_name)
++                )
++
++                raised = self.assertRaises(
++                    RuntimeError, action.run, context
++                )
++
++                self.assertIs(lost, raised)
++                action._audit.assert_called_once_with(
++                    context,
++                    operation_name,
++                    'failure',
++                    {
++                        'error_type': 'RuntimeError',
++                        'fail_safe_error_count': 0,
++                    },
++                )
++                cloud.disable_nova.assert_called_with(
++                    'compute-01', 'PowerOps planned operation'
++                )
++
++                if operation_name == 'power_on_for_inspection':
++                    self.assertEqual(
++                        2, cloud.set_masakari_maintenance.call_count
++                    )
++                    self.assertEqual(2, cloud.disable_nova.call_count)
++                else:
++                    self.assertEqual(
++                        [
++                            mock.call('segment-1', 'compute-01', False),
++                            mock.call('segment-1', 'compute-01', True),
++                        ],
++                        cloud.set_masakari_maintenance.call_args_list,
++                    )
++                    self.assertEqual(1, cloud.disable_nova.call_count)
++
++    @mock.patch.object(return_host.coordination, 'OperationCoordinator')
++    @mock.patch.object(return_host.clients, 'CloudClients')
++    @mock.patch.object(return_host.clients, 'connection_from_conf')
++    def test_completed_results_survive_release_and_stop_failures(
++            self, connection_from_conf, cloud_cls, coordinator_cls):
++        action_cases = (
++            (
++                return_host.PowerOnForInspectionAction,
++                ('compute-01', 'segment-1'),
++                'power_on_for_inspection',
++            ),
++            (
++                return_host.ReturnToServiceAction,
++                ('compute-01', 'segment-1', ['vm-b', 'vm-a'], True),
++                'return_to_service',
++            ),
++        )
++
++        for action_class, arguments, operation_name in action_cases:
++            for failure_mode in ('release_exception', 'stop_exception'):
++                with self.subTest(
++                        operation=operation_name, failure=failure_mode):
++                    events = []
++                    coordinator_cls.return_value = (
++                        _CleanupFailureCoordinator(events, failure_mode)
++                    )
++                    cloud = mock.Mock(unsafe=True)
++                    cloud_cls.return_value = cloud
++
++                    if operation_name == 'power_on_for_inspection':
++                        self._successful_inspection_cloud(cloud)
++                    else:
++                        self._successful_return_cloud(cloud)
++
++                    action = action_class(*arguments)
++                    action._audit = mock.Mock(
++                        side_effect=lambda *args: events.append(
++                            'audit-{}'.format(args[2])
++                        )
++                    )
++                    result = action.run(
++                        fakes.action_context(
++                            'execution-cleanup-{}-{}'.format(
++                                operation_name, failure_mode
++                            )
++                        )
++                    )
++
++                    self.assertEqual(operation_name, result['operation'])
++                    self.assertEqual(
++                        [
++                            'success',
++                            'completed_with_coordination_cleanup_error',
++                        ],
++                        [call.args[2]
++                         for call in action._audit.call_args_list],
++                    )
++                    self.assertEqual(
++                        {'error_type': 'RuntimeError'},
++                        action._audit.call_args_list[-1].args[3],
++                    )
++
++                    if operation_name == 'power_on_for_inspection':
++                        self.assertEqual(
++                            1,
++                            cloud.set_masakari_maintenance.call_count,
++                        )
++                        cloud.disable_nova.assert_called_once_with(
++                            'compute-01', 'PowerOps planned operation'
++                        )
++                    else:
++                        cloud.set_masakari_maintenance.assert_called_once_with(
++                            'segment-1', 'compute-01', False
++                        )
++                        cloud.disable_nova.assert_not_called()
++
++    @mock.patch.object(return_host.coordination, 'OperationCoordinator')
++    @mock.patch.object(return_host.clients, 'CloudClients')
++    @mock.patch.object(return_host.clients, 'connection_from_conf')
++    def test_two_phases_use_separate_coordinator_sessions(
++            self, connection_from_conf, cloud_cls, coordinator_cls):
++        phase_one_events = []
++        phase_two_events = []
++        coordinator_cls.side_effect = (
++            self._coordinator(phase_one_events),
++            self._coordinator(phase_two_events),
++        )
++        inspection_cloud = mock.Mock(unsafe=True)
++        return_cloud = mock.Mock(unsafe=True)
++        self._successful_inspection_cloud(inspection_cloud)
++        self._successful_return_cloud(return_cloud)
++        cloud_cls.side_effect = (inspection_cloud, return_cloud)
++
++        inspection = return_host.PowerOnForInspectionAction(
++            'compute-01', 'segment-1'
++        )
++        returned = return_host.ReturnToServiceAction(
++            'compute-01', 'segment-1', ['vm-a'], True
++        )
++
++        inspection.run(fakes.action_context('execution-phase-one'))
++        returned.run(fakes.action_context('execution-phase-two'))
++
++        self.assertEqual(
++            [
++                mock.call('execution-phase-one-action'),
++                mock.call('execution-phase-two-action'),
++            ],
++            coordinator_cls.call_args_list,
++        )
++        self.assertEqual(
++            [
++                'coordinator-start',
++                'host-lock-enter',
++                'host-lock-exit',
++                'coordinator-stop',
++            ],
++            phase_one_events,
++        )
++        self.assertEqual(
++            [
++                'coordinator-start',
++                'host-lock-enter',
++                'host-lock-exit',
++                'coordinator-stop',
++            ],
++            phase_two_events,
++        )
+-- 
+2.49.0
+

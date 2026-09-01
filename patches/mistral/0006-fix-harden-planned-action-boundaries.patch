@@ -1,0 +1,590 @@
+From 3323fcdc261b1b68b59e6eb5ba5cde06629b0815 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Tue, 1 Sep 2026 05:09:49 +0300
+Subject: [PATCH 6/9] fix: harden planned action boundaries
+
+---
+ mistral/actions/powerops/base.py              | 104 ++++--
+ mistral/actions/powerops/clients.py           |  16 +-
+ mistral/actions/powerops/planned.py           |  28 +-
+ .../unit/actions/powerops/test_planned.py     | 299 +++++++++++++++++-
+ 4 files changed, 398 insertions(+), 49 deletions(-)
+
+diff --git a/mistral/actions/powerops/base.py b/mistral/actions/powerops/base.py
+index ec6a15f..8ba1dc3 100644
+--- a/mistral/actions/powerops/base.py
++++ b/mistral/actions/powerops/base.py
+@@ -40,50 +40,88 @@ class PowerOpsAction(actions.Action):
+                 'caller is not authorized for PowerOps'
+             )
+ 
++    def _validate_inputs(self):
++        try:
++            coordination.host_lock_name(self.host)
++        except ValueError as exc:
++            raise exceptions.HostResolutionError(
++                'host must be a canonical Nova hostname'
++            ) from exc
++
++        clients.validate_resource_id(
++            self.segment_uuid, 'Masakari segment UUID'
++        )
++
+     def _run_locked(self, context, operation_name, operation):
+         if not CONF.powerops.enabled:
+             raise exceptions.PowerOpsDisabled()
+ 
+         self._authorize(context)
++        self._validate_inputs()
+         execution_id = context.execution.action_execution_id
+-
+-        with coordination.OperationCoordinator(execution_id) as coordinator:
+-            with coordinator.lock_host(self.host):
+-                cloud = clients.CloudClients(
+-                    clients.connection_from_conf(),
+-                    health_check=coordinator.assert_healthy,
+-                )
+-                self._nova_disabled = False
+-
+-                try:
+-                    result = operation(cloud)
+-                    coordinator.assert_healthy()
+-
+-                    return result
+-                except Exception as exc:
+-                    fail_safe_errors = []
+-
+-                    if self._nova_disabled:
+-                        fail_safe_errors = self._fail_safe(cloud)
++        completed = False
++        result = None
++
++        try:
++            with coordination.OperationCoordinator(
++                    execution_id) as coordinator:
++                with coordinator.lock_host(self.host):
++                    cloud = clients.CloudClients(
++                        clients.connection_from_conf(),
++                        health_check=coordinator.assert_healthy,
++                    )
++                    self._nova_disabled = False
+ 
+                     try:
++                        result = operation(cloud)
++                        coordinator.assert_healthy()
+                         self._audit(
+-                            context,
+-                            operation_name,
+-                            'failure',
+-                            {
+-                                'error_type': type(exc).__name__,
+-                                'fail_safe_error_count': len(
+-                                    fail_safe_errors
+-                                ),
+-                            },
+-                        )
+-                    except Exception:
+-                        LOG.warning(
+-                            'Could not write PowerOps failure audit record'
++                            context, operation_name, 'success', result
+                         )
++                        completed = True
++                    except Exception as exc:
++                        fail_safe_errors = []
++
++                        if self._nova_disabled:
++                            fail_safe_errors = self._fail_safe(cloud)
++
++                        try:
++                            self._audit(
++                                context,
++                                operation_name,
++                                'failure',
++                                {
++                                    'error_type': type(exc).__name__,
++                                    'fail_safe_error_count': len(
++                                        fail_safe_errors
++                                    ),
++                                },
++                            )
++                        except Exception:
++                            LOG.warning(
++                                'Could not write PowerOps failure '
++                                'audit record'
++                            )
++
++                        raise
++        except Exception as exc:
++            if not completed:
++                raise
++
++            try:
++                self._audit(
++                    context,
++                    operation_name,
++                    'completed_with_coordination_cleanup_error',
++                    {'error_type': type(exc).__name__},
++                )
++            except Exception:
++                LOG.warning(
++                    'Could not write PowerOps coordination cleanup '
++                    'audit record'
++                )
+ 
+-                    raise
++        return result
+ 
+     def _fail_safe(self, cloud):
+         errors = []
+diff --git a/mistral/actions/powerops/clients.py b/mistral/actions/powerops/clients.py
+index 7db0478..d3d9d27 100644
+--- a/mistral/actions/powerops/clients.py
++++ b/mistral/actions/powerops/clients.py
+@@ -137,6 +137,15 @@ def _noop_health_check():
+     return None
+ 
+ 
++def validate_resource_id(resource_id, description):
++    if (
++            not isinstance(resource_id, str)
++            or not _PATH_RESOURCE_ID_RE.fullmatch(resource_id)):
++        raise exceptions.HostResolutionError(
++            '{} is not canonical'.format(description)
++        )
++
++
+ class CloudClients:
+     def __init__(self, connection, ha_adapter=None, sleep=time.sleep,
+                  monotonic=time.monotonic, health_check=None):
+@@ -160,12 +169,7 @@ class CloudClients:
+ 
+     @staticmethod
+     def _validate_resource_id(resource_id, description):
+-        if (
+-                not isinstance(resource_id, str)
+-                or not _PATH_RESOURCE_ID_RE.fullmatch(resource_id)):
+-            raise exceptions.HostResolutionError(
+-                '{} is not canonical'.format(description)
+-            )
++        validate_resource_id(resource_id, description)
+ 
+     def _deadline(self, timeout):
+         return self.monotonic() + timeout
+diff --git a/mistral/actions/powerops/planned.py b/mistral/actions/powerops/planned.py
+index b4f992f..919a9fc 100644
+--- a/mistral/actions/powerops/planned.py
++++ b/mistral/actions/powerops/planned.py
+@@ -18,12 +18,30 @@ from mistral.actions.powerops import base
+ # Keep dependency patch points local to the public composite action module.
+ from mistral.actions.powerops import clients  # noqa: F401
+ from mistral.actions.powerops import coordination  # noqa: F401
++from mistral.actions.powerops import exceptions
+ 
+ 
+ CONF = cfg.CONF
+ 
+ 
+-class PlannedPowerOffAction(base.PowerOpsAction):
++class _PlannedPowerAction(base.PowerOpsAction):
++    def _validate_inputs(self):
++        super(_PlannedPowerAction, self)._validate_inputs()
++
++        if (
++                not isinstance(self.instance_policy, str)
++                or self.instance_policy not in clients._INSTANCE_POLICIES):
++            raise exceptions.InstancePolicyError(
++                'unsupported planned instance policy'
++            )
++
++        if type(self.allow_hard_off) is not bool:
++            raise exceptions.PowerStateError(
++                'allow_hard_off must be a boolean'
++            )
++
++
++class PlannedPowerOffAction(_PlannedPowerAction):
+     """Safely quiesce and power off one exact compute host."""
+ 
+     def __init__(self, host, segment_uuid, instance_policy='require_empty',
+@@ -60,9 +78,6 @@ class PlannedPowerOffAction(base.PowerOpsAction):
+                 'nova_enabled': False,
+                 'masakari_maintenance': True,
+             }
+-            self._audit(
+-                context, 'planned_power_off', 'success', result
+-            )
+ 
+             return result
+ 
+@@ -71,7 +86,7 @@ class PlannedPowerOffAction(base.PowerOpsAction):
+         )
+ 
+ 
+-class PlannedRebootAction(base.PowerOpsAction):
++class PlannedRebootAction(_PlannedPowerAction):
+     """Safely power-cycle and return one exact compute host to service."""
+ 
+     def __init__(self, host, segment_uuid, instance_policy='require_empty',
+@@ -117,9 +132,6 @@ class PlannedRebootAction(base.PowerOpsAction):
+                 'nova_enabled': True,
+                 'masakari_maintenance': False,
+             }
+-            self._audit(
+-                context, 'planned_reboot', 'success', result
+-            )
+ 
+             return result
+ 
+diff --git a/mistral/tests/unit/actions/powerops/test_planned.py b/mistral/tests/unit/actions/powerops/test_planned.py
+index 184a38b..98b8d22 100644
+--- a/mistral/tests/unit/actions/powerops/test_planned.py
++++ b/mistral/tests/unit/actions/powerops/test_planned.py
+@@ -12,6 +12,7 @@
+ # License for the specific language governing permissions and limitations
+ # under the License.
+ 
++from contextlib import contextmanager
+ from unittest import mock
+ 
+ from mistral.actions.powerops import exceptions
+@@ -20,6 +21,43 @@ from mistral.tests.unit.actions.powerops import fakes
+ from mistral.tests.unit import base
+ 
+ 
++class _CleanupFailureCoordinator:
++    def __init__(self, events, failure_mode):
++        self.events = events
++        self.failure_mode = failure_mode
++
++    def __enter__(self):
++        self.events.append('coordinator-start')
++
++        return self
++
++    def __exit__(self, exc_type, exc_value, traceback):
++        self.events.append('coordinator-stop')
++
++        if self.failure_mode == 'stop_exception' and exc_type is None:
++            raise RuntimeError('coordinator stop failed')
++
++        return False
++
++    @contextmanager
++    def lock_host(self, host):
++        self.events.append('host-lock-enter')
++
++        try:
++            yield
++        finally:
++            self.events.append('host-lock-exit')
++
++            if self.failure_mode == 'release_false':
++                raise RuntimeError('lock release was not confirmed')
++
++            if self.failure_mode == 'release_exception':
++                raise RuntimeError('lock release failed')
++
++    def assert_healthy(self):
++        return None
++
++
+ class PlannedPowerActionsTest(base.BaseTest):
+     def setUp(self):
+         super(PlannedPowerActionsTest, self).setUp()
+@@ -121,6 +159,66 @@ class PlannedPowerActionsTest(base.BaseTest):
+         coordinator_cls.assert_not_called()
+         connection_from_conf.assert_not_called()
+ 
++    @mock.patch.object(planned.coordination, 'OperationCoordinator')
++    @mock.patch.object(planned.clients, 'CloudClients')
++    @mock.patch.object(planned.clients, 'connection_from_conf')
++    def test_invalid_inputs_stop_before_coordination_or_openstack(
++            self, connection_from_conf, cloud_cls, coordinator_cls):
++        invalid_cases = (
++            (
++                'host',
++                (' compute-01', 'segment-1', 'require_empty', False),
++                exceptions.HostResolutionError,
++            ),
++            (
++                'segment',
++                ('compute-01', 'segment/1', 'require_empty', False),
++                exceptions.HostResolutionError,
++            ),
++            (
++                'instance-policy',
++                ('compute-01', 'segment-1', 'unsupported', False),
++                exceptions.InstancePolicyError,
++            ),
++            (
++                'allow-hard-off',
++                ('compute-01', 'segment-1', 'require_empty', 1),
++                exceptions.PowerStateError,
++            ),
++        )
++        action_classes = (
++            planned.PlannedPowerOffAction,
++            planned.PlannedRebootAction,
++        )
++
++        for action_class in action_classes:
++            for field, arguments, error_type in invalid_cases:
++                with self.subTest(action=action_class.__name__, field=field):
++                    cloud = cloud_cls.return_value
++                    action = action_class(*arguments)
++
++                    self.assertRaises(
++                        error_type,
++                        action.run,
++                        fakes.action_context(
++                            'execution-invalid-{}-{}'.format(
++                                action_class.__name__, field
++                            )
++                        ),
++                    )
++
++                    coordinator_cls.assert_not_called()
++                    connection_from_conf.assert_not_called()
++                    cloud_cls.assert_not_called()
++                    cloud.set_masakari_maintenance.assert_not_called()
++                    cloud.disable_nova.assert_not_called()
++                    cloud.apply_instance_policy.assert_not_called()
++                    cloud.power_off.assert_not_called()
++                    cloud.power_on.assert_not_called()
++                    coordinator_cls.reset_mock()
++                    connection_from_conf.reset_mock()
++                    cloud_cls.reset_mock()
++
+     @mock.patch.object(planned.coordination, 'OperationCoordinator')
+     @mock.patch.object(planned.clients, 'CloudClients')
+     @mock.patch.object(planned.clients, 'connection_from_conf')
+@@ -188,8 +286,8 @@ class PlannedPowerActionsTest(base.BaseTest):
+                 'instances-stop',
+                 'safety-guard',
+                 'power-off',
+-                'audit-success',
+                 'return-health',
++                'audit-success',
+                 'host-lock-exit',
+                 'coordinator-stop',
+             ],
+@@ -419,7 +517,10 @@ class PlannedPowerActionsTest(base.BaseTest):
+     def test_reboot_orders_complete_transition_before_success_audit(
+             self, connection_from_conf, cloud_cls, coordinator_cls):
+         events = []
+-        coordinator = self._coordinator(events)
++        coordinator = self._coordinator(
++            events,
++            health_side_effect=lambda: events.append('final-health'),
++        )
+         coordinator_cls.return_value = coordinator
+         cloud = mock.Mock(unsafe=True)
+         cloud_cls.return_value = cloud
+@@ -484,6 +585,7 @@ class PlannedPowerActionsTest(base.BaseTest):
+                 'start-manifest',
+                 'enable',
+                 'maintenance-False',
++                'final-health',
+                 'audit-success',
+             ],
+             transition,
+@@ -567,3 +669,196 @@ class PlannedPowerActionsTest(base.BaseTest):
+         cloud.power_off.assert_not_called()
+         self.assertEqual(2, cloud.set_masakari_maintenance.call_count)
+         self.assertEqual(2, cloud.disable_nova.call_count)
++
++    @mock.patch.object(planned.coordination, 'OperationCoordinator')
++    @mock.patch.object(planned.clients, 'CloudClients')
++    @mock.patch.object(planned.clients, 'connection_from_conf')
++    def test_completed_results_survive_coordination_cleanup_failures(
++            self, connection_from_conf, cloud_cls, coordinator_cls):
++        action_cases = (
++            (
++                planned.PlannedPowerOffAction,
++                'planned_power_off',
++                1,
++            ),
++            (
++                planned.PlannedRebootAction,
++                'planned_reboot',
++                2,
++            ),
++        )
++        failure_modes = (
++            'release_false',
++            'release_exception',
++            'stop_exception',
++        )
++
++        for action_class, operation_name, maintenance_count in action_cases:
++            for failure_mode in failure_modes:
++                with self.subTest(
++                        action=action_class.__name__, failure=failure_mode):
++                    events = []
++                    coordinator_cls.return_value = (
++                        _CleanupFailureCoordinator(events, failure_mode)
++                    )
++                    cloud = mock.Mock(unsafe=True)
++                    cloud_cls.return_value = cloud
++                    self._successful_cloud(cloud)
++                    action = action_class('compute-01', 'segment-1')
++                    action._audit = mock.Mock(
++                        side_effect=lambda *args: events.append(
++                            'audit-{}'.format(args[2])
++                        )
++                    )
++                    context = fakes.action_context(
++                        'execution-cleanup-{}-{}'.format(
++                            operation_name, failure_mode
++                        )
++                    )
++
++                    result = action.run(context)
++
++                    self.assertEqual(operation_name, result['operation'])
++                    self.assertEqual(
++                        ['success',
++                         'completed_with_coordination_cleanup_error'],
++                        [call.args[2]
++                         for call in action._audit.call_args_list],
++                    )
++                    self.assertEqual(
++                        {'error_type': 'RuntimeError'},
++                        action._audit.call_args_list[-1].args[3],
++                    )
++                    self.assertLess(
++                        events.index('audit-success'),
++                        events.index(
++                            'audit-completed_with_coordination_cleanup_error'
++                        ),
++                    )
++                    self.assertEqual(
++                        maintenance_count,
++                        cloud.set_masakari_maintenance.call_count,
++                    )
++                    cloud.disable_nova.assert_called_once_with(
++                        'compute-01',
++                        'PowerOps planned operation',
++                    )
++
++    @mock.patch.object(planned.coordination, 'OperationCoordinator')
++    @mock.patch.object(planned.clients, 'CloudClients')
++    @mock.patch.object(planned.clients, 'connection_from_conf')
++    def test_cleanup_audit_failure_does_not_hide_completed_result(
++            self, connection_from_conf, cloud_cls, coordinator_cls):
++        action_classes = (
++            planned.PlannedPowerOffAction,
++            planned.PlannedRebootAction,
++        )
++
++        for action_class in action_classes:
++            with self.subTest(action=action_class.__name__):
++                coordinator_cls.return_value = _CleanupFailureCoordinator(
++                    [], 'release_exception'
++                )
++                cloud = mock.Mock(unsafe=True)
++                cloud_cls.return_value = cloud
++                self._successful_cloud(cloud)
++                action = action_class('compute-01', 'segment-1')
++                action._audit = mock.Mock(
++                    side_effect=(
++                        None,
++                        RuntimeError('token=cleanup-audit-secret'),
++                    )
++                )
++
++                with mock.patch.object(
++                        planned.base.LOG, 'warning') as warning:
++                    result = action.run(
++                        fakes.action_context(
++                            'execution-cleanup-audit-{}'.format(
++                                action_class.__name__
++                            )
++                        )
++                    )
++
++                self.assertEqual(
++                    action._audit.call_args_list[0].args[3], result
++                )
++                warning.assert_called_once_with(
++                    'Could not write PowerOps coordination cleanup '
++                    'audit record'
++                )
++
++    @mock.patch.object(planned.coordination, 'OperationCoordinator')
++    @mock.patch.object(planned.clients, 'CloudClients')
++    @mock.patch.object(planned.clients, 'connection_from_conf')
++    def test_final_health_loss_fails_before_success_audit(
++            self, connection_from_conf, cloud_cls, coordinator_cls):
++        action_cases = (
++            (
++                planned.PlannedPowerOffAction,
++                'planned_power_off',
++                [True],
++            ),
++            (
++                planned.PlannedRebootAction,
++                'planned_reboot',
++                [True, False],
++            ),
++        )
++
++        for action_class, operation_name, expected_maintenance in action_cases:
++            with self.subTest(action=action_class.__name__):
++                events = []
++                lost = RuntimeError('coordinator lost')
++                coordinator = self._coordinator(
++                    events,
++                    health_side_effect=(lost, lost, lost),
++                )
++                coordinator_cls.return_value = coordinator
++                cloud = mock.Mock(unsafe=True)
++                cloud_cls.return_value = cloud
++                self._successful_cloud(cloud)
++                maintenance = []
++                disables = []
++
++                def set_maintenance(segment_uuid, host, enabled):
++                    if len(maintenance) == len(expected_maintenance):
++                        coordinator.assert_healthy()
++
++                    maintenance.append(enabled)
++
++                def disable(host, reason):
++                    if disables:
++                        coordinator.assert_healthy()
++
++                    disables.append(host)
++
++                cloud.set_masakari_maintenance.side_effect = set_maintenance
++                cloud.disable_nova.side_effect = disable
++                action = action_class('compute-01', 'segment-1')
++                action._audit = mock.Mock()
++                context = fakes.action_context(
++                    'execution-final-health-{}'.format(operation_name)
++                )
++
++                raised = self.assertRaises(
++                    RuntimeError, action.run, context
++                )
++
++                self.assertIs(lost, raised)
++                self.assertEqual(expected_maintenance, maintenance)
++                self.assertEqual(['compute-01'], disables)
++                self.assertEqual(
++                    len(expected_maintenance) + 1,
++                    cloud.set_masakari_maintenance.call_count,
++                )
++                self.assertEqual(2, cloud.disable_nova.call_count)
++                action._audit.assert_called_once_with(
++                    context,
++                    operation_name,
++                    'failure',
++                    {
++                        'error_type': 'RuntimeError',
++                        'fail_safe_error_count': 2,
++                    },
++                )
+-- 
+2.49.0
+

@@ -1,0 +1,713 @@
+From 2fad67d570e19542b93959f5d0d1b40fcece2651 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Tue, 1 Sep 2026 04:28:26 +0300
+Subject: [PATCH 4/9] fix: align PowerOps with SDK resources
+
+---
+ mistral/actions/powerops/clients.py           | 182 +++++++++--
+ mistral/tests/unit/actions/powerops/fakes.py  |  17 +-
+ .../unit/actions/powerops/test_clients.py     | 300 +++++++++++++++++-
+ 3 files changed, 465 insertions(+), 34 deletions(-)
+
+diff --git a/mistral/actions/powerops/clients.py b/mistral/actions/powerops/clients.py
+index f2d6250..7db0478 100644
+--- a/mistral/actions/powerops/clients.py
++++ b/mistral/actions/powerops/clients.py
+@@ -12,6 +12,7 @@
+ # License for the specific language governing permissions and limitations
+ # under the License.
+ 
++import re
+ import time
+ from types import SimpleNamespace
+ 
+@@ -35,7 +36,7 @@ _INSTANCE_POLICIES = frozenset({
+     'stop',
+ })
+ _KNOWN_POWER_STATES = frozenset({'power on', 'power off'})
+-_RESOURCE_ID_RE = coordination.HOST_RE
++_PATH_RESOURCE_ID_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_-]*$')
+ 
+ 
+ def _register_keystone_authtoken_options():
+@@ -161,7 +162,7 @@ class CloudClients:
+     def _validate_resource_id(resource_id, description):
+         if (
+                 not isinstance(resource_id, str)
+-                or not _RESOURCE_ID_RE.fullmatch(resource_id)):
++                or not _PATH_RESOURCE_ID_RE.fullmatch(resource_id)):
+             raise exceptions.HostResolutionError(
+                 '{} is not canonical'.format(description)
+             )
+@@ -265,19 +266,59 @@ class CloudClients:
+                 'host must resolve to one Nova compute service'
+             )
+ 
++        if matches[0].status not in ('enabled', 'disabled'):
++            raise exceptions.HostResolutionError(
++                'Nova compute service has an invalid administrative status'
++            )
++
+         return matches[0]
+ 
+-    @staticmethod
+-    def _masakari_resource(item):
++    @classmethod
++    def _masakari_identifier(cls, item, description):
++        identifiers = []
++
++        for field in ('uuid', 'id'):
++            if field in item:
++                value = item[field]
++                cls._validate_resource_id(value, description)
++                identifiers.append(value)
++
++        if not identifiers or len(set(identifiers)) != 1:
++            raise exceptions.HostResolutionError(
++                '{} is missing or ambiguous'.format(description)
++            )
++
++        return identifiers[0]
++
++    @classmethod
++    def _masakari_resource(cls, item):
+         if not isinstance(item, dict):
+-            return item
++            raise exceptions.HostResolutionError(
++                'Masakari host entry must be a mapping'
++            )
+ 
+-        host_id = item.get('uuid') or item.get('id')
++        host_id = cls._masakari_identifier(
++            item, 'Masakari host UUID'
++        )
++        name = item.get('name')
++        on_maintenance = item.get('on_maintenance')
++
++        if (
++                not isinstance(name, str)
++                or not coordination.HOST_RE.fullmatch(name)):
++            raise exceptions.HostResolutionError(
++                'Masakari host name is not canonical'
++            )
++
++        if not isinstance(on_maintenance, bool):
++            raise exceptions.HostResolutionError(
++                'Masakari maintenance state must be Boolean'
++            )
+ 
+         return SimpleNamespace(
+             id=host_id,
+-            name=item.get('name'),
+-            on_maintenance=item.get('on_maintenance'),
++            name=name,
++            on_maintenance=on_maintenance,
+         )
+ 
+     def masakari_host(self, segment_uuid, host, _deadline=None):
+@@ -291,10 +332,21 @@ class CloudClients:
+             deadline,
+             'timed out resolving the Masakari segment',
+         )
++
++        if not isinstance(segment_body, dict):
++            raise exceptions.HostResolutionError(
++                'Masakari segment response must be a mapping'
++            )
++
+         segment = segment_body.get('segment')
+-        segment_id = (
+-            segment.get('uuid') or segment.get('id')
+-            if isinstance(segment, dict) else None
++
++        if not isinstance(segment, dict):
++            raise exceptions.HostResolutionError(
++                'Masakari segment must be a mapping'
++            )
++
++        segment_id = self._masakari_identifier(
++            segment, 'Masakari segment UUID'
+         )
+ 
+         if segment_id != segment_uuid:
+@@ -307,13 +359,26 @@ class CloudClients:
+             deadline,
+             'timed out listing Masakari hosts',
+         )
++
++        if not isinstance(body, dict):
++            raise exceptions.HostResolutionError(
++                'Masakari hosts response must be a mapping'
++            )
++
++        host_entries = body.get('hosts')
++
++        if not isinstance(host_entries, list):
++            raise exceptions.HostResolutionError(
++                'Masakari hosts response must contain a hosts list'
++            )
++
+         hosts = [
+             self._masakari_resource(item)
+-            for item in body.get('hosts', [])
++            for item in host_entries
+         ]
+         matches = [item for item in hosts if item.name == host]
+ 
+-        if len(matches) != 1 or not matches[0].id:
++        if len(matches) != 1:
+             raise exceptions.HostResolutionError(
+                 'host must resolve to one Masakari segment host'
+             )
+@@ -338,17 +403,19 @@ class CloudClients:
+         )
+         servers = self._call_with_deadline(
+             lambda: list(self.connection.compute.servers(
+-                details=True, all_projects=True, host=host
++                details=True, all_projects=True, compute_host=host
+             )),
+             deadline,
+             'timed out listing Nova instances',
+         )
+ 
+-        return sorted(
+-            (server for server in servers
+-             if server.hypervisor_hostname == host),
+-            key=lambda server: server.id,
+-        )
++        if any(getattr(server, 'compute_host', None) != host
++               for server in servers):
++            raise exceptions.HostResolutionError(
++                'Nova returned an instance outside the requested compute host'
++            )
++
++        return sorted(servers, key=lambda server: server.id)
+ 
+     def _server_by_id(self, server_id, deadline):
+         return self._call_with_deadline(
+@@ -373,7 +440,16 @@ class CloudClients:
+                 'instance entered an unsafe migration state'
+             )
+ 
+-        return server.hypervisor_hostname != source_host
++        compute_host = getattr(server, 'compute_host', None)
++
++        if (
++                not isinstance(compute_host, str)
++                or not coordination.HOST_RE.fullmatch(compute_host)):
++            raise exceptions.HostResolutionError(
++                'Nova migration response has no canonical compute host'
++            )
++
++        return compute_host != source_host
+ 
+     def _pace_instances(self):
+         if CONF.powerops.instance_interval:
+@@ -645,7 +721,7 @@ class CloudClients:
+ 
+     @staticmethod
+     def _service_matches(service, enabled, up):
+-        enabled_matches = (not service.is_disabled) is enabled
++        enabled_matches = (service.status == 'enabled') is enabled
+         up_matches = up is None or (service.state == 'up') is up
+ 
+         return enabled_matches and up_matches
+@@ -667,7 +743,7 @@ class CloudClients:
+         deadline = self._deadline(CONF.powerops.service_timeout)
+         service = self.nova_service(host, _deadline=deadline)
+ 
+-        if not service.is_disabled:
++        if service.status == 'enabled':
+             self._mutation(
+                 lambda: self.connection.compute.disable_service(
+                     service, disabled_reason=reason
+@@ -687,7 +763,7 @@ class CloudClients:
+         deadline = self._deadline(CONF.powerops.service_timeout)
+         service = self.nova_service(host, _deadline=deadline)
+ 
+-        if service.is_disabled:
++        if service.status == 'disabled':
+             self._mutation(
+                 lambda: self.connection.compute.enable_service(service),
+                 deadline,
+@@ -748,12 +824,66 @@ class CloudClients:
+ 
+         return result
+ 
+-    def assert_host_safe_for_power_off(self, host):
++    @staticmethod
++    def _validate_stopped_manifest(stopped_instance_ids):
++        if not isinstance(stopped_instance_ids, list):
++            raise exceptions.InstanceManifestError(
++                'stopped instance manifest must be a list'
++            )
++
++        if any(
++                not isinstance(server_id, str)
++                or not _PATH_RESOURCE_ID_RE.fullmatch(server_id)
++                for server_id in stopped_instance_ids):
++            raise exceptions.InstanceManifestError(
++                'stopped manifest contains a noncanonical instance UUID'
++            )
++
++        if len(set(stopped_instance_ids)) != len(stopped_instance_ids):
++            raise exceptions.InstanceManifestError(
++                'duplicate instance UUID in stopped manifest'
++            )
++
++    def assert_host_safe_for_power_off(
++            self, host, policy, stopped_instance_ids):
++        if policy not in _INSTANCE_POLICIES:
++            raise exceptions.InstancePolicyError(
++                'unsupported planned instance policy'
++            )
++
++        self._validate_stopped_manifest(stopped_instance_ids)
+         servers = self.instances_on_host(host)
+ 
+-        if servers:
++        if policy in ('require_empty', 'live_migrate'):
++            if stopped_instance_ids:
++                raise exceptions.InstanceManifestError(
++                    'non-stop policy returned a stopped instance manifest'
++                )
++
++            if servers:
++                raise exceptions.InstancePolicyError(
++                    'instances remain on the source host'
++                )
++
++            self.health_check()
++            return
++
++        if any(server.status != 'SHUTOFF' for server in servers):
+             raise exceptions.InstancePolicyError(
+-                'instances remain on the source host'
++                'stop policy left a non-SHUTOFF source instance'
++            )
++
++        by_id = {server.id: server for server in servers}
++
++        if len(by_id) != len(servers):
++            raise exceptions.InstanceManifestError(
++                'source instance response contains duplicate UUIDs'
++            )
++
++        if any(server_id not in by_id
++               for server_id in stopped_instance_ids):
++            raise exceptions.InstanceManifestError(
++                'stopped manifest UUID is not on the source host'
+             )
+ 
+         self.health_check()
+diff --git a/mistral/tests/unit/actions/powerops/fakes.py b/mistral/tests/unit/actions/powerops/fakes.py
+index 0207833..77e48c0 100644
+--- a/mistral/tests/unit/actions/powerops/fakes.py
++++ b/mistral/tests/unit/actions/powerops/fakes.py
+@@ -28,16 +28,19 @@ def node(node_id, name, power_state="power on",
+     )
+ 
+ 
+-def server(server_id, host, status):
++def server(server_id, host, status, hypervisor_hostname=None):
+     return SimpleNamespace(
+-        id=server_id, hypervisor_hostname=host, status=status
++        id=server_id,
++        compute_host=host,
++        hypervisor_hostname=hypervisor_hostname or host,
++        status=status,
+     )
+ 
+ 
+-def service(service_id, host, state="up", is_disabled=False):
++def service(service_id, host, state="up", status="enabled"):
+     return SimpleNamespace(
+         id=service_id, host=host, binary="nova-compute",
+-        state=state, is_disabled=is_disabled,
++        state=state, status=status,
+     )
+ 
+ 
+@@ -109,16 +112,16 @@ def cloud(ironic_nodes=None, instances=None, nova_services=None,
+ 
+     def live_migrate_server(item):
+         events.append(("migrate", item.id))
+-        item.hypervisor_hostname = "compute-02"
++        item.compute_host = "compute-02"
+         item.status = "ACTIVE"
+ 
+     def disable_service(item, disabled_reason=None):
+         events.append(("disable", item.id, disabled_reason))
+-        item.is_disabled = True
++        item.status = "disabled"
+ 
+     def enable_service(item):
+         events.append(("enable", item.id))
+-        item.is_disabled = False
++        item.status = "enabled"
+ 
+     connection.compute.get_server.side_effect = get_server
+     connection.compute.stop_server.side_effect = stop_server
+diff --git a/mistral/tests/unit/actions/powerops/test_clients.py b/mistral/tests/unit/actions/powerops/test_clients.py
+index 57d9f68..71b4a66 100644
+--- a/mistral/tests/unit/actions/powerops/test_clients.py
++++ b/mistral/tests/unit/actions/powerops/test_clients.py
+@@ -16,6 +16,8 @@ from types import SimpleNamespace
+ from unittest import mock
+ 
+ import eventlet
++from openstack.compute.v2 import server as sdk_server
++from openstack.compute.v2 import service as sdk_service
+ 
+ from mistral.actions.powerops import clients
+ from mistral.actions.powerops import exceptions
+@@ -133,6 +135,16 @@ class CloudClientsTest(base.BaseTest):
+             cloud.connection, ha_adapter=ha_adapter, **kwargs
+         )
+ 
++    @staticmethod
++    def _set_masakari_responses(cloud, segment_body, hosts_body):
++        segment_response = mock.Mock()
++        segment_response.json.return_value = segment_body
++        hosts_response = mock.Mock()
++        hosts_response.json.return_value = hosts_body
++        cloud.ha_adapter.get.side_effect = [
++            segment_response, hosts_response
++        ]
++
+     def test_default_ha_adapter_uses_connection_session_and_catalog(self):
+         cloud = fakes.cloud()
+ 
+@@ -205,6 +217,36 @@ class CloudClientsTest(base.BaseTest):
+ 
+         self.assertIs(exact, self._client(cloud).nova_service("compute-01"))
+ 
++    def test_nova_service_uses_pinned_sdk_status_contract(self):
++        service = sdk_service.Service.existing(
++            id="s1",
++            host="compute-01",
++            binary="nova-compute",
++            state="up",
++            status="disabled",
++        )
++        cloud = fakes.cloud(nova_services=[service])
++
++        result = self._client(cloud).nova_service("compute-01")
++
++        self.assertIs(service, result)
++        self.assertEqual("disabled", result.status)
++        self.assertFalse(hasattr(result, "is_disabled"))
++
++    def test_nova_service_rejects_invalid_administrative_status(self):
++        for status in (None, True, "ENABLED", "forced_down"):
++            service = fakes.service(
++                "s1", "compute-01", status=status
++            )
++            cloud = fakes.cloud(nova_services=[service])
++
++            with self.subTest(status=status):
++                self.assertRaises(
++                    exceptions.HostResolutionError,
++                    self._client(cloud).nova_service,
++                    "compute-01",
++                )
++
+     def test_masakari_host_rejects_duplicate_exact_names(self):
+         cloud = fakes.cloud(masakari_hosts=[
+             fakes.masakari_host("h1", "compute-01"),
+@@ -227,6 +269,7 @@ class CloudClientsTest(base.BaseTest):
+         for segment_body in (
+                 {},
+                 {"segment": {}},
++                {"segment": []},
+                 {"segment": {"uuid": "segment-other"}}):
+             cloud = fakes.cloud(masakari_hosts=[
+                 fakes.masakari_host("h1", "compute-01")
+@@ -249,6 +292,119 @@ class CloudClientsTest(base.BaseTest):
+                     "/segments/segment-1"
+                 )
+ 
++    def test_masakari_host_rejects_nonmapping_top_levels(self):
++        cases = (
++            ([], {"hosts": []}),
++            ({"segment": {"uuid": "segment-1"}}, []),
++        )
++
++        for segment_body, hosts_body in cases:
++            cloud = fakes.cloud()
++            self._set_masakari_responses(
++                cloud, segment_body, hosts_body
++            )
++
++            with self.subTest(
++                    segment_body=segment_body, hosts_body=hosts_body):
++                self.assertRaises(
++                    exceptions.HostResolutionError,
++                    self._client(cloud).masakari_host,
++                    "segment-1",
++                    "compute-01",
++                )
++
++    def test_masakari_host_rejects_malformed_hosts_collection(self):
++        for hosts_body in (
++                {},
++                {"hosts": {}},
++                {"hosts": [None]},
++                {"hosts": ["compute-01"]}):
++            cloud = fakes.cloud()
++            self._set_masakari_responses(
++                cloud,
++                {"segment": {"uuid": "segment-1"}},
++                hosts_body,
++            )
++
++            with self.subTest(hosts_body=hosts_body):
++                self.assertRaises(
++                    exceptions.HostResolutionError,
++                    self._client(cloud).masakari_host,
++                    "segment-1",
++                    "compute-01",
++                )
++
++    def test_masakari_host_validates_every_mapping_before_matching(self):
++        cloud = fakes.cloud()
++        self._set_masakari_responses(
++            cloud,
++            {"segment": {"uuid": "segment-1"}},
++            {"hosts": [
++                {"id": "h1", "name": "compute-01",
++                 "on_maintenance": False},
++                {"id": "h2", "name": " compute-02",
++                 "on_maintenance": False},
++            ]},
++        )
++
++        self.assertRaises(
++            exceptions.HostResolutionError,
++            self._client(cloud).masakari_host,
++            "segment-1",
++            "compute-01",
++        )
++
++    def test_masakari_host_rejects_unsafe_resource_ids(self):
++        for host_id in ("../h1", "h1/child", ".", "..", "h.1"):
++            cloud = fakes.cloud()
++            self._set_masakari_responses(
++                cloud,
++                {"segment": {"uuid": "segment-1"}},
++                {"hosts": [{
++                    "id": host_id,
++                    "name": "compute-01",
++                    "on_maintenance": False,
++                }]},
++            )
++
++            with self.subTest(host_id=host_id):
++                self.assertRaises(
++                    exceptions.HostResolutionError,
++                    self._client(cloud).masakari_host,
++                    "segment-1",
++                    "compute-01",
++                )
++
++        cloud = fakes.cloud()
++        self.assertRaises(
++            exceptions.HostResolutionError,
++            self._client(cloud).masakari_host,
++            "..",
++            "compute-01",
++        )
++        cloud.ha_adapter.get.assert_not_called()
++
++    def test_masakari_host_requires_boolean_maintenance_state(self):
++        for value in (None, 0, 1, "false"):
++            cloud = fakes.cloud()
++            self._set_masakari_responses(
++                cloud,
++                {"segment": {"uuid": "segment-1"}},
++                {"hosts": [{
++                    "id": "h1",
++                    "name": "compute-01",
++                    "on_maintenance": value,
++                }]},
++            )
++
++            with self.subTest(value=value):
++                self.assertRaises(
++                    exceptions.HostResolutionError,
++                    self._client(cloud).masakari_host,
++                    "segment-1",
++                    "compute-01",
++                )
++
+     def test_resolve_host_set_finishes_only_after_all_exact_matches(self):
+         cloud = fakes.cloud(
+             ironic_nodes=[fakes.node("n1", "compute-01")],
+@@ -285,6 +441,66 @@ class CloudClientsTest(base.BaseTest):
+             "require_empty",
+         )
+ 
++    def test_instances_use_pinned_sdk_compute_host_contract(self):
++        server = sdk_server.Server.existing(
++            id="vm-a",
++            compute_host="compute-01",
++            hypervisor_hostname="display-name-only",
++            status="ACTIVE",
++        )
++        cloud = fakes.cloud(instances=[server])
++
++        self.assertEqual(
++            [server], self._client(cloud).instances_on_host("compute-01")
++        )
++        cloud.connection.compute.servers.assert_called_once_with(
++            details=True,
++            all_projects=True,
++            compute_host="compute-01",
++        )
++
++    def test_instances_reject_missing_or_mismatched_compute_host(self):
++        for compute_host in (None, "compute-02"):
++            server = sdk_server.Server.existing(
++                id="vm-a",
++                compute_host=compute_host,
++                hypervisor_hostname="compute-01",
++                status="ACTIVE",
++            )
++            cloud = fakes.cloud(instances=[server])
++
++            with self.subTest(compute_host=compute_host):
++                self.assertRaises(
++                    exceptions.HostResolutionError,
++                    self._client(cloud).instances_on_host,
++                    "compute-01",
++                )
++
++    def test_migration_completion_uses_pinned_sdk_compute_host(self):
++        source = sdk_server.Server.existing(
++            id="vm-a",
++            compute_host="compute-01",
++            hypervisor_hostname="unrelated-display-name",
++            status="ACTIVE",
++        )
++        migrated = sdk_server.Server.existing(
++            id="vm-a",
++            compute_host="compute-02",
++            hypervisor_hostname="compute-01",
++            status="ACTIVE",
++        )
++
++        self.assertFalse(
++            clients.CloudClients._validate_migration_observation(
++                source, "compute-01"
++            )
++        )
++        self.assertTrue(
++            clients.CloudClients._validate_migration_observation(
++                migrated, "compute-01"
++            )
++        )
++
+     def test_stop_policy_rejects_intermediate_vm_state(self):
+         cloud = fakes.cloud(instances=[
+             fakes.server("vm-a", "compute-01", "MIGRATING"),
+@@ -319,6 +535,88 @@ class CloudClientsTest(base.BaseTest):
+             events,
+         )
+ 
++    def test_stop_policy_manifest_passes_power_off_guard(self):
++        cloud = fakes.cloud(instances=[
++            fakes.server("vm-b", "compute-01", "ACTIVE"),
++            fakes.server("vm-a", "compute-01", "SHUTOFF"),
++        ])
++        client = self._client(cloud, monotonic=fakes.monotonic())
++
++        stopped = client.apply_instance_policy("compute-01", "stop")
++
++        self.assertEqual(["vm-b"], stopped)
++        client.assert_host_safe_for_power_off(
++            "compute-01", "stop", stopped
++        )
++
++    def test_empty_and_migration_guards_reject_source_instances(self):
++        for policy in ("require_empty", "live_migrate"):
++            cloud = fakes.cloud(instances=[
++                fakes.server("vm-a", "compute-01", "SHUTOFF"),
++            ])
++
++            with self.subTest(policy=policy):
++                self.assertRaises(
++                    exceptions.InstancePolicyError,
++                    self._client(cloud).assert_host_safe_for_power_off,
++                    "compute-01",
++                    policy,
++                    [],
++                )
++
++    def test_non_stop_guard_rejects_nonempty_stopped_manifest(self):
++        cloud = fakes.cloud()
++
++        self.assertRaises(
++            exceptions.InstanceManifestError,
++            self._client(cloud).assert_host_safe_for_power_off,
++            "compute-01",
++            "require_empty",
++            ["vm-a"],
++        )
++
++    def test_stop_guard_rejects_non_shutoff_source_instance(self):
++        cloud = fakes.cloud(instances=[
++            fakes.server("vm-a", "compute-01", "ACTIVE"),
++        ])
++
++        self.assertRaises(
++            exceptions.InstancePolicyError,
++            self._client(cloud).assert_host_safe_for_power_off,
++            "compute-01",
++            "stop",
++            [],
++        )
++
++    def test_stop_guard_requires_manifest_ids_on_stopped_source(self):
++        cloud = fakes.cloud(instances=[
++            fakes.server("vm-a", "compute-01", "SHUTOFF"),
++        ])
++
++        self.assertRaises(
++            exceptions.InstanceManifestError,
++            self._client(cloud).assert_host_safe_for_power_off,
++            "compute-01",
++            "stop",
++            ["vm-b"],
++        )
++
++    def test_stop_guard_rejects_duplicate_or_noncanonical_manifest(self):
++        cloud = fakes.cloud(instances=[
++            fakes.server("vm-a", "compute-01", "SHUTOFF"),
++        ])
++        client = self._client(cloud)
++
++        for manifest in (["vm-a", "vm-a"], ["../vm-a"], "vm-a"):
++            with self.subTest(manifest=manifest):
++                self.assertRaises(
++                    exceptions.InstanceManifestError,
++                    client.assert_host_safe_for_power_off,
++                    "compute-01",
++                    "stop",
++                    manifest,
++                )
++
+     def test_live_migrate_is_sorted_sequential_and_paced(self):
+         events = []
+         cloud = fakes.cloud(
+@@ -502,7 +800,7 @@ class CloudClientsTest(base.BaseTest):
+         ).disable_nova("compute-01", "planned")
+ 
+         self.assertIs(item, result)
+-        self.assertTrue(item.is_disabled)
++        self.assertEqual("disabled", item.status)
+         cloud.connection.compute.disable_service.assert_called_once_with(
+             item, disabled_reason="planned"
+         )
+-- 
+2.49.0
+

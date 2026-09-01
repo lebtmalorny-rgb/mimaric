@@ -40,6 +40,23 @@
 - Produces: `OperationCoordinator.lock_host(host: str)` context manager.
 - Consumes: `[powerops] coordination_url`; it does not reuse Mistral's deprecated service-membership `[coordination]` group.
 
+**Safety amendment from Masakari final review:**
+
+- Enabled PowerOps accepts only `etcd3+http` and `etcd3+https` and requests
+  tooz `DISTRIBUTED_ACROSS_PROCESSES` plus `LINEARIZABLE` characteristics.
+- `OperationCoordinator` tracks its active host lock and exposes
+  `assert_healthy()`. With the pinned OpenStack 2025.1 stack
+  (`tooz==6.3.0`, `etcd3gw==2.4.2`), it must prove by a linearizable etcd
+  value comparison that the lock key still contains this process's owner UUID.
+- Heartbeat death, an ownership-proof error/mismatch, and false or exceptional
+  release make the coordinator permanently unhealthy. There is no
+  uncoordinated fallback.
+- Tasks 3 and 4 call `assert_healthy()` immediately before every OpenStack
+  mutation, during long confirmation loops, and before returning success.
+- Add fault-injection tests for unsupported backend schemes, missing required
+  characteristics, dead heartbeat, expired lease/failed compare, sticky
+  failure, incompatible lock implementations, and false/exceptional release.
+
 - [ ] **Step 1: Write failing configuration and lock tests**
 
 ```python
@@ -168,6 +185,9 @@ class OperationCoordinator:
 
 Implement idempotent `stop()` plus `__enter__` and `__exit__`; `__exit__`
 always stops the coordinator and never suppresses the protected exception.
+Implement the safety amendment above in the same Task 1 commit; the simplified
+snippet is only the normal-path skeleton and must not override the fail-closed
+requirements.
 
 - [ ] **Step 5: Run focused and configuration tests**
 
@@ -200,10 +220,11 @@ git commit -m "feat: add PowerOps action coordination"
 
 **Interfaces:**
 - Produces: `connection_from_conf() -> openstack.connection.Connection`.
-- Produces: `CloudClients(connection, ha_adapter=None, sleep=time.sleep, monotonic=time.monotonic)`; a supplied adapter is used only for dependency injection, otherwise a Keystone HA adapter is constructed.
+- Produces: `CloudClients(connection, ha_adapter=None, sleep=time.sleep, monotonic=time.monotonic, health_check=None)`; a supplied adapter is used only for dependency injection, otherwise a Keystone HA adapter is constructed. Composite actions pass their active coordinator's `assert_healthy` callback.
 - Produces: exact resolution methods `ironic_node(host)`, `nova_service(host)`, `masakari_host(segment_uuid, host)`.
 - Produces: `resolve_host_set(segment_uuid, host)`, `wait_nova_service(host, enabled, up)`, `require_stable_power_on(host)`, and `require_masakari_maintenance(segment_uuid, host, expected)`.
 - Produces: deterministic VM methods `instances_on_host(host)`, `apply_instance_policy(host, policy) -> list[str]`, and `start_instances(instance_ids)`.
+- Produces: `assert_host_safe_for_power_off(host, policy, stopped_instance_ids)`; empty/migration policies require no remaining source instances, while stop requires every remaining source instance to be `SHUTOFF` and validates the explicit stopped manifest.
 - Produces: stable power methods `power_off(host, allow_hard_off)`, `power_on(host)` and `power_status(host)`.
 
 - [ ] **Step 1: Add failing exact-resolution and power tests**
@@ -498,10 +519,11 @@ Expected: import failure for `mistral.actions.powerops.clients`.
 
 - [ ] **Step 3: Add constrained runtime dependencies**
 
-Append the release-compatible requirements:
+Append the remaining release-compatible requirements. `etcd3gw` was moved to
+Task 1 because the coordinator imports and tests that optional tooz driver;
+do not add it a second time here:
 
 ```text
-etcd3gw!=0.2.2,!=0.2.3,!=0.2.6 # Apache-2.0
 keystoneauth1>=3.4.0 # Apache-2.0
 openstacksdk # Apache-2.0
 ```
@@ -547,7 +569,13 @@ def _compatible_power(node, expected):
 ```
 
 `ironic_node()` lists detailed nodes and filters `node.name == host` in Python.
-`nova_service()` filters `binary == "nova-compute"` and `host == host`.
+`nova_service()` filters `binary == "nova-compute"` and `host == host`, then
+uses the pinned SDK `Service.status` values exactly (`enabled`/`disabled`), not
+a synthetic `is_disabled` field. Instance placement uses
+`Server.compute_host` (`OS-EXT-SRV-ATTR:host`); a missing or mismatched field
+in a response to the exact host query is an error, never evidence of an empty
+host. `hypervisor_hostname` is informational and is not the Nova placement
+identity.
 `masakari_host()` gets the named segment from the HA endpoint, lists its hosts,
 and requires one object whose `name == host`. The Masakari request paths are:
 
@@ -571,8 +599,23 @@ ha_adapter = ks_adapter.Adapter(
 ```
 
 Use `ha_adapter.get()` and `ha_adapter.put()` with the relative paths above.
+Validate every Masakari JSON level before path construction: top-level
+mappings, exact segment mapping and UUID, hosts list, mapping entries, exact
+name, canonical host ID without path separators, and real Boolean
+`on_maintenance`. Malformed data raises `HostResolutionError`.
 
 - [ ] **Step 6: Implement deterministic instance and power transitions**
+
+All methods that mutate Ironic, Nova, or Masakari must invoke
+`self.health_check()` immediately before the mutation. Polling probes and the
+successful return of every transition must also check health. Implement a
+remaining-deadline call helper which sets/restores the Keystone session HTTP
+timeout and wraps yielding SDK/adapter calls in `eventlet.Timeout`; listing,
+mutation and polling calls must not run past their operation's overall
+deadline. Ownership loss or timeout aborts the method without subsequent
+mutations. Add blocking-call and health-loss tests for Ironic, Nova and
+Masakari paths. Read-only status calls may use a bounded per-request deadline
+but never bypass exact-resolution validation.
 
 Implement one bounded polling helper:
 
@@ -807,9 +850,12 @@ class PowerOpsAction(actions.Action):
             raise exceptions.PowerOpsDisabled()
         self._authorize(context)
         execution_id = context.execution.action_execution_id
-        cloud = clients.CloudClients(clients.connection_from_conf())
         with coordination.OperationCoordinator(execution_id) as coordinator:
             with coordinator.lock_host(self.host):
+                cloud = clients.CloudClients(
+                    clients.connection_from_conf(),
+                    health_check=coordinator.assert_healthy,
+                )
                 self._nova_disabled = False
                 try:
                     return operation(cloud)
@@ -865,6 +911,22 @@ Emit failure audit data without secrets before re-raising the original typed
 exception. If `self._audit(context, operation, "success", result)` raises, the
 same `_run_locked()` exception path reasserts the fail-safe state.
 
+**Task 3 review amendment:** validate every public action input after caller
+authorization but before coordinator creation: canonical host, canonical
+segment identifier, one of the three exact instance policies, and a real
+Boolean `allow_hard_off`. Invalid input must create no coordinator or cloud
+connection and make no OpenStack call.
+
+The operation body must return the result without writing its own success
+audit. While the host lock is still held, `_run_locked()` performs the final
+health proof, writes the success audit, and only then marks the remote
+transition complete. Pre-completion errors follow the existing fail-safe and
+failure-audit path. A release or coordinator-stop error after completion is
+instead audited as `completed_with_coordination_cleanup_error`; the completed
+result is returned and no mutation is attempted after uncertain ownership.
+This terminal cleanup classification prevents an already completed reboot
+from being exposed as a retryable failed action.
+
 - [ ] **Step 4: Implement planned power-off**
 
 The protected operation body is exactly:
@@ -875,7 +937,8 @@ cloud.set_masakari_maintenance(self.segment_uuid, self.host, True)
 self._nova_disabled = True
 cloud.disable_nova(self.host, CONF.powerops.nova_disable_reason)
 stopped = cloud.apply_instance_policy(self.host, self.instance_policy)
-cloud.assert_host_safe_for_power_off(self.host)
+cloud.assert_host_safe_for_power_off(
+    self.host, self.instance_policy, stopped)
 node = cloud.power_off(self.host, self.allow_hard_off)
 result = {
     "host": self.host,
@@ -885,13 +948,16 @@ result = {
     "nova_enabled": False,
     "masakari_maintenance": True,
 }
-self._audit(context, "planned_power_off", "success", result)
 return result
 ```
 
-`assert_host_safe_for_power_off()` re-lists the instances after policy
-application and rejects any remaining instance for `require_empty`/`stop`; for
-`live_migrate` it also rejects a server still reporting the source hypervisor.
+`assert_host_safe_for_power_off()` re-lists exact `compute_host` placement
+after policy application. It rejects every remaining instance for
+`require_empty` and `live_migrate`. For `stop`, it requires every remaining
+instance to be exactly `SHUTOFF` and validates that every UUID returned in the
+stopped manifest still identifies a stopped source-host instance; instances
+which were already stopped are allowed but are not added to the restart
+manifest.
 
 - [ ] **Step 5: Implement planned reboot**
 
@@ -903,7 +969,8 @@ cloud.set_masakari_maintenance(self.segment_uuid, self.host, True)
 self._nova_disabled = True
 cloud.disable_nova(self.host, CONF.powerops.nova_disable_reason)
 stopped = cloud.apply_instance_policy(self.host, self.instance_policy)
-cloud.assert_host_safe_for_power_off(self.host)
+cloud.assert_host_safe_for_power_off(
+    self.host, self.instance_policy, stopped)
 cloud.power_off(self.host, self.allow_hard_off)
 cloud.power_on(self.host)
 cloud.wait_nova_service(self.host, enabled=False, up=True)
@@ -918,7 +985,6 @@ result = {
     "nova_enabled": True,
     "masakari_maintenance": False,
 }
-self._audit(context, "planned_reboot", "success", result)
 return result
 ```
 
@@ -1059,7 +1125,7 @@ def test_status_is_read_only(
         "n1", "compute-01", "power on"
     )
     cloud.nova_service.return_value = fakes.service(
-        "s1", "compute-01", state="up", is_disabled=True
+        "s1", "compute-01", state="up", status="disabled"
     )
     cloud.masakari_host.return_value = fakes.masakari_host(
         "h1", "compute-01", on_maintenance=True
@@ -1094,16 +1160,17 @@ return {
     "power_state": node.power_state,
     "target_power_state": node.target_power_state,
     "ironic_last_error": node.last_error,
-    "nova_enabled": not service.is_disabled,
+    "nova_enabled": service.status == "enabled",
     "nova_state": service.state,
     "masakari_maintenance": masakari_host.on_maintenance,
 }
 ```
 
 Status first rejects `CONF.powerops.enabled == false`, then calls
-`_authorize(context)`, but does not acquire a lock because it never mutates
-state. Its result is a point-in-time observation, which the Russian runbook
-must state explicitly.
+`_authorize(context)` and the shared canonical host/segment preflight, but
+does not acquire a lock because it never mutates state. It strictly validates
+the pinned SDK `Service.status` before deriving `nova_enabled`. Its result is a
+point-in-time observation, which the Russian runbook must state explicitly.
 
 - [ ] **Step 4: Implement power-on-for-inspection**
 
@@ -1124,7 +1191,6 @@ result = {
     "nova_enabled": False,
     "masakari_maintenance": True,
 }
-self._audit(context, "power_on_for_inspection", "success", result)
 return result
 ```
 
@@ -1140,6 +1206,13 @@ if self.stale_domains_checked is not True:
 if len(set(self.stopped_instance_ids)) != len(self.stopped_instance_ids):
     raise exceptions.InstanceManifestError("duplicate instance UUID")
 ```
+
+The gate and complete manifest validation run from `_validate_inputs()` after
+caller authorization and before coordinator creation. The manifest must be a
+list of unique canonical string IDs; `None`, scalars, nested values, empty
+strings and path-like values fail with `InstanceManifestError` without cloud
+access. The shared template owns final health, success audit and terminal
+coordination-cleanup classification exactly as in Task 3.
 
 Use this body under the new host lock:
 
@@ -1161,7 +1234,6 @@ result = {
     "nova_enabled": True,
     "masakari_maintenance": False,
 }
-self._audit(context, "return_to_service", "success", result)
 return result
 ```
 
