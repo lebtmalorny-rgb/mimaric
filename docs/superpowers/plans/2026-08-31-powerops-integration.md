@@ -6,7 +6,7 @@
 
 **Architecture:** Masakari is implemented first because it owns emergency fencing, Mistral second because it owns planned operations, and Kolla-Ansible last because its templates and registration checks consume both source contracts. A repository-neutral contract suite compares action names, TaskFlow names, workbook bytes, lock namespaces and deployment safety invariants before patch export is accepted.
 
-**Tech Stack:** Git worktrees, Python unittest, PyYAML, git format-patch/am, SHA-256.
+**Tech Stack:** Git worktrees, Python standard library/unittest, git format-patch/am, SHA-256.
 
 **Spec:** `docs/superpowers/specs/2026-08-31-openstack-powerops-design.md`
 
@@ -86,115 +86,50 @@ copy must come from the completed Mistral worktree and compare byte-for-byte.
 **Interfaces:**
 - Consumes environment variables: `POWEROPS_MASAKARI_TREE`, `POWEROPS_MISTRAL_TREE`, `POWEROPS_KOLLA_TREE`.
 - Produces: source-only contract evidence without importing service packages or contacting APIs.
-- Verifies: names, workflow bytes, dependencies, etcd URL, fencing order and deploy non-mutation.
+- Verifies: entry points, workflow bytes, lock scopes, fencing order, exact
+  allowlists, etcd selection, patched image placement, workbook ownership,
+  deterministic VM pacing and deploy non-mutation.
 
 - [ ] **Step 1: Write the failing contract suite**
 
-```python
-import os
-from pathlib import Path
-import unittest
+Implement the assertions in `tests/test_cross_repository_contract.py` with
+only the Python standard library. Parse Python sources with `ast`, entry-point
+groups with `configparser`, and the controlled workbook/Ansible structures
+without importing Masakari, Mistral, Kolla-Ansible or their dependencies.
 
-import yaml
+The suite must cover the actual completed source contracts, including the
+companion Mistral owner-scoped workbook update and Kolla's fail-closed handling
+of ambiguous or foreign public workbook rows. Missing environment variables
+or required source files must produce explicit assertion messages.
 
-
-MASAKARI = Path(os.environ["POWEROPS_MASAKARI_TREE"])
-MISTRAL = Path(os.environ["POWEROPS_MISTRAL_TREE"])
-KOLLA = Path(os.environ["POWEROPS_KOLLA_TREE"])
-
-
-class CrossRepositoryContractTest(unittest.TestCase):
-    def test_action_and_taskflow_entry_points_match_kolla(self):
-        masakari_setup = (MASAKARI / "setup.cfg").read_text()
-        mistral_setup = (MISTRAL / "setup.cfg").read_text()
-        masakari_conf = (
-            KOLLA / "ansible/roles/masakari/templates/masakari.conf.j2"
-        ).read_text()
-        registration = (
-            KOLLA / "ansible/roles/mistral/tasks/powerops.yml"
-        ).read_text()
-
-        self.assertIn("ironic_fence =", masakari_setup)
-        self.assertIn("'ironic_fence'", masakari_conf)
-        for name in (
-            "powerops.host_power_status",
-            "powerops.planned_power_off",
-            "powerops.planned_reboot",
-            "powerops.power_on_for_inspection",
-            "powerops.return_to_service",
-        ):
-            self.assertIn(name + " =", mistral_setup)
-            self.assertIn(name, registration)
-
-    def test_workbook_copy_is_identical(self):
-        source = (MISTRAL / "etc/mistral/power_ops.yaml").read_bytes()
-        deployed = (
-            KOLLA / "ansible/roles/mistral/files/power_ops.yaml"
-        ).read_bytes()
-        self.assertEqual(source, deployed)
-
-    def test_lock_names_are_shared_and_scoped(self):
-        masakari = "\n".join(
-            path.read_text() for path in
-            (MASAKARI / "masakari").rglob("*.py")
-        )
-        mistral = "\n".join(
-            path.read_text() for path in
-            (MISTRAL / "mistral/actions/powerops").rglob("*.py")
-        )
-        self.assertIn("powerops/host/", masakari)
-        self.assertIn("powerops/host/", mistral)
-        self.assertIn("powerops/evacuation/global", masakari)
-        self.assertNotIn("powerops/evacuation/global", mistral)
-
-    def test_workbook_has_pause_and_no_planned_evacuation(self):
-        workbook = yaml.safe_load(
-            (MISTRAL / "etc/mistral/power_ops.yaml").read_text()
-        )
-        gate = workbook["workflows"]["power_on_and_return"]["tasks"][
-            "operator_inspection_gate"
-        ]
-        self.assertIs(True, gate["pause-before"])
-        self.assertNotIn("evacuat", str(workbook).lower())
-
-    def test_privileged_actions_have_exact_caller_allowlists(self):
-        action_base = (
-            MISTRAL / "mistral/actions/powerops/base.py"
-        ).read_text()
-        kolla_defaults = (KOLLA / "ansible/group_vars/all.yml").read_text()
-        for name in ("allowed_project_names", "allowed_user_names"):
-            self.assertIn(name, action_base)
-            self.assertIn("powerops_" + name, kolla_defaults)
-
-    def test_deploy_tasks_have_no_runtime_mutation_endpoint(self):
-        tasks = "\n".join(
-            path.read_text().lower()
-            for path in (KOLLA / "ansible/roles/mistral/tasks").glob("*.yml")
-        )
-        for forbidden in (
-            "/executions",
-            "baremetal node power",
-            "server evacuate",
-            "server migrate",
-        ):
-            self.assertNotIn(forbidden, tasks)
-```
+Lock and pacing checks must assert AST parent/child scope at the real mutation
+call sites, not only the presence or textual order of tokens. Kolla checks must
+allowlist the permitted command tasks and URI endpoint/method pairs and reject
+all workflow-execution CLI/API forms during deploy or reconfigure.
 
 - [ ] **Step 2: Run before all repositories are complete and verify RED**
+
+```bash
+POWEROPS_MASAKARI_TREE="$PWD/sources/masakari" \
+POWEROPS_MISTRAL_TREE="$PWD/sources/mistral" \
+POWEROPS_KOLLA_TREE="$PWD/../kolla-ansible-enroll-ironic-patch-3" \
+python3 -m unittest tests.test_cross_repository_contract -v
+```
+
+Expected: the pinned, unpatched trees fail because the PowerOps contracts are
+absent; the old Mistral workbook update also fails the exact owner-scope
+assertion.
+
+- [ ] **Step 3: Run after all repositories are complete and verify GREEN**
 
 ```bash
 POWEROPS_MASAKARI_TREE="$PWD/worktrees/masakari-powerops" \
 POWEROPS_MISTRAL_TREE="$PWD/worktrees/mistral-powerops" \
 POWEROPS_KOLLA_TREE="$PWD/work/kolla-ansible" \
-python -m unittest tests.test_cross_repository_contract -v
+python3 -m unittest tests.test_cross_repository_contract -v
 ```
 
-Expected: missing contracts fail until all three implementation plans have
-completed.
-
-- [ ] **Step 3: Run after all repositories are complete and verify GREEN**
-
-Run the same command. Expected: PASS with no network or service access.
+Expected: PASS with no network or service access.
 
 - [ ] **Step 4: Commit the contract suite in the artifact repository**
 
