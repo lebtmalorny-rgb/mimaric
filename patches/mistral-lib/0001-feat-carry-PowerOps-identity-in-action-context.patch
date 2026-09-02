@@ -1,0 +1,185 @@
+From 599094312e148b879a68e4c539232892e4b06bba Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Wed, 2 Sep 2026 13:27:36 +0300
+Subject: [PATCH] feat: carry PowerOps identity in action context
+
+---
+ mistral_lib/actions/context.py            |  11 ++-
+ mistral_lib/tests/actions/test_context.py | 113 ++++++++++++++++++++++
+ 2 files changed, 122 insertions(+), 2 deletions(-)
+
+diff --git a/mistral_lib/actions/context.py b/mistral_lib/actions/context.py
+index fbde99b..1a0a921 100644
+--- a/mistral_lib/actions/context.py
++++ b/mistral_lib/actions/context.py
+@@ -49,7 +49,7 @@ class SecurityContext(object):
+                  service_catalog=None, region_name=None, is_trust_scoped=None,
+                  redelivered=None, expires_at=None, trust_id=None,
+                  is_target=None, project_id=None, project_name=None,
+-                 user_name=None, auth_token=None):
++                 user_name=None, auth_token=None, user_id=None, roles=None):
+         self.auth_uri = auth_uri
+         self.auth_cacert = auth_cacert
+         self.insecure = insecure
+@@ -62,7 +62,9 @@ class SecurityContext(object):
+         self.is_target = is_target
+         self.project_id = project_id
+         self.project_name = project_name
++        self.user_id = user_id
+         self.user_name = user_name
++        self.roles = list(roles) if roles else []
+         self.auth_token = auth_token
+ 
+ 
+@@ -71,7 +73,8 @@ class ExecutionContext(object):
+                  action_execution_id=None, workflow_name=None,
+                  callback_url=None, task_id=None, with_items_index=0,
+                  task_rerun_no=0, task_rerun_id=None,
+-                 workflow_propagated_headers=None):
++                 workflow_propagated_headers=None,
++                 workflow_resume_authorization=None):
+         self.workflow_execution_id = workflow_execution_id
+         self.task_execution_id = task_execution_id
+         self.action_execution_id = action_execution_id
+@@ -81,6 +84,10 @@ class ExecutionContext(object):
+         self.task_rerun_no = task_rerun_no
+         self.task_rerun_id = task_rerun_id
+         self.workflow_propagated_headers = workflow_propagated_headers
++        self.workflow_resume_authorization = (
++            dict(workflow_resume_authorization)
++            if workflow_resume_authorization else None
++        )
+ 
+         if task_id is not None:
+             self.task_execution_id = task_id
+diff --git a/mistral_lib/tests/actions/test_context.py b/mistral_lib/tests/actions/test_context.py
+index c2d00a1..d25460a 100644
+--- a/mistral_lib/tests/actions/test_context.py
++++ b/mistral_lib/tests/actions/test_context.py
+@@ -55,6 +55,77 @@ class TestActionsBase(tests_base.TestCase):
+         self.assertEqual(ctx.security.auth_uri, None)
+         self.assertEqual(ctx.execution.workflow_name, None)
+ 
++    def test_security_context_carries_user_and_exact_roles(self):
++        roles = ['admin', 'powerops_operator']
++        security = context.SecurityContext(
++            user_id='user-id',
++            roles=roles,
++        )
++
++        roles.append('forged-after-construction')
++
++        self.assertEqual('user-id', security.user_id)
++        self.assertEqual(
++            ['admin', 'powerops_operator'],
++            security.roles,
++        )
++
++    def test_security_context_defaults_roles_to_new_empty_list(self):
++        first = context.SecurityContext()
++        second = context.SecurityContext()
++
++        first.roles.append('admin')
++
++        self.assertEqual([], second.roles)
++
++    def test_security_context_preserves_legacy_positional_arguments(self):
++        security = context.SecurityContext(
++            'auth-uri',
++            'auth-cacert',
++            'insecure',
++            'service-catalog',
++            'region-name',
++            'is-trust-scoped',
++            'redelivered',
++            'expires-at',
++            'trust-id',
++            'is-target',
++            'project-id',
++            'project-name',
++            'user-name',
++            'auth-token',
++        )
++
++        self.assertEqual('auth-uri', security.auth_uri)
++        self.assertEqual('auth-cacert', security.auth_cacert)
++        self.assertEqual('insecure', security.insecure)
++        self.assertEqual('service-catalog', security.service_catalog)
++        self.assertEqual('region-name', security.region_name)
++        self.assertEqual('is-trust-scoped', security.is_trust_scoped)
++        self.assertEqual('redelivered', security.redelivered)
++        self.assertEqual('expires-at', security.expires_at)
++        self.assertEqual('trust-id', security.trust_id)
++        self.assertEqual('is-target', security.is_target)
++        self.assertEqual('project-id', security.project_id)
++        self.assertEqual('project-name', security.project_name)
++        self.assertEqual('user-name', security.user_name)
++        self.assertEqual('auth-token', security.auth_token)
++        self.assertIsNone(security.user_id)
++        self.assertEqual([], security.roles)
++
++    def test_execution_context_carries_resume_authorization(self):
++        record = {
++            'user_id': 'resume-user',
++            'project_id': 'resume-project',
++            'authorization_branch': 'admin',
++            'authorized_at': '2026-09-02T10:00:00+00:00',
++        }
++        execution = context.ExecutionContext(
++            workflow_resume_authorization=record,
++        )
++
++        self.assertEqual(record, execution.workflow_resume_authorization)
++
+     def test_deprecated_properties(self):
+         ctx = _fake_context()
+ 
+@@ -97,3 +168,45 @@ class TestActionContextSerializer(tests_base.TestCase):
+             ctx.execution.workflow_name,
+             ctx_2.execution.workflow_name
+         )
++
++    def test_round_trip_preserves_powerops_security_fields(self):
++        action_ctx = context.ActionContext(
++            context.SecurityContext(
++                user_id='user-id',
++                project_id='project-id',
++                roles=['powerops_operator'],
++            ),
++            context.ExecutionContext(
++                workflow_execution_id='workflow-id',
++                workflow_resume_authorization={
++                    'user_id': 'resume-user',
++                    'project_id': 'resume-project',
++                    'authorization_branch': 'powerops_operator',
++                    'authorized_at': '2026-09-02T10:00:00+00:00',
++                },
++            ),
++        )
++        serializer = context.ActionContextSerializer()
++
++        restored = serializer.deserialize_from_dict(
++            serializer.serialize_to_dict(action_ctx)
++        )
++
++        self.assertEqual('user-id', restored.security.user_id)
++        self.assertEqual(['powerops_operator'], restored.security.roles)
++        self.assertEqual(
++            action_ctx.execution.workflow_resume_authorization,
++            restored.execution.workflow_resume_authorization,
++        )
++
++    def test_deserializes_legacy_payload_without_powerops_fields(self):
++        restored = context.ActionContextSerializer().deserialize_from_dict({
++            'security': {'project_id': 'legacy-project'},
++            'execution': {'workflow_execution_id': 'legacy-workflow'},
++        })
++
++        self.assertIsNone(restored.security.user_id)
++        self.assertEqual([], restored.security.roles)
++        self.assertIsNone(
++            restored.execution.workflow_resume_authorization
++        )
+-- 
+2.49.0
+
