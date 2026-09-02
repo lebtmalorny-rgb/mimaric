@@ -1,12 +1,12 @@
-From 599094312e148b879a68e4c539232892e4b06bba Mon Sep 17 00:00:00 2001
+From 568bde23679fb00a391e3e6f322cb374b0a448e4 Mon Sep 17 00:00:00 2001
 From: Lebt <lebtmalorny@gmail.com>
-Date: Wed, 2 Sep 2026 13:27:36 +0300
+Date: Wed, 2 Sep 2026 14:03:59 +0300
 Subject: [PATCH] feat: carry PowerOps identity in action context
 
 ---
- mistral_lib/actions/context.py            |  11 ++-
- mistral_lib/tests/actions/test_context.py | 113 ++++++++++++++++++++++
- 2 files changed, 122 insertions(+), 2 deletions(-)
+ mistral_lib/actions/context.py            |  11 +-
+ mistral_lib/tests/actions/test_context.py | 123 ++++++++++++++++++++++
+ 2 files changed, 132 insertions(+), 2 deletions(-)
 
 diff --git a/mistral_lib/actions/context.py b/mistral_lib/actions/context.py
 index fbde99b..1a0a921 100644
@@ -53,10 +53,10 @@ index fbde99b..1a0a921 100644
          if task_id is not None:
              self.task_execution_id = task_id
 diff --git a/mistral_lib/tests/actions/test_context.py b/mistral_lib/tests/actions/test_context.py
-index c2d00a1..d25460a 100644
+index c2d00a1..5e1d023 100644
 --- a/mistral_lib/tests/actions/test_context.py
 +++ b/mistral_lib/tests/actions/test_context.py
-@@ -55,6 +55,77 @@ class TestActionsBase(tests_base.TestCase):
+@@ -55,6 +55,87 @@ class TestActionsBase(tests_base.TestCase):
          self.assertEqual(ctx.security.auth_uri, None)
          self.assertEqual(ctx.execution.workflow_name, None)
  
@@ -129,12 +129,22 @@ index c2d00a1..d25460a 100644
 +            workflow_resume_authorization=record,
 +        )
 +
-+        self.assertEqual(record, execution.workflow_resume_authorization)
++        record['authorization_branch'] = 'forged-after-construction'
++
++        self.assertEqual(
++            {
++                'user_id': 'resume-user',
++                'project_id': 'resume-project',
++                'authorization_branch': 'admin',
++                'authorized_at': '2026-09-02T10:00:00+00:00',
++            },
++            execution.workflow_resume_authorization,
++        )
 +
      def test_deprecated_properties(self):
          ctx = _fake_context()
  
-@@ -97,3 +168,45 @@ class TestActionContextSerializer(tests_base.TestCase):
+@@ -97,3 +178,45 @@ class TestActionContextSerializer(tests_base.TestCase):
              ctx.execution.workflow_name,
              ctx_2.execution.workflow_name
          )
