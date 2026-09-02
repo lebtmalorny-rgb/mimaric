@@ -1,6 +1,6 @@
 # OpenStack PowerOps patch delivery
 
-This repository delivers 25 ordered Git patches plus source-level tests and
+This repository delivers 26 ordered Git patches plus source-level tests and
 operator documentation for OpenStack Epoxy 2025.1. Detailed installation is
 in [`INSTALL.md`](INSTALL.md). Routine state checks, failure diagnosis and
 controlled runtime acceptance are in [`OPERATIONS.md`](OPERATIONS.md). The
@@ -15,12 +15,12 @@ its source is delivered by
 |---|---|---|---:|
 | Masakari | `0fd34dd6a6d90525dbf806f35577c5ee1d7e9444` (`stable/2025.1`) | `9f3cb144958b8e60bba72adefb22edf51387c0ca` | 10 |
 | Mistral | `3b2eab29e9dc71a5ba250d989155eb69a9bd8e48` (`stable/2025.1`) | `3e4fe82455de7473809b0e0bc677fa3df3a3d1e2` | 10 |
-| Kolla-Ansible | `kolla-ansible-enroll-ironic-patch-3.zip`, SHA-256 `df27628ce641fefee30114ebeb3651490655aacb0930ad5bc30a298c88c3e08d`; internal force-tracked import `703b06c9fa5771c758f703b424d63fb04192567a` | `63a8d0f597f9034a42f2e1b0bd415f1746d33b8d` | 5 |
+| Kolla-Ansible | `kolla-ansible-enroll-ironic-patch-3.zip`, SHA-256 `df27628ce641fefee30114ebeb3651490655aacb0930ad5bc30a298c88c3e08d`; internal force-tracked import `703b06c9fa5771c758f703b424d63fb04192567a` | `83ebf5ab09efe6f9c7baa729e5aa9a225d73ca4f` | 6 |
 
 Clean `git am` reproduced the Masakari source tree
 `83bb2fd7a2d8c2f8d97e26c12fb66e8e06436bc5`, the Mistral source tree
 `8e3009eb1abf8033608d31d7e60cdb02ab8da1ed`, and the Kolla-Ansible source
-tree `287bac4223f24393c32fbfd55c140601c8611a21`. Commit IDs created by
+tree `c1488cb1a5db61d102bd55a9e9a2fafb5c25426c`. Commit IDs created by
 `git am` may differ because committer metadata changes; tree equality is the
 content proof.
 
@@ -62,6 +62,7 @@ Kolla-Ansible:
 3. `patches/kolla-ansible/0003-feat-render-etcd-backed-PowerOps-configuration.patch`
 4. `patches/kolla-ansible/0004-feat-reconcile-PowerOps-actions-and-workbook.patch`
 5. `patches/kolla-ansible/0005-docs-add-Russian-PowerOps-operations-guide.patch`
+6. `patches/kolla-ansible/0006-fix-load-Masakari-through-idempotent-WSGI-wrapper.patch`
 
 Dependency boundary: Kolla-Ansible patch 0004 requires Mistral patch 0010.
 The latter scopes the `Workbook` plus child `ActionDefinition` and
@@ -70,6 +71,13 @@ namespace, passes `project_id=wb_db.project_id`, and performs all writes in
 one SQLAlchemy transaction. Kolla additionally rejects ambiguous or foreign
 public `power_ops` workbook matches before mutation and requires each
 validated workflow to be an exact token-project-owned match.
+
+Kolla-Ansible patch 0006 replaces Apache's legacy generated
+`/var/lib/kolla/venv/bin/masakari-wsgi` entry point with a role-managed
+`/etc/masakari/masakari-api.wsgi` wrapper exporting
+`masakari.wsgi.api.application`. This prevents repeated configuration parsing
+from raising `ArgsAlreadyParsedError`; it is independent of the Consul host
+monitor path.
 
 ## Implemented scenarios
 
@@ -110,6 +118,9 @@ fresh-apply verification:
   so this delivery makes no final full-suite pass claim.
 - Kolla-Ansible PowerOps plus Ironic enrollment suites: **64/64**; Ansible
   syntax and diff hygiene passed.
+- New isolated Masakari WSGI wrapper regression suite: **3/3**; source diff
+  hygiene passed. The earlier 64/64 result was not rerun in the current system
+  Python because its Ansible test dependency is unavailable there.
 - Cross-repository source contract suite: **19/19**; artifact repository
   discovery: **31/31** (12 delivery plus 19 cross-repository); flake8,
   compileall and diff hygiene passed.
@@ -118,6 +129,7 @@ Representative verification commands:
 
 ```bash
 python3 -m unittest tests.test_delivery_artifacts -v
+python3 work/kolla-ansible/kolla_ansible/tests/unit/test_masakari_wsgi_wrapper.py -v
 POWEROPS_MASAKARI_TREE="$PWD/worktrees/masakari-powerops" \
 POWEROPS_MISTRAL_TREE="$PWD/worktrees/mistral-powerops" \
 POWEROPS_KOLLA_TREE="$PWD/work/kolla-ansible" \
@@ -155,7 +167,8 @@ run. No external API or production state was changed while producing it.
 ## Live verification still required
 
 Runtime acceptance still must validate the four built images, actual Kolla
-prechecks/deploy or reconfigure, controller-to-Keystone/Mistral TLS,
+prechecks/deploy or reconfigure, successful Masakari API `/` and `/v1`
+responses without `ArgsAlreadyParsedError`, controller-to-Keystone/Mistral TLS,
 project-scoped workbook collision handling, Mistral action population, etcd
 session/lease/heartbeat behavior, exact Nova/Masakari/Ironic name mapping,
 Redfish/BMC stable power observations, live migration, emergency evacuation,

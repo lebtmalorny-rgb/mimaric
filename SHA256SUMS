@@ -3,6 +3,7 @@ e4ef789d87d8c1a283f7e9ef3d02c5f30d790e01dc1c02f67aed068578d034b6  patches/kolla-
 344b01eb9a30367804bd9a297c236587462598e82ba3693bb21faf9fa9955f08  patches/kolla-ansible/0003-feat-render-etcd-backed-PowerOps-configuration.patch
 1b954fccd040ea738434209608b478b98b1f2cad2e3331c8c05f0954e28d7dd1  patches/kolla-ansible/0004-feat-reconcile-PowerOps-actions-and-workbook.patch
 def41befc91d36339f89744c5541d6685d1b8d78e465fe96c79cf9f1a5ebbd2b  patches/kolla-ansible/0005-docs-add-Russian-PowerOps-operations-guide.patch
+b8e41f6ff7c8e54d0f14fdbe175b95d43d1d65ca542ec2d0f549fd0a98d0a27a  patches/kolla-ansible/0006-fix-load-Masakari-through-idempotent-WSGI-wrapper.patch
 2ae6584e8ef3ac0a8b774631a557a93385b45ba4fda1fe8040c81b1787ce1625  patches/masakari/0001-feat-add-PowerOps-coordination-primitives.patch
 223b3c36969094c890e23948aeccff160e3793067d20b719dd2a809358819af7  patches/masakari/0002-feat-fence-failed-hosts-through-Ironic.patch
 81e8d8daafdd12e85dbcfc2119fd09265fb2d6b8788227f5052381dabaf5fa84  patches/masakari/0003-fix-enforce-Ironic-fencing-deadlines.patch

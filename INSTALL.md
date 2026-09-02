@@ -2,8 +2,8 @@
 
 ## Краткий вывод
 
-Комплект содержит 25 Git-патчей: 10 для vanilla Masakari `stable/2025.1`, 10
-для vanilla Mistral `stable/2025.1` и 5 для выбранного форка Kolla-Ansible
+Комплект содержит 26 Git-патчей: 10 для vanilla Masakari `stable/2025.1`, 10
+для vanilla Mistral `stable/2025.1` и 6 для выбранного форка Kolla-Ansible
 Epoxy 2025.1. Применяйте серии именно в порядке Masakari → Mistral →
 Kolla-Ansible и собирайте четыре отдельных runtime-образа: Masakari Engine,
 Mistral API, Mistral Engine и Mistral Executor. Mistral Event Engine может
@@ -37,11 +37,11 @@ export KOLLA_SRC=/path/to/kolla-ansible-enroll-ironic-patch-3
 cd "$POWEROPS_BUNDLE"
 shasum -a 256 -c SHA256SUMS
 POWEROPS_PATCH_COUNT="$(find patches -type f -name '*.patch' | wc -l | tr -d ' ')"
-test "$POWEROPS_PATCH_COUNT" -eq 25
+test "$POWEROPS_PATCH_COUNT" -eq 26
 find patches -type f -name '*.patch' | sort
 ```
 
-Ожидаются 25 строк `OK` и ровно 25 patch-файлов. До применения сохраните
+Ожидаются 26 строк `OK` и ровно 26 patch-файлов. До применения сохраните
 вывод `git status --short`, `git branch --show-current`, `git rev-parse HEAD`
 для каждого исходного репозитория. Рабочие деревья должны быть чистыми.
 Не продолжайте при несовпадении SHA, baseline или количестве файлов.
@@ -52,7 +52,7 @@ find patches -type f -name '*.patch' | sort
 |---|---|---|---|
 | Masakari | `0fd34dd6a6d90525dbf806f35577c5ee1d7e9444` | `9f3cb144958b8e60bba72adefb22edf51387c0ca` | `83bb2fd7a2d8c2f8d97e26c12fb66e8e06436bc5` |
 | Mistral | `3b2eab29e9dc71a5ba250d989155eb69a9bd8e48` | `3e4fe82455de7473809b0e0bc677fa3df3a3d1e2` | `8e3009eb1abf8033608d31d7e60cdb02ab8da1ed` |
-| Kolla-Ansible | архив SHA-256 `df27628ce641fefee30114ebeb3651490655aacb0930ad5bc30a298c88c3e08d`; локальный импорт `703b06c9fa5771c758f703b424d63fb04192567a` | `63a8d0f597f9034a42f2e1b0bd415f1746d33b8d` | `287bac4223f24393c32fbfd55c140601c8611a21` |
+| Kolla-Ansible | архив SHA-256 `df27628ce641fefee30114ebeb3651490655aacb0930ad5bc30a298c88c3e08d`; локальный импорт `703b06c9fa5771c758f703b424d63fb04192567a` | `83ebf5ab09efe6f9c7baa729e5aa9a225d73ca4f` | `c1488cb1a5db61d102bd55a9e9a2fafb5c25426c` |
 
 Commit импорта Kolla воспроизводимо описывает использованное дерево, но его
 ID зависит от метаданных локального Git-коммита. Для новой установки
@@ -161,7 +161,7 @@ git diff --check 3b2eab29e9dc71a5ba250d989155eb69a9bd8e48..HEAD
 
 ## Установка патчей Kolla-Ansible
 
-Пять патчей рассчитаны на точное дерево проверенного ZIP. Первый патч удаляет
+Шесть патчей рассчитаны на точное дерево проверенного ZIP. Первый патч удаляет
 runtime/backup/reject-артефакты и восстанавливает `no_log: true`. Четвёртый
 патч зависит от уже включённого в Mistral патча 0010.
 
@@ -172,11 +172,19 @@ git am \
   "$POWEROPS_BUNDLE/patches/kolla-ansible/0002-feat-define-Kolla-PowerOps-deployment-contract.patch" \
   "$POWEROPS_BUNDLE/patches/kolla-ansible/0003-feat-render-etcd-backed-PowerOps-configuration.patch" \
   "$POWEROPS_BUNDLE/patches/kolla-ansible/0004-feat-reconcile-PowerOps-actions-and-workbook.patch" \
-  "$POWEROPS_BUNDLE/patches/kolla-ansible/0005-docs-add-Russian-PowerOps-operations-guide.patch"
+  "$POWEROPS_BUNDLE/patches/kolla-ansible/0005-docs-add-Russian-PowerOps-operations-guide.patch" \
+  "$POWEROPS_BUNDLE/patches/kolla-ansible/0006-fix-load-Masakari-through-idempotent-WSGI-wrapper.patch"
 test ! -e ansible.log
-git log --oneline -5
-git diff --check HEAD~5..HEAD
+git log --oneline -6
+git diff --check HEAD~6..HEAD
 ```
+
+Шестой патч доставляет в `masakari_api` файл
+`/etc/masakari/masakari-api.wsgi` и направляет Apache на модульный WSGI entry
+point `masakari.wsgi.api.application`. Он устраняет запуск legacy-скрипта,
+который повторно разбирает уже обработанные аргументы и завершается с
+`ArgsAlreadyParsedError`. Патч не поднимает Consul и не меняет
+`masakari-hostmonitor`: это отдельный контур диагностики.
 
 Если удаление `ansible.log` не применяется, это означает, что исходный архив
 или импорт отличается от baseline. Не редактируйте patch: выполните

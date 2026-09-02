@@ -1,0 +1,183 @@
+From 83ebf5ab09efe6f9c7baa729e5aa9a225d73ca4f Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Wed, 2 Sep 2026 17:23:11 +0300
+Subject: [PATCH] fix: load Masakari through idempotent WSGI wrapper
+
+---
+ .../roles/masakari/files/masakari-api.wsgi    | 16 +++++
+ ansible/roles/masakari/tasks/config.yml       | 10 +++
+ .../masakari/templates/masakari-api.json.j2   |  6 ++
+ .../masakari/templates/wsgi-masakari.conf.j2  | 10 +--
+ .../tests/unit/test_masakari_wsgi_wrapper.py  | 68 +++++++++++++++++++
+ 5 files changed, 105 insertions(+), 5 deletions(-)
+ create mode 100644 ansible/roles/masakari/files/masakari-api.wsgi
+ create mode 100644 kolla_ansible/tests/unit/test_masakari_wsgi_wrapper.py
+
+diff --git a/ansible/roles/masakari/files/masakari-api.wsgi b/ansible/roles/masakari/files/masakari-api.wsgi
+new file mode 100644
+index 0000000..5e980e4
+--- /dev/null
++++ b/ansible/roles/masakari/files/masakari-api.wsgi
+@@ -0,0 +1,16 @@
++# Licensed under the Apache License, Version 2.0 (the "License"); you may
++# not use this file except in compliance with the License. You may obtain
++# a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++from masakari.wsgi import api
++
++
++application = api.application
+diff --git a/ansible/roles/masakari/tasks/config.yml b/ansible/roles/masakari/tasks/config.yml
+index 1dc21e0..fc6df76 100644
+--- a/ansible/roles/masakari/tasks/config.yml
++++ b/ansible/roles/masakari/tasks/config.yml
+@@ -115,6 +115,16 @@
+   become: true
+   when: service | service_enabled_and_mapped_to_host
+ 
++- name: Copying over masakari-api WSGI wrapper
++  vars:
++    service: "{{ masakari_services['masakari-api'] }}"
++  copy:
++    src: "masakari-api.wsgi"
++    dest: "{{ node_config_directory }}/masakari-api/masakari-api.wsgi"
++    mode: "0660"
++  become: true
++  when: service | service_enabled_and_mapped_to_host
++
+ - name: Copying over masakari-api-paste.ini
+   vars:
+     service: "{{ masakari_services['masakari-api'] }}"
+diff --git a/ansible/roles/masakari/templates/masakari-api.json.j2 b/ansible/roles/masakari/templates/masakari-api.json.j2
+index 65aa8aa..5198383 100644
+--- a/ansible/roles/masakari/templates/masakari-api.json.j2
++++ b/ansible/roles/masakari/templates/masakari-api.json.j2
+@@ -15,6 +15,12 @@
+             "owner": "masakari",
+             "perm": "0600"
+         },
++        {
++            "source": "{{ container_config_directory }}/masakari-api.wsgi",
++            "dest": "/etc/masakari/masakari-api.wsgi",
++            "owner": "masakari",
++            "perm": "0600"
++        },
+         {
+             "source": "{{ container_config_directory }}/wsgi-masakari.conf",
+             "dest": "/etc/{{ masakari_dir }}/wsgi-masakari.conf",
+diff --git a/ansible/roles/masakari/templates/wsgi-masakari.conf.j2 b/ansible/roles/masakari/templates/wsgi-masakari.conf.j2
+index 1891dcd..67e886d 100644
+--- a/ansible/roles/masakari/templates/wsgi-masakari.conf.j2
++++ b/ansible/roles/masakari/templates/wsgi-masakari.conf.j2
+@@ -1,5 +1,5 @@
+ {% set masakari_log_dir = '/var/log/kolla/masakari' %}
+-{% set binary_path = '/var/lib/kolla/venv/bin' %}
++{% set wsgi_path = "/etc/masakari" %}
+ 
+ Listen {{ api_interface_address | put_address_in_context('url') }}:{{ masakari_api_port }}
+ 
+@@ -18,9 +18,9 @@ ErrorLog "{{ masakari_log_dir }}/apache-error.log"
+ LogLevel info
+ {% endif %}
+ 
+-<Directory "{{ binary_path }}">
+-    <FilesMatch "^masakari-wsgi$">
+-      Options Indexes FollowSymLinks MultiViews
++<Directory "{{ wsgi_path }}">
++    <FilesMatch "^masakari-api\.wsgi$">
++      Options None
+       Require all granted
+     </FilesMatch>
+ </Directory>
+@@ -33,5 +33,5 @@ LogLevel info
+   WSGIApplicationGroup %{GLOBAL}
+   WSGIDaemonProcess masakari group=masakari processes={{ masakari_api_workers }} threads=1 user=masakari
+   WSGIProcessGroup masakari
+-  WSGIScriptAlias / "{{ binary_path }}/masakari-wsgi"
++  WSGIScriptAlias / "{{ wsgi_path }}/masakari-api.wsgi"
+ </VirtualHost>
+diff --git a/kolla_ansible/tests/unit/test_masakari_wsgi_wrapper.py b/kolla_ansible/tests/unit/test_masakari_wsgi_wrapper.py
+new file mode 100644
+index 0000000..ad86946
+--- /dev/null
++++ b/kolla_ansible/tests/unit/test_masakari_wsgi_wrapper.py
+@@ -0,0 +1,68 @@
++# Licensed under the Apache License, Version 2.0 (the "License"); you may
++# not use this file except in compliance with the License. You may obtain
++# a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++from pathlib import Path
++import unittest
++
++
++ROOT = Path(__file__).resolve().parents[3]
++MASAKARI_ROLE = ROOT / "ansible/roles/masakari"
++WRAPPER = MASAKARI_ROLE / "files/masakari-api.wsgi"
++CONFIG_TASKS = MASAKARI_ROLE / "tasks/config.yml"
++CONTAINER_CONFIG = MASAKARI_ROLE / "templates/masakari-api.json.j2"
++APACHE_CONFIG = MASAKARI_ROLE / "templates/wsgi-masakari.conf.j2"
++
++
++class MasakariWsgiWrapperTest(unittest.TestCase):
++
++    def test_wrapper_exports_the_module_wsgi_application(self):
++        source = WRAPPER.read_text(encoding="utf-8")
++
++        self.assertIn("from masakari.wsgi import api", source)
++        self.assertIn("application = api.application", source)
++        self.assertNotIn("initialize_application", source)
++
++    def test_role_copies_wrapper_into_masakari_api_config(self):
++        tasks = CONFIG_TASKS.read_text(encoding="utf-8")
++
++        self.assertIn("- name: Copying over masakari-api WSGI wrapper", tasks)
++        self.assertIn('src: "masakari-api.wsgi"', tasks)
++        self.assertIn(
++            'dest: "{{ node_config_directory }}/masakari-api/'
++            'masakari-api.wsgi"',
++            tasks,
++        )
++        self.assertIn(
++            "when: service | service_enabled_and_mapped_to_host",
++            tasks,
++        )
++
++    def test_container_installs_wrapper_and_apache_uses_it(self):
++        container = CONTAINER_CONFIG.read_text(encoding="utf-8")
++        apache = APACHE_CONFIG.read_text(encoding="utf-8")
++
++        self.assertIn(
++            '"source": "{{ container_config_directory }}/'
++            'masakari-api.wsgi"',
++            container,
++        )
++        self.assertIn('"dest": "/etc/masakari/masakari-api.wsgi"', container)
++        self.assertIn('{% set wsgi_path = "/etc/masakari" %}', apache)
++        self.assertIn(
++            'WSGIScriptAlias / "{{ wsgi_path }}/masakari-api.wsgi"',
++            apache,
++        )
++        self.assertNotIn("/var/lib/kolla/venv/bin/masakari-wsgi", apache)
++
++
++if __name__ == "__main__":
++    unittest.main()
+-- 
+2.49.0
+
