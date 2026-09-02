@@ -39,6 +39,7 @@ PATCHES = {
         "0003-feat-render-etcd-backed-PowerOps-configuration.patch",
         "0004-feat-reconcile-PowerOps-actions-and-workbook.patch",
         "0005-docs-add-Russian-PowerOps-operations-guide.patch",
+        "0006-fix-load-Masakari-through-idempotent-WSGI-wrapper.patch",
     ],
 }
 
@@ -87,6 +88,8 @@ class DeliveryArtifactsTest(unittest.TestCase):
             '"state": "RUNNING"',
             "Mistral 0010",
             "Kolla-Ansible 0004",
+            "masakari-api.wsgi",
+            "ArgsAlreadyParsedError",
             "не запускает workflow",
             "отдельного разрешения оператора",
         ):
@@ -162,8 +165,8 @@ class DeliveryArtifactsTest(unittest.TestCase):
             "8e3009eb1abf8033608d31d7e60cdb02ab8da1ed",
             "df27628ce641fefee30114ebeb3651490655aacb0930ad5bc30a298c88c3e08d",
             "703b06c9fa5771c758f703b424d63fb04192567a",
-            "63a8d0f597f9034a42f2e1b0bd415f1746d33b8d",
-            "287bac4223f24393c32fbfd55c140601c8611a21",
+            "83ebf5ab09efe6f9c7baa729e5aa9a225d73ca4f",
+            "c1488cb1a5db61d102bd55a9e9a2fafb5c25426c",
         }
         found = set(re.findall(r"[0-9a-f]{40,64}", text))
         self.assertEqual(set(), required - found)
@@ -396,6 +399,7 @@ class DeliveryArtifactsTest(unittest.TestCase):
             "broader 106/106",
             "stopped after 829",
             "64/64",
+            "3/3",
             "19/19",
             "31/31",
         ):
@@ -424,8 +428,8 @@ class DeliveryArtifactsTest(unittest.TestCase):
         )
 
         self.assertEqual(expected, actual)
-        self.assertIn('test "$POWEROPS_PATCH_COUNT" -eq 25', install)
-        self.assertEqual(25, len(lines))
+        self.assertIn('test "$POWEROPS_PATCH_COUNT" -eq 26', install)
+        self.assertEqual(26, len(lines))
         self.assertEqual(expected, [line.split("  ", 1)[1] for line in lines])
 
         for line in lines:
