@@ -1,0 +1,170 @@
+diff --git a/ansible/kolla-host.yml b/ansible/kolla-host.yml
+--- a/ansible/kolla-host.yml
++++ b/ansible/kolla-host.yml
+@@ -12,3 +12,8 @@
+   roles:
+     - { role: openstack.kolla.baremetal,
+         tags: baremetal }
++
++    - role: host_ntp
++      tags:
++        - baremetal
++        - host-ntp
+diff --git a/ansible/roles/host_ntp/defaults/main.yml b/ansible/roles/host_ntp/defaults/main.yml
+new file mode 100644
+--- /dev/null
++++ b/ansible/roles/host_ntp/defaults/main.yml
+@@ -0,0 +1,32 @@
++---
++# Configure NTP on Kolla hosts during bootstrap-servers.
++# Disabled by default to preserve existing Kolla behaviour.
++enable_host_ntp: false
++
++# Rocky Linux and Red Hat-compatible defaults.
++host_ntp_package: "chrony"
++host_ntp_service: "chronyd"
++host_ntp_config_file: "/etc/chrony.conf"
++
++host_ntp_supported_os_families:
++  - "RedHat"
++
++# Must be overridden when enable_host_ntp=true.
++host_ntp_servers: []
++host_ntp_server_options: "iburst"
++
++host_ntp_driftfile: "/var/lib/chrony/drift"
++host_ntp_makestep: "1.0 3"
++host_ntp_rtcsync: true
++host_ntp_logdir: "/var/log/chrony"
++
++# Validate generated configuration before replacing the current file.
++host_ntp_validate_command: "chronyd -p -f %s"
++host_ntp_config_backup: true
++
++# Verify actual synchronization after starting chronyd.
++host_ntp_verify_sync: true
++
++# Maximum wait is approximately tries * interval seconds.
++host_ntp_waitsync_tries: 60
++host_ntp_waitsync_interval: 2
+diff --git a/ansible/roles/host_ntp/tasks/main.yml b/ansible/roles/host_ntp/tasks/main.yml
+new file mode 100644
+--- /dev/null
++++ b/ansible/roles/host_ntp/tasks/main.yml
+@@ -0,0 +1,94 @@
++---
++- name: Configure host NTP
++  when:
++    - enable_host_ntp | bool
++  block:
++    - name: Validate host NTP operating system
++      ansible.builtin.assert:
++        that:
++          - ansible_facts.os_family in host_ntp_supported_os_families
++        fail_msg: >-
++          The host_ntp role currently supports only Red Hat-compatible
++          operating systems. Detected OS family:
++          {{ ansible_facts.os_family }}.
++
++    - name: Validate host NTP server list
++      ansible.builtin.assert:
++        that:
++          - (host_ntp_servers | type_debug) == "list"
++          - host_ntp_servers | length > 0
++        fail_msg: >-
++          enable_host_ntp is true, but host_ntp_servers is empty or is not
++          a list. Define host_ntp_servers in /etc/kolla/globals.yml or
++          /etc/kolla/globals.d/10-host-ntp.yml.
++
++    - name: Install host NTP package
++      become: true
++      ansible.builtin.package:
++        name: "{{ host_ntp_package }}"
++        state: present
++
++    - name: Configure and validate host NTP
++      become: true
++      ansible.builtin.template:
++        src: "chrony.conf.j2"
++        dest: "{{ host_ntp_config_file }}"
++        owner: "root"
++        group: "root"
++        mode: "0644"
++        backup: "{{ host_ntp_config_backup | bool }}"
++        validate: >-
++          {{
++            host_ntp_validate_command
++            if not ansible_check_mode
++            else omit
++          }}
++      register: host_ntp_config
++
++    - name: Enable and start host NTP service
++      become: true
++      ansible.builtin.systemd_service:
++        name: "{{ host_ntp_service }}"
++        enabled: true
++        state: >-
++          {{
++            "restarted"
++            if host_ntp_config.changed
++            else "started"
++          }}
++
++    - name: Wait for host clock synchronization
++      become: true
++      ansible.builtin.command:
++        argv:
++          - "chronyc"
++          - "-n"
++          - "waitsync"
++          - "{{ host_ntp_waitsync_tries | string }}"
++          - "0"
++          - "0"
++          - "{{ host_ntp_waitsync_interval | string }}"
++      changed_when: false
++      when:
++        - host_ntp_verify_sync | bool
++        - not ansible_check_mode
++
++    - name: Read host NTP tracking status
++      become: true
++      ansible.builtin.command:
++        argv:
++          - "chronyc"
++          - "-n"
++          - "tracking"
++      register: host_ntp_tracking
++      changed_when: false
++      when:
++        - host_ntp_verify_sync | bool
++        - not ansible_check_mode
++
++    - name: Show host NTP tracking status
++      ansible.builtin.debug:
++        var: host_ntp_tracking.stdout_lines
++      when:
++        - host_ntp_verify_sync | bool
++        - not ansible_check_mode
+diff --git a/ansible/roles/host_ntp/templates/chrony.conf.j2 b/ansible/roles/host_ntp/templates/chrony.conf.j2
+new file mode 100644
+--- /dev/null
++++ b/ansible/roles/host_ntp/templates/chrony.conf.j2
+@@ -0,0 +1,17 @@
++# Managed by Kolla Ansible.
++# Local changes will be overwritten.
++
++{% for server in host_ntp_servers %}
++server {{ server }}{% if host_ntp_server_options %} {{ host_ntp_server_options }}{% endif %}{% if not loop.last %}{{ '\n' }}{% endif %}
++{% endfor %}
++
++
++driftfile {{ host_ntp_driftfile }}
++
++makestep {{ host_ntp_makestep }}
++
++{% if host_ntp_rtcsync | bool %}
++rtcsync
++{% endif %}
++
++logdir {{ host_ntp_logdir }}
