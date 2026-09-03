@@ -1,16 +1,16 @@
-From 084a74f1e7096b66ee41903c75397813dbc5ce54 Mon Sep 17 00:00:00 2001
+From 475d554fcfc9f8ddefe4aa8a42406dc11a10ba36 Mon Sep 17 00:00:00 2001
 From: Lebt <lebtmalorny@gmail.com>
 Date: Thu, 3 Sep 2026 17:04:45 +0300
 Subject: [PATCH 8/8] feat: validate Horizon PowerOps runtime contract
 
 ---
  ansible/roles/horizon/tasks/deploy.yml        |   3 +
- ansible/roles/horizon/tasks/powerops.yml      |  19 ++
+ ansible/roles/horizon/tasks/powerops.yml      |  22 +
  ansible/roles/mistral/files/power_ops.yaml    |   9 +
  ansible/roles/mistral/tasks/powerops.yml      |   7 +-
- .../tests/unit/test_powerops_horizon.py       | 285 ++++++++++++++++++
+ .../tests/unit/test_powerops_horizon.py       | 446 ++++++++++++++++++
  .../tests/unit/test_powerops_registration.py  |   7 +-
- 6 files changed, 327 insertions(+), 3 deletions(-)
+ 6 files changed, 491 insertions(+), 3 deletions(-)
  create mode 100644 ansible/roles/horizon/tasks/powerops.yml
  create mode 100644 kolla_ansible/tests/unit/test_powerops_horizon.py
 
@@ -27,10 +27,10 @@ index 2415269..5a9c9ef 100644
 +  when: enable_horizon_powerops | bool
 diff --git a/ansible/roles/horizon/tasks/powerops.yml b/ansible/roles/horizon/tasks/powerops.yml
 new file mode 100644
-index 0000000..14be18c
+index 0000000..fc583b2
 --- /dev/null
 +++ b/ansible/roles/horizon/tasks/powerops.yml
-@@ -0,0 +1,19 @@
+@@ -0,0 +1,22 @@
 +---
 +- name: Verify Horizon PowerOps runtime settings
 +  become: true
@@ -39,14 +39,17 @@ index 0000000..14be18c
 +    --env POWEROPS_EXPECTED_REGION
 +    --env POWEROPS_EXPECTED_PROJECT_NAMES
 +    --env POWEROPS_EXPECTED_USER_NAMES
++    --env POWEROPS_EXPECTED_CACHE_LOCATIONS
 +    horizon python -c
-+    "import json, os; os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'openstack_dashboard.settings'); import django; django.setup(); import poweropsdashboard; import poweropsdashboard.enabled._50_powerops; from django.conf import settings; assert settings.POWEROPS_REGION_NAME == os.environ['POWEROPS_EXPECTED_REGION']; assert settings.POWEROPS_ALLOWED_PROJECT_NAMES == json.loads(os.environ['POWEROPS_EXPECTED_PROJECT_NAMES']); assert settings.POWEROPS_ALLOWED_USER_NAMES == json.loads(os.environ['POWEROPS_EXPECTED_USER_NAMES']); assert settings.POWEROPS_MOCK_MODE is False"
++    "import json, os; os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'openstack_dashboard.settings'); import django; django.setup(); import poweropsdashboard; import poweropsdashboard.enabled._50_powerops; from django.conf import settings; cache=settings.CACHES.get('default'); assert settings.POWEROPS_REGION_NAME == os.environ['POWEROPS_EXPECTED_REGION']; assert settings.POWEROPS_ALLOWED_PROJECT_NAMES == json.loads(os.environ['POWEROPS_EXPECTED_PROJECT_NAMES']); assert settings.POWEROPS_ALLOWED_USER_NAMES == json.loads(os.environ['POWEROPS_EXPECTED_USER_NAMES']); assert settings.POWEROPS_MOCK_MODE is False; assert settings.SESSION_ENGINE == 'django.contrib.sessions.backends.cache'; assert isinstance(cache, dict); assert cache.get('BACKEND') == 'django.core.cache.backends.memcached.PyMemcacheCache'; locations=cache.get('LOCATION'); assert isinstance(locations, list); assert locations == json.loads(os.environ['POWEROPS_EXPECTED_CACHE_LOCATIONS'])"
 +  environment:
 +    POWEROPS_EXPECTED_REGION: "{{ openstack_region_name }}"
 +    POWEROPS_EXPECTED_PROJECT_NAMES: >-
 +      {{ powerops_allowed_project_names | to_json }}
 +    POWEROPS_EXPECTED_USER_NAMES: >-
 +      {{ powerops_allowed_user_names | to_json }}
++    POWEROPS_EXPECTED_CACHE_LOCATIONS: >-
++      [{% for host in groups['memcached'] %}{{ (('api' | kolla_address(host) | put_address_in_context('url')) ~ ':' ~ memcached_port) | to_json }}{% if not loop.last %}, {% endif %}{% endfor %}]
 +  changed_when: false
 +  run_once: true
 +  delegate_to: "{{ groups['horizon'][0] }}"
@@ -111,10 +114,10 @@ index 29137dd..5d87ab9 100644
    no_log: true
 diff --git a/kolla_ansible/tests/unit/test_powerops_horizon.py b/kolla_ansible/tests/unit/test_powerops_horizon.py
 new file mode 100644
-index 0000000..d2628e8
+index 0000000..aadbadb
 --- /dev/null
 +++ b/kolla_ansible/tests/unit/test_powerops_horizon.py
-@@ -0,0 +1,285 @@
+@@ -0,0 +1,446 @@
 +# Licensed under the Apache License, Version 2.0 (the "License"); you may
 +# not use this file except in compliance with the License. You may obtain
 +# a copy of the License at
@@ -127,8 +130,13 @@ index 0000000..d2628e8
 +# See the License for the specific language governing permissions and
 +# limitations under the License.
 +
++import json
++import os
 +from pathlib import Path
++import sys
++import types
 +import unittest
++from unittest import mock
 +import warnings
 +
 +from ansible.parsing.dataloader import DataLoader
@@ -163,11 +171,24 @@ index 0000000..d2628e8
 +    return bool(value)
 +
 +
++def _kolla_address(_network, host):
++    return host
++
++
++def _put_address_in_context(value, _context):
++    return value
++
++
 +def _render(value, variables):
 +    environment = jinja2.Environment(  # nosec: local expression fixture
 +        undefined=jinja2.StrictUndefined,
 +    )
-+    environment.filters["bool"] = _ansible_bool
++    environment.filters.update({
++        "bool": _ansible_bool,
++        "kolla_address": _kolla_address,
++        "put_address_in_context": _put_address_in_context,
++        "to_json": json.dumps,
++    })
 +    return environment.from_string(value).render(**variables)
 +
 +
@@ -196,6 +217,14 @@ index 0000000..d2628e8
 +            f"expected one task named {name!r}, found {len(matches)}"
 +        )
 +    return matches[0]
++
++
++def _runtime_script(task):
++    command = _normalise(task["ansible.builtin.command"])
++    marker = ' horizon python -c "'
++    if marker not in command or not command.endswith('"'):
++        raise AssertionError("unexpected Horizon runtime command")
++    return command.split(marker, 1)[1][:-1]
 +
 +
 +class HorizonPowerOpsDeploymentTest(unittest.TestCase):
@@ -351,7 +380,8 @@ index 0000000..d2628e8
 +        self.assertIn(
 +            "exec --env POWEROPS_EXPECTED_REGION "
 +            "--env POWEROPS_EXPECTED_PROJECT_NAMES "
-+            "--env POWEROPS_EXPECTED_USER_NAMES horizon python -c",
++            "--env POWEROPS_EXPECTED_USER_NAMES "
++            "--env POWEROPS_EXPECTED_CACHE_LOCATIONS horizon python -c",
 +            command,
 +        )
 +        self.assertIn("import poweropsdashboard", command)
@@ -360,6 +390,16 @@ index 0000000..d2628e8
 +        self.assertIn("settings.POWEROPS_REGION_NAME", command)
 +        self.assertIn("settings.POWEROPS_ALLOWED_PROJECT_NAMES", command)
 +        self.assertIn("settings.POWEROPS_ALLOWED_USER_NAMES", command)
++        self.assertIn("settings.SESSION_ENGINE", command)
++        self.assertIn("settings.CACHES", command)
++        self.assertIn(
++            "django.contrib.sessions.backends.cache",
++            command,
++        )
++        self.assertIn(
++            "django.core.cache.backends.memcached.PyMemcacheCache",
++            command,
++        )
 +        self.assertIs(tasks[0]["changed_when"], False)
 +        self.assertIs(tasks[0]["run_once"], True)
 +        self.assertEqual("{{ groups['horizon'][0] }}", tasks[0]["delegate_to"])
@@ -372,11 +412,30 @@ index 0000000..d2628e8
 +                "POWEROPS_EXPECTED_USER_NAMES": (
 +                    "{{ powerops_allowed_user_names | to_json }}"
 +                ),
++                "POWEROPS_EXPECTED_CACHE_LOCATIONS": (
++                    "[{% for host in groups['memcached'] %}"
++                    "{{ (('api' | kolla_address(host) | "
++                    "put_address_in_context('url')) ~ ':' ~ "
++                    "memcached_port) | to_json }}"
++                    "{% if not loop.last %}, {% endif %}{% endfor %}]"
++                ),
 +            },
 +            {
 +                name: _normalise(value)
 +                for name, value in tasks[0]["environment"].items()
 +            },
++        )
++        self.assertEqual(
++            '["cache-1:11211", "cache-2:11211"]',
++            _render(
++                tasks[0]["environment"][
++                    "POWEROPS_EXPECTED_CACHE_LOCATIONS"
++                ],
++                {
++                    "groups": {"memcached": ["cache-1", "cache-2"]},
++                    "memcached_port": 11211,
++                },
++            ),
 +        )
 +
 +        serialised = yaml.safe_dump(
@@ -396,6 +455,111 @@ index 0000000..d2628e8
 +                "masakari notification",
 +                "etcdctl put"):
 +            self.assertNotIn(forbidden, serialised)
++
++    def _execute_runtime_check(self, session_engine, default_cache):
++        task = _load_yaml(HORIZON_POWEROPS)[0]
++        script = _runtime_script(task)
++        expected_locations = ["cache-1:11211", "cache-2:11211"]
++        settings = types.SimpleNamespace(
++            POWEROPS_REGION_NAME="RegionOne",
++            POWEROPS_ALLOWED_PROJECT_NAMES=["admin", "ops-project"],
++            POWEROPS_ALLOWED_USER_NAMES=["admin", "ops-user"],
++            POWEROPS_MOCK_MODE=False,
++            SESSION_ENGINE=session_engine,
++            CACHES={"default": default_cache},
++        )
++        setup_calls = []
++        django = types.ModuleType("django")
++        django.__path__ = []
++        django.setup = lambda: setup_calls.append("setup")
++        django_conf = types.ModuleType("django.conf")
++        django_conf.settings = settings
++        powerops = types.ModuleType("poweropsdashboard")
++        powerops.__path__ = []
++        enabled = types.ModuleType("poweropsdashboard.enabled")
++        enabled.__path__ = []
++        enabled_module = types.ModuleType(
++            "poweropsdashboard.enabled._50_powerops"
++        )
++        powerops.enabled = enabled
++        enabled._50_powerops = enabled_module
++        modules = {
++            "django": django,
++            "django.conf": django_conf,
++            "poweropsdashboard": powerops,
++            "poweropsdashboard.enabled": enabled,
++            "poweropsdashboard.enabled._50_powerops": enabled_module,
++        }
++        environment = {
++            "POWEROPS_EXPECTED_REGION": "RegionOne",
++            "POWEROPS_EXPECTED_PROJECT_NAMES": json.dumps(
++                ["admin", "ops-project"]
++            ),
++            "POWEROPS_EXPECTED_USER_NAMES": json.dumps(
++                ["admin", "ops-user"]
++            ),
++            "POWEROPS_EXPECTED_CACHE_LOCATIONS": json.dumps(
++                expected_locations
++            ),
++        }
++        with mock.patch.dict(sys.modules, modules), mock.patch.dict(
++                os.environ, environment):
++            exec(  # nosec: fixed local Ansible task under test
++                compile(script, "<horizon-powerops-runtime>", "exec"),
++                {},
++            )
++        self.assertEqual(["setup"], setup_calls)
++
++    def test_runtime_check_validates_fully_loaded_shared_cache(self):
++        session_engine = "django.contrib.sessions.backends.cache"
++        backend = (
++            "django.core.cache.backends.memcached.PyMemcacheCache"
++        )
++        valid_cache = {
++            "BACKEND": backend,
++            "LOCATION": ["cache-1:11211", "cache-2:11211"],
++        }
++        self._execute_runtime_check(session_engine, valid_cache)
++
++        invalid_cases = (
++            (
++                "database session override",
++                "django.contrib.sessions.backends.db",
++                valid_cache,
++            ),
++            (
++                "local memory override",
++                session_engine,
++                {
++                    "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
++                    "LOCATION": valid_cache["LOCATION"],
++                },
++            ),
++            (
++                "dummy override",
++                session_engine,
++                {
++                    "BACKEND": "django.core.cache.backends.dummy.DummyCache",
++                    "LOCATION": valid_cache["LOCATION"],
++                },
++            ),
++            (
++                "wrong endpoints",
++                session_engine,
++                {"BACKEND": backend, "LOCATION": ["cache-1:11211"]},
++            ),
++            (
++                "missing endpoints",
++                session_engine,
++                {"BACKEND": backend},
++            ),
++        )
++        for name, final_session_engine, final_cache in invalid_cases:
++            with self.subTest(name=name), self.assertRaises(AssertionError):
++                self._execute_runtime_check(
++                    final_session_engine,
++                    final_cache,
++                )
 +
 +
 +if __name__ == "__main__":
