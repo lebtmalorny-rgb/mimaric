@@ -1,0 +1,3 @@
+pbr
+horizon
+python-mistralclient
