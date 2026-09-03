@@ -1,10 +1,14 @@
 import copy
 import hashlib
+import pathlib
 import re
+import subprocess
+import threading
 from types import SimpleNamespace
 from unittest import mock
 
 from django.test import SimpleTestCase
+from horizon.utils import file_discovery
 
 from poweropsdashboard import api
 from poweropsdashboard import auth
@@ -64,19 +68,22 @@ def _row():
     }
 
 
-def _inventory(rows=None):
+def _inventory(rows=None, state='SUCCESS', execution_id=INVENTORY_UUID,
+               workflow=constants.HOST_INVENTORY, workflow_input=None):
     return SimpleNamespace(
-        id=INVENTORY_UUID,
-        workflow_name=constants.HOST_INVENTORY,
-        state='SUCCESS',
+        id=execution_id,
+        workflow_name=workflow,
+        state=state,
         state_info=None,
-        input={},
+        input={} if workflow_input is None else workflow_input,
         output={'result': [_row()] if rows is None else rows},
         created_at='2026-09-03T10:00:00',
     )
 
 
-def _status(**changes):
+def _status(state='SUCCESS', execution_id=STATUS_UUID,
+            workflow=constants.HOST_POWER_STATUS, workflow_input=None,
+            **changes):
     result = {
         'host': 'compute-01',
         'ironic_node_uuid': NODE_UUID,
@@ -89,14 +96,17 @@ def _status(**changes):
     }
     result.update(changes)
     return SimpleNamespace(
-        id=STATUS_UUID,
-        workflow_name=constants.HOST_POWER_STATUS,
-        state='SUCCESS',
+        id=execution_id,
+        workflow_name=workflow,
+        state=state,
         state_info=None,
-        input={
-            'host': 'compute-01',
-            'segment_uuid': SEGMENT_UUID,
-        },
+        input=(
+            {
+                'host': 'compute-01',
+                'segment_uuid': SEGMENT_UUID,
+            }
+            if workflow_input is None else workflow_input
+        ),
         output={'result': result},
         created_at='2026-09-03T10:01:00',
     )
@@ -149,6 +159,338 @@ def _post(token, **overrides):
     return result
 
 
+class _Clock:
+
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+class _Session(dict):
+    modified = False
+
+
+class ReadWorkflowPollingTests(SimpleTestCase):
+
+    def _adapter(self):
+        return mock.Mock(spec=[
+            'start_inventory',
+            'start_host_status',
+            'get_execution',
+            'list_executions',
+        ])
+
+    def test_running_inventory_and_status_are_polled_to_exact_success(self):
+        adapter = self._adapter()
+        adapter.start_inventory.return_value = _inventory(state='RUNNING')
+        adapter.start_host_status.return_value = _status(state='RUNNING')
+        adapter.get_execution.side_effect = [_inventory(), _status()]
+        adapter.list_executions.return_value = []
+        clock = _Clock()
+
+        with mock.patch.object(
+                submission, '_monotonic', clock.monotonic, create=True), \
+                mock.patch.object(
+                    submission, '_sleep', clock.sleep, create=True):
+            row = submission.planned_preflight(
+                adapter,
+                auth.Authorization('powerops_operator', False),
+                'compute-01',
+                SEGMENT_UUID,
+            )
+
+        self.assertEqual('compute-01', row.host)
+        adapter.start_inventory.assert_called_once_with()
+        adapter.start_host_status.assert_called_once_with(
+            'compute-01', SEGMENT_UUID)
+        self.assertEqual([
+            mock.call(INVENTORY_UUID),
+            mock.call(STATUS_UUID),
+        ], adapter.get_execution.call_args_list)
+
+    def test_running_read_timeout_never_creates_inventory_twice(self):
+        adapter = self._adapter()
+        adapter.start_inventory.return_value = _inventory(state='RUNNING')
+        adapter.get_execution.return_value = _inventory(state='RUNNING')
+        clock = _Clock()
+
+        with mock.patch.object(
+                submission, '_READ_DEADLINE_SECONDS', 1.0, create=True), \
+                mock.patch.object(
+                    submission, '_READ_POLL_INTERVAL_SECONDS',
+                    0.5,
+                    create=True,
+                ), mock.patch.object(
+                    submission, '_monotonic', clock.monotonic, create=True), \
+                mock.patch.object(
+                    submission, '_sleep', clock.sleep, create=True):
+            with self.assertRaises(submission.SubmissionConflict):
+                submission.planned_preflight(
+                    adapter,
+                    auth.Authorization('powerops_operator', False),
+                    'compute-01',
+                    SEGMENT_UUID,
+                )
+
+        adapter.start_inventory.assert_called_once_with()
+        adapter.start_host_status.assert_not_called()
+        self.assertEqual(2, adapter.get_execution.call_count)
+
+    def test_error_and_paused_reads_fail_without_a_second_create(self):
+        for state in ('ERROR', 'CANCELLED', 'PAUSED'):
+            with self.subTest(state=state):
+                adapter = self._adapter()
+                adapter.start_inventory.return_value = _inventory(state=state)
+
+                with self.assertRaises(submission.SubmissionConflict):
+                    submission.planned_preflight(
+                        adapter,
+                        auth.Authorization('powerops_operator', False),
+                        'compute-01',
+                        SEGMENT_UUID,
+                    )
+
+                adapter.start_inventory.assert_called_once_with()
+                adapter.start_host_status.assert_not_called()
+                adapter.get_execution.assert_not_called()
+
+    def test_polled_response_identity_workflow_and_input_are_exact(self):
+        mismatches = (
+            _inventory(execution_id=(
+                '99999999-9999-9999-9999-999999999999')),
+            _inventory(workflow=constants.HOST_POWER_STATUS),
+            _inventory(workflow_input={'host': 'forged'}),
+        )
+
+        for mismatch in mismatches:
+            with self.subTest(mismatch=mismatch):
+                adapter = self._adapter()
+                adapter.start_inventory.return_value = _inventory(
+                    state='RUNNING')
+                adapter.get_execution.return_value = mismatch
+                clock = _Clock()
+
+                with mock.patch.object(
+                        submission, '_monotonic',
+                        clock.monotonic, create=True), mock.patch.object(
+                            submission, '_sleep',
+                            clock.sleep, create=True):
+                    with self.assertRaises(submission.SubmissionConflict):
+                        submission.planned_preflight(
+                            adapter,
+                            auth.Authorization('powerops_operator', False),
+                            'compute-01',
+                            SEGMENT_UUID,
+                        )
+
+                adapter.start_inventory.assert_called_once_with()
+                adapter.start_host_status.assert_not_called()
+                adapter.get_execution.assert_called_once_with(INVENTORY_UUID)
+
+    def test_initial_read_requires_a_canonical_execution_uuid(self):
+        adapter = self._adapter()
+        adapter.start_inventory.return_value = _inventory(
+            execution_id='not-a-uuid')
+
+        with self.assertRaises(submission.SubmissionConflict):
+            submission.planned_preflight(
+                adapter,
+                auth.Authorization('powerops_operator', False),
+                'compute-01',
+                SEGMENT_UUID,
+            )
+
+        adapter.start_inventory.assert_called_once_with()
+        adapter.start_host_status.assert_not_called()
+        adapter.get_execution.assert_not_called()
+
+
+class SubmissionTokenConcurrencyTests(SimpleTestCase):
+
+    class AtomicCache:
+
+        def __init__(self, parties=2):
+            self.barrier = threading.Barrier(parties)
+            self.lock = threading.Lock()
+            self.values = {}
+            self.calls = []
+
+        def add(self, key, value, timeout=None):
+            self.barrier.wait(timeout=2)
+            with self.lock:
+                self.calls.append((key, value, timeout))
+                if key in self.values:
+                    return False
+                self.values[key] = value
+                return True
+
+    def _issued_session(self):
+        session = _Session()
+        request = SimpleNamespace(session=session)
+        with mock.patch.object(
+                submission.secrets, 'token_urlsafe',
+                return_value='visible-concurrent-token'):
+            token = submission.issue_submission_token(
+                request, 'power_off', 'compute-01')
+        return token, session
+
+    def test_parallel_session_copies_have_exactly_one_atomic_winner(self):
+        token, issued = self._issued_session()
+        cache = self.AtomicCache()
+        requests = (
+            SimpleNamespace(session=_Session(issued)),
+            SimpleNamespace(session=_Session(issued)),
+        )
+        results = []
+
+        def consume(request):
+            try:
+                submission.consume_submission_token(
+                    request, token, 'power_off', 'compute-01')
+            except submission.SubmissionConflict:
+                results.append('conflict')
+            else:
+                results.append('consumed')
+
+        with mock.patch.object(submission, 'cache', cache, create=True):
+            threads = tuple(
+                threading.Thread(target=consume, args=(request,))
+                for request in requests
+            )
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=3)
+
+        self.assertEqual(['conflict', 'consumed'], sorted(results))
+        self.assertEqual(2, len(cache.calls))
+        self.assertTrue(all(call[1] is True for call in cache.calls))
+        self.assertTrue(all(call[2] == 300 for call in cache.calls))
+        for key, value, _timeout in cache.calls:
+            self.assertNotIn(token, str((key, value)))
+            self.assertNotIn('power_off', str((key, value)))
+            self.assertNotIn('compute-01', str((key, value)))
+
+    def test_cache_false_none_or_error_rejects_without_consuming_digest(self):
+        behaviors = (False, None, RuntimeError('cache unavailable'))
+
+        for behavior in behaviors:
+            with self.subTest(behavior=behavior):
+                token, session = self._issued_session()
+                fake_cache = mock.Mock()
+                if isinstance(behavior, Exception):
+                    fake_cache.add.side_effect = behavior
+                else:
+                    fake_cache.add.return_value = behavior
+
+                with mock.patch.object(
+                        submission, 'cache', fake_cache, create=True):
+                    with self.assertRaises(submission.SubmissionConflict):
+                        submission.consume_submission_token(
+                            SimpleNamespace(session=session),
+                            token,
+                            'power_off',
+                            'compute-01',
+                        )
+
+                self.assertIn(submission.SESSION_DIGEST_KEY, session)
+
+
+class PlannedPolicyJavascriptTests(SimpleTestCase):
+
+    def test_external_asset_is_registered_once_after_discovery(self):
+        static_root = pathlib.Path(__file__).parents[1] / 'static'
+        horizon_config = {}
+
+        file_discovery.populate_horizon_config(
+            horizon_config, str(static_root))
+
+        self.assertEqual(
+            1,
+            horizon_config['js_files'].count(
+                'poweropsdashboard/js/powerops.js'),
+        )
+
+    def test_javascript_accepts_only_fixed_policies_and_updates_outputs(self):
+        javascript = pathlib.Path(__file__).parents[1] / (
+            'static/poweropsdashboard/js/powerops.js')
+        probe = r"""
+const assert = require('assert');
+const initialize = require(process.argv[1]);
+let changeHandler = null;
+let listenerCount = 0;
+const select = {
+  value: 'require_empty',
+  addEventListener: function(name, handler) {
+    assert.strictEqual(name, 'change');
+    changeHandler = handler;
+    listenerCount += 1;
+  }
+};
+const submit = {disabled: true};
+const selected = [{textContent: ''}, {textContent: ''}];
+const current = {textContent: ''};
+const texts = {
+  require_empty: 'Require empty fixed text',
+  live_migrate: 'Live migrate fixed text',
+  stop: 'Stop fixed text'
+};
+const definitions = Object.keys(texts).map(function(policy) {
+  return {
+    textContent: texts[policy],
+    getAttribute: function() { return policy; }
+  };
+});
+const document = {
+  querySelector: function(selector) {
+    return {
+      '[data-powerops-policy-select]': select,
+      '[data-powerops-submit]': submit,
+      '[data-powerops-policy-result]': current
+    }[selector] || null;
+  },
+  querySelectorAll: function(selector) {
+    if (selector === '[data-powerops-selected-policy]') return selected;
+    if (selector === '[data-powerops-policy-consequence]') return definitions;
+    return [];
+  }
+};
+initialize(document);
+initialize(document);
+assert.strictEqual(listenerCount, 1);
+assert.strictEqual(submit.disabled, false);
+assert.deepStrictEqual(selected.map(x => x.textContent),
+                       ['require_empty', 'require_empty']);
+assert.strictEqual(current.textContent, texts.require_empty);
+['live_migrate', 'stop'].forEach(function(policy) {
+  submit.disabled = true;
+  select.value = policy;
+  changeHandler();
+  assert.strictEqual(submit.disabled, false);
+  assert.deepStrictEqual(selected.map(x => x.textContent), [policy, policy]);
+  assert.strictEqual(current.textContent, texts[policy]);
+});
+select.value = 'user_workflow';
+changeHandler();
+assert.strictEqual(submit.disabled, true);
+assert.strictEqual(current.textContent, '');
+"""
+
+        result = subprocess.run(
+            ['node', '-e', probe, str(javascript)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+
+
 class PlannedOperationViewTests(SimpleTestCase):
 
     def setUp(self):
@@ -157,6 +499,7 @@ class PlannedOperationViewTests(SimpleTestCase):
         self.adapter = mock.Mock(spec=[
             'start_inventory',
             'start_host_status',
+            'get_execution',
             'list_executions',
             'start_planned',
         ])
@@ -203,8 +546,15 @@ class PlannedOperationViewTests(SimpleTestCase):
         for expected in (
                 INSTANCE_UUID, 'vm-a', 'project-a', 'ACTIVE',
                 SECOND_INSTANCE_UUID, 'vm-b', 'project-b', 'SHUTOFF',
-                'require_empty', 'all projects'):
+                'require_empty', 'all projects',
+                'The host must already have no instances',
+                'Every eligible instance is live-migrated',
+                'Every instance is stopped and recorded'):
             self.assertIn(expected, content)
+        self.assertRegex(
+            content,
+            r'<button[^>]*data-powerops-submit[^>]*disabled',
+        )
 
         session = self.client.session
         self.assertNotIn('visible-one-use-token', tuple(session.values()))
@@ -340,8 +690,16 @@ class PlannedOperationViewTests(SimpleTestCase):
         duplicate_two = copy.deepcopy(duplicate)
         malformed_active = _planned()
         malformed_active.input = {'host': 'compute-01'}
+        missing_input = _planned()
+        del missing_input.input
         missing_state = _planned()
         del missing_state.state
+        missing_workflow = _planned()
+        del missing_workflow.workflow_name
+        non_string_workflow = _planned()
+        non_string_workflow.workflow_name = None
+        malformed_terminal = _planned(state='SUCCESS')
+        malformed_terminal.input = {'host': 'compute-01'}
         incomplete = _row()
         incomplete['nova_status'] = None
         states = (
@@ -356,8 +714,16 @@ class PlannedOperationViewTests(SimpleTestCase):
             ('active mutation', _inventory(), _status(), [_planned()]),
             ('ambiguous active mutation', _inventory(), _status(),
              [malformed_active]),
+            ('missing mutation input', _inventory(), _status(),
+             [missing_input]),
             ('state-less active mutation', _inventory(), _status(),
              [missing_state]),
+            ('missing workflow name', _inventory(), _status(),
+             [missing_workflow]),
+            ('non-string workflow name', _inventory(), _status(),
+             [non_string_workflow]),
+            ('malformed terminal mutation', _inventory(), _status(),
+             [malformed_terminal]),
         )
 
         for name, inventory, status, executions in states:
@@ -376,6 +742,24 @@ class PlannedOperationViewTests(SimpleTestCase):
 
                 self.assertEqual(409, response.status_code)
                 self.adapter.start_planned.assert_not_called()
+
+    def test_valid_terminal_mutation_does_not_block_preflight(self):
+        self.adapter.list_executions.return_value = [
+            _planned(state='SUCCESS')]
+
+        response = self.client.get(_url())
+
+        self.assertEqual(200, response.status_code)
+        self.adapter.start_planned.assert_not_called()
+
+    def test_valid_non_powerops_workflow_name_can_be_ignored(self):
+        self.adapter.list_executions.return_value = [SimpleNamespace(
+            workflow_name='other_service.unrelated_workflow')]
+
+        response = self.client.get(_url())
+
+        self.assertEqual(200, response.status_code)
+        self.adapter.start_planned.assert_not_called()
 
     def test_admin_preflight_uses_all_projects_execution_scope(self):
         self.authorization = auth.Authorization('admin', True)

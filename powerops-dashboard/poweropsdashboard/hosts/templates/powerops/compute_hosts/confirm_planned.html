@@ -33,7 +33,9 @@
       <dt>{% trans "Masakari segment" %}</dt>
       <dd>{{ host_row.segment_uuid }}</dd>
       <dt>{% trans "Selected policy" %}</dt>
-      <dd>{{ selected_policy }}</dd>
+      <dd><span data-powerops-selected-policy>{{ selected_policy }}</span></dd>
+      <dt>{% trans "Policy consequence" %}</dt>
+      <dd data-powerops-policy-result></dd>
     </dl>
     <h2>{% trans "All-project instance impact" %}</h2>
     <table class="table table-striped">
@@ -53,7 +55,7 @@
             <td>{{ instance.name }}</td>
             <td>{{ instance.project_id }}</td>
             <td>{{ instance.status }}</td>
-            <td>{{ selected_policy }}</td>
+            <td><span data-powerops-selected-policy>{{ selected_policy }}</span></td>
           </tr>
         {% empty %}
           <tr>
@@ -67,10 +69,22 @@
         {% trans "Hard power-off is destructive and requires both admin controls below." %}
       </p>
     {% endif %}
+    <div hidden>
+      <span data-powerops-policy-consequence="require_empty">
+        {% trans "The host must already have no instances; otherwise the operation is rejected." %}
+      </span>
+      <span data-powerops-policy-consequence="live_migrate">
+        {% trans "Every eligible instance is live-migrated and the source host must become empty." %}
+      </span>
+      <span data-powerops-policy-consequence="stop">
+        {% trans "Every instance is stopped and recorded in the exact controlled-return manifest." %}
+      </span>
+    </div>
     <form method="post">
       {% csrf_token %}
       {{ form.as_p }}
-      <button type="submit" class="btn btn-danger">
+      <button type="submit" class="btn btn-danger"
+              data-powerops-submit disabled>
         {% trans "Start planned operation" %}
       </button>
     </form>

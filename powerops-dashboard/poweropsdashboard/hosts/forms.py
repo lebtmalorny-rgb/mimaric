@@ -24,6 +24,9 @@ class PlannedOperationForm(forms.Form):
         choices=tuple(
             (policy, policy) for policy in constants.INSTANCE_POLICIES),
         initial='require_empty',
+        widget=forms.Select(attrs={
+            'data-powerops-policy-select': 'true',
+        }),
     )
     submission_token = forms.CharField(widget=forms.HiddenInput)
 

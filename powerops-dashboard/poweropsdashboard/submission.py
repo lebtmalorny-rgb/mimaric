@@ -2,7 +2,12 @@ from collections import abc
 import hashlib
 import hmac
 import json
+import re
 import secrets
+import time
+import uuid
+
+from django.core.cache import cache
 
 from poweropsdashboard import constants
 from poweropsdashboard import presentation
@@ -10,6 +15,12 @@ from poweropsdashboard import presentation
 
 SESSION_DIGEST_KEY = 'powerops_submission_digest'
 SESSION_EXECUTION_KEY = 'powerops_last_execution_id'
+
+_READ_DEADLINE_SECONDS = 30.0
+_READ_POLL_INTERVAL_SECONDS = 0.5
+_SUBMISSION_CLAIM_TTL_SECONDS = 300
+_monotonic = time.monotonic
+_sleep = time.sleep
 
 _PLANNED_OPERATIONS = frozenset({'power_off', 'reboot'})
 _MUTATION_WORKFLOWS = frozenset({
@@ -27,6 +38,13 @@ _STATUS_RESULT_KEYS = frozenset({
     'nova_state',
     'masakari_maintenance',
 })
+_POLLABLE_READ_STATES = frozenset({
+    'IDLE', 'RUNNING', 'DELAYED', 'WAITING',
+})
+_EXECUTION_STATES = _POLLABLE_READ_STATES | frozenset({
+    'SUCCESS', 'ERROR', 'PAUSED', 'CANCELLED',
+})
+_HOST_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]*$')
 
 
 class SubmissionConflict(Exception):
@@ -70,6 +88,19 @@ def consume_submission_token(request, token, operation, host):
             or not hmac.compare_digest(stored, candidate)):
         raise SubmissionConflict('Submission token is invalid or consumed')
 
+    claim_key = 'powerops-submission-{}'.format(stored)
+    try:
+        claimed = cache.add(
+            claim_key,
+            True,
+            timeout=_SUBMISSION_CLAIM_TTL_SECONDS,
+        )
+    except Exception:
+        raise SubmissionConflict(
+            'Submission token could not be claimed') from None
+    if claimed is not True:
+        raise SubmissionConflict('Submission token is already claimed')
+
     del request.session[SESSION_DIGEST_KEY]
     request.session.modified = True
 
@@ -96,6 +127,64 @@ def _mapping(value):
     if not isinstance(value, abc.Mapping):
         raise SubmissionConflict('Required preflight data is malformed')
     return dict(value)
+
+
+def _canonical_uuid(value):
+    if not isinstance(value, str) or len(value) != 36:
+        raise SubmissionConflict('Execution identifier is malformed')
+    try:
+        parsed = uuid.UUID(value)
+    except (AttributeError, TypeError, ValueError):
+        raise SubmissionConflict('Execution identifier is malformed') from None
+    if str(parsed) != value:
+        raise SubmissionConflict('Execution identifier is malformed')
+    return value
+
+
+def _read_envelope(execution, expected_workflow, expected_input,
+                   expected_id=None):
+    execution_id = _canonical_uuid(_resource_value(execution, 'id'))
+    if expected_id is not None and execution_id != expected_id:
+        raise SubmissionConflict('Read execution identity changed')
+
+    workflow_name = _resource_value(execution, 'workflow_name')
+    if (not isinstance(workflow_name, str)
+            or workflow_name != expected_workflow):
+        raise SubmissionConflict('Read execution workflow changed')
+
+    workflow_input = _mapping(_resource_value(execution, 'input'))
+    if workflow_input != expected_input:
+        raise SubmissionConflict('Read execution target changed')
+
+    state = _resource_value(execution, 'state')
+    if not isinstance(state, str) or state not in _EXECUTION_STATES:
+        raise SubmissionConflict('Read execution state is invalid')
+    if state not in _POLLABLE_READ_STATES and state != 'SUCCESS':
+        raise SubmissionConflict('Read execution did not succeed')
+    return execution_id, state
+
+
+def _wait_for_read(client, execution, expected_workflow, expected_input):
+    execution_id, state = _read_envelope(
+        execution, expected_workflow, expected_input)
+    if state == 'SUCCESS':
+        return execution
+
+    deadline = _monotonic() + _READ_DEADLINE_SECONDS
+    while True:
+        remaining = deadline - _monotonic()
+        if remaining <= 0:
+            raise SubmissionConflict('Read execution timed out')
+        _sleep(min(_READ_POLL_INTERVAL_SECONDS, remaining))
+        execution = client.get_execution(execution_id)
+        _polled_id, state = _read_envelope(
+            execution,
+            expected_workflow,
+            expected_input,
+            expected_id=execution_id,
+        )
+        if state == 'SUCCESS':
+            return execution
 
 
 def _select_host(inventory_execution, host, segment_uuid):
@@ -169,12 +258,49 @@ def _validate_status(status_execution, host_row):
         raise SubmissionConflict('Host state changed during preflight')
 
 
+def _mutation_target(execution, workflow_name):
+    workflow_input = _mapping(_resource_value(execution, 'input'))
+    if workflow_name in {
+            constants.PLANNED_POWER_OFF, constants.PLANNED_REBOOT}:
+        if set(workflow_input) != {
+                'host', 'segment_uuid', 'instance_policy',
+                'allow_hard_off'}:
+            raise SubmissionConflict('Mutation input is malformed')
+        if (workflow_input['instance_policy']
+                not in constants.INSTANCE_POLICIES):
+            raise SubmissionConflict('Mutation policy is malformed')
+        if type(workflow_input['allow_hard_off']) is not bool:
+            raise SubmissionConflict('Mutation hard-off input is malformed')
+    else:
+        if set(workflow_input) != {
+                'host', 'segment_uuid', 'stopped_instance_ids'}:
+            raise SubmissionConflict('Mutation input is malformed')
+        stopped_instance_ids = workflow_input['stopped_instance_ids']
+        if not isinstance(stopped_instance_ids, list):
+            raise SubmissionConflict('Mutation manifest is malformed')
+        parsed_ids = tuple(
+            _canonical_uuid(instance_id)
+            for instance_id in stopped_instance_ids
+        )
+        if len(set(parsed_ids)) != len(parsed_ids):
+            raise SubmissionConflict('Mutation manifest is malformed')
+
+    host = workflow_input['host']
+    if not isinstance(host, str) or not _HOST_RE.fullmatch(host):
+        raise SubmissionConflict('Mutation host is malformed')
+    segment_uuid = _canonical_uuid(workflow_input['segment_uuid'])
+    return host, segment_uuid
+
+
 def _has_active_mutation(executions, host_row):
     for execution in executions:
         try:
             workflow_name = _resource_value(execution, 'workflow_name')
         except SubmissionConflict:
-            continue
+            raise SubmissionConflict(
+                'Execution workflow name is missing') from None
+        if not isinstance(workflow_name, str):
+            raise SubmissionConflict('Execution workflow name is malformed')
         if workflow_name not in _MUTATION_WORKFLOWS:
             continue
         try:
@@ -182,14 +308,13 @@ def _has_active_mutation(executions, host_row):
         except SubmissionConflict:
             raise SubmissionConflict(
                 'Active PowerOps mutation data is ambiguous') from None
-        if state in constants.TERMINAL_STATES:
-            continue
-
-        active = presentation.match_active_executions((execution,))
-        if len(active) != 1:
+        if not isinstance(state, str) or state not in _EXECUTION_STATES:
             raise SubmissionConflict(
                 'Active PowerOps mutation data is ambiguous')
-        if (host_row.host, host_row.segment_uuid) in active:
+        target = _mutation_target(execution, workflow_name)
+        if state in constants.TERMINAL_STATES:
+            continue
+        if target == (host_row.host, host_row.segment_uuid):
             return True
     return False
 
@@ -197,9 +322,24 @@ def _has_active_mutation(executions, host_row):
 def planned_preflight(client, authorization, host, segment_uuid):
     try:
         inventory_execution = client.start_inventory()
+        inventory_execution = _wait_for_read(
+            client,
+            inventory_execution,
+            constants.HOST_INVENTORY,
+            {},
+        )
         host_row = _select_host(inventory_execution, host, segment_uuid)
         status_execution = client.start_host_status(
             host_row.host, host_row.segment_uuid)
+        status_execution = _wait_for_read(
+            client,
+            status_execution,
+            constants.HOST_POWER_STATUS,
+            {
+                'host': host_row.host,
+                'segment_uuid': host_row.segment_uuid,
+            },
+        )
         _validate_status(status_execution, host_row)
         executions = client.list_executions(
             all_projects=authorization.is_admin)
