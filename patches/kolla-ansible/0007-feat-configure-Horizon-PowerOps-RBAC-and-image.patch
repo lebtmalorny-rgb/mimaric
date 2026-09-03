@@ -1,0 +1,554 @@
+From e5d51a9edb772da441979c2ce1912c38a2d41c7b Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Thu, 3 Sep 2026 17:03:50 +0300
+Subject: [PATCH 7/8] feat: configure Horizon PowerOps RBAC and image
+
+---
+ ansible/group_vars/all.yml                    |   4 +
+ ansible/roles/horizon/defaults/main.yml       |   5 +-
+ ansible/roles/horizon/tasks/precheck.yml      |  16 ++
+ .../templates/_9998-kolla-settings.py.j2      |  13 +-
+ ansible/roles/mistral/defaults/main.yml       |   3 +
+ ansible/roles/mistral/tasks/precheck.yml      |   7 +
+ ansible/roles/mistral/tasks/register.yml      |   1 +
+ .../test_powerops_configuration_contract.py   | 157 +++++++++++++++++-
+ .../tests/unit/test_powerops_templates.py     | 118 +++++++++++++
+ 9 files changed, 321 insertions(+), 3 deletions(-)
+
+diff --git a/ansible/group_vars/all.yml b/ansible/group_vars/all.yml
+index ce0f7c6..a2473e9 100644
+--- a/ansible/group_vars/all.yml
++++ b/ansible/group_vars/all.yml
+@@ -1100,6 +1100,8 @@ enable_horizon_magnum: "{{ enable_magnum | bool }}"
+ enable_horizon_manila: "{{ enable_manila | bool }}"
+ enable_horizon_masakari: "{{ enable_masakari | bool }}"
+ enable_horizon_mistral: "{{ enable_mistral | bool }}"
++enable_horizon_powerops: >-
++  {{ enable_horizon | bool and enable_mistral | bool and enable_powerops | bool }}
+ enable_horizon_neutron_vpnaas: "{{ enable_neutron_vpnaas | bool }}"
+ enable_horizon_octavia: "{{ enable_octavia | bool }}"
+ enable_horizon_tacker: "{{ enable_tacker | bool }}"
+@@ -1238,6 +1240,8 @@ powerops_allowed_project_names:
+ powerops_allowed_user_names:
+   - "{{ openstack_auth.username }}"
+ 
++powerops_horizon_image: ""
++powerops_horizon_tag: ""
+ powerops_masakari_engine_image: ""
+ powerops_masakari_engine_tag: ""
+ powerops_mistral_api_image: ""
+diff --git a/ansible/roles/horizon/defaults/main.yml b/ansible/roles/horizon/defaults/main.yml
+index 71c53a3..c15e31a 100644
+--- a/ansible/roles/horizon/defaults/main.yml
++++ b/ansible/roles/horizon/defaults/main.yml
+@@ -4,7 +4,9 @@ horizon_services:
+     container_name: horizon
+     group: horizon
+     enabled: true
+-    image: "{{ horizon_image_full }}"
++    image: >-
++      {{ powerops_horizon_image ~ ':' ~ powerops_horizon_tag
++         if enable_horizon_powerops | bool else horizon_image_full }}
+     environment:
+       ENABLE_BLAZAR: "{{ 'yes' if enable_horizon_blazar | bool else 'no' }}"
+       ENABLE_CLOUDKITTY: "{{ 'yes' if enable_horizon_cloudkitty | bool else 'no' }}"
+@@ -16,6 +18,7 @@ horizon_services:
+       ENABLE_MANILA: "{{ 'yes' if enable_horizon_manila | bool else 'no' }}"
+       ENABLE_MASAKARI: "{{ 'yes' if enable_horizon_masakari | bool else 'no' }}"
+       ENABLE_MISTRAL: "{{ 'yes' if enable_horizon_mistral | bool else 'no' }}"
++      ENABLE_POWEROPS: "{{ 'yes' if enable_horizon_powerops | bool else 'no' }}"
+       ENABLE_NEUTRON_VPNAAS: "{{ 'yes' if enable_horizon_neutron_vpnaas | bool else 'no' }}"
+       ENABLE_OCTAVIA: "{{ 'yes' if enable_horizon_octavia | bool else 'no' }}"
+       ENABLE_TACKER: "{{ 'yes' if enable_horizon_tacker | bool else 'no' }}"
+diff --git a/ansible/roles/horizon/tasks/precheck.yml b/ansible/roles/horizon/tasks/precheck.yml
+index 6eb9e2a..8edf8d3 100644
+--- a/ansible/roles/horizon/tasks/precheck.yml
++++ b/ansible/roles/horizon/tasks/precheck.yml
+@@ -1,4 +1,20 @@
+ ---
++- name: Validate Horizon PowerOps image and shared cache
++  ansible.builtin.assert:
++    that:
++      - enable_memcached | bool
++      - groups['memcached'] | default([]) | length > 0
++      - not horizon_backend_database | bool
++      - powerops_horizon_image is string
++      - powerops_horizon_image | trim | length > 0
++      - powerops_horizon_tag is string
++      - powerops_horizon_tag | trim | length > 0
++    fail_msg: >-
++      Horizon PowerOps requires a patched Horizon image and the shared
++      Memcached default cache; database, local-memory and dummy cache
++      backends are not supported for one-use submission claims.
++  when: enable_horizon_powerops | bool
++
+ - import_role:
+     name: service-precheck
+   vars:
+diff --git a/ansible/roles/horizon/templates/_9998-kolla-settings.py.j2 b/ansible/roles/horizon/templates/_9998-kolla-settings.py.j2
+index 4860f0a..df7b098 100644
+--- a/ansible/roles/horizon/templates/_9998-kolla-settings.py.j2
++++ b/ansible/roles/horizon/templates/_9998-kolla-settings.py.j2
+@@ -4,6 +4,7 @@ COMPRESS_OFFLINE = True
+ WEBROOT = '/'
+ ALLOWED_HOSTS = ['*']
+ 
++# BEGIN Horizon cache settings
+ {% if horizon_backend_database | bool %}
+ SESSION_ENGINE = 'django.contrib.sessions.backends.db'
+ DATABASES = {
+@@ -18,9 +19,11 @@ DATABASES = {
+ }
+ {% elif groups['memcached'] | length > 0 and not horizon_backend_database | bool %}
+ SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
++CACHES['default']['BACKEND'] = 'django.core.cache.backends.memcached.PyMemcacheCache'
+ CACHES['default']['LOCATION'] = [{% for host in groups['memcached'] %}'{{ 'api' | kolla_address(host) | put_address_in_context('url') }}:{{ memcached_port }}'{% if not loop.last %},{% endif %}{% endfor %}]
+ CACHES['default']['OPTIONS'] = {'ignore_exc': True}
+ {% endif %}
++# END Horizon cache settings
+ 
+ {% if kolla_enable_tls_external | bool or kolla_enable_tls_internal | bool %}
+ SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+@@ -53,6 +56,15 @@ AVAILABLE_REGIONS = [
+ ]
+ {% endif %}
+ 
++# BEGIN PowerOps settings
++{% if enable_horizon_powerops | bool %}
++POWEROPS_REGION_NAME = {{ openstack_region_name | to_json }}
++POWEROPS_ALLOWED_PROJECT_NAMES = {{ powerops_allowed_project_names | to_json }}
++POWEROPS_ALLOWED_USER_NAMES = {{ powerops_allowed_user_names | to_json }}
++POWEROPS_MOCK_MODE = False
++{% endif %}
++# END PowerOps settings
++
+ OPENSTACK_HOST = "{{ kolla_internal_fqdn }}"
+ # TODO(fprzewozn): URL /v3 suffix is required until Horizon bug #2073639 is resolved
+ OPENSTACK_KEYSTONE_URL = "{{ horizon_keystone_url }}/v3"
+@@ -373,4 +385,3 @@ REST_API_REQUIRED_SETTINGS = [
+     'OPENSTACK_KEYSTONE_BACKEND',
+     'OPENSTACK_KEYSTONE_DEFAULT_DOMAIN',
+ ]
+-
+diff --git a/ansible/roles/mistral/defaults/main.yml b/ansible/roles/mistral/defaults/main.yml
+index cf81259..375d22e 100644
+--- a/ansible/roles/mistral/defaults/main.yml
++++ b/ansible/roles/mistral/defaults/main.yml
+@@ -246,3 +246,6 @@ mistral_ks_users:
+     user: "{{ mistral_keystone_user }}"
+     password: "{{ mistral_keystone_password }}"
+     role: "admin"
++
++mistral_ks_roles: >-
++  {{ ['powerops_operator'] if enable_powerops | bool else [] }}
+diff --git a/ansible/roles/mistral/tasks/precheck.yml b/ansible/roles/mistral/tasks/precheck.yml
+index 70301fb..a2340d2 100644
+--- a/ansible/roles/mistral/tasks/precheck.yml
++++ b/ansible/roles/mistral/tasks/precheck.yml
+@@ -30,6 +30,9 @@
+         powerops_allowed_project_names |
+         select('string') | select('match', '^[^,]*$') | list | length
+         == powerops_allowed_project_names | length
++      - >-
++        powerops_allowed_project_names | unique | list | length
++        == powerops_allowed_project_names | length
+       - (powerops_allowed_user_names | type_debug) == 'list'
+       - powerops_allowed_user_names | length > 0
+       - >-
+@@ -46,6 +49,10 @@
+         powerops_allowed_user_names |
+         select('string') | select('match', '^[^,]*$') | list | length
+         == powerops_allowed_user_names | length
++      - >-
++        powerops_allowed_user_names | unique | list | length
++        == powerops_allowed_user_names | length
++      - mistral_ks_roles == ['powerops_operator']
+       - powerops_mistral_api_image is string
+       - powerops_mistral_api_image | trim | length > 0
+       - powerops_mistral_api_tag is string
+diff --git a/ansible/roles/mistral/tasks/register.yml b/ansible/roles/mistral/tasks/register.yml
+index c0f0822..9e43f59 100644
+--- a/ansible/roles/mistral/tasks/register.yml
++++ b/ansible/roles/mistral/tasks/register.yml
+@@ -5,3 +5,4 @@
+     service_ks_register_auth: "{{ openstack_mistral_auth }}"
+     service_ks_register_services: "{{ mistral_ks_services }}"
+     service_ks_register_users: "{{ mistral_ks_users }}"
++    service_ks_register_roles: "{{ mistral_ks_roles }}"
+diff --git a/kolla_ansible/tests/unit/test_powerops_configuration_contract.py b/kolla_ansible/tests/unit/test_powerops_configuration_contract.py
+index 69d95c5..a9edf65 100644
+--- a/kolla_ansible/tests/unit/test_powerops_configuration_contract.py
++++ b/kolla_ansible/tests/unit/test_powerops_configuration_contract.py
+@@ -29,6 +29,9 @@ GLOBAL_PRECHECK_MAIN = ROOT / "ansible/roles/prechecks/tasks/main.yml"
+ GLOBAL_POWEROPS_PRECHECK = (
+     ROOT / "ansible/roles/prechecks/tasks/powerops_checks.yml"
+ )
++HORIZON_DEFAULTS = ROOT / "ansible/roles/horizon/defaults/main.yml"
++HORIZON_PRECHECK = ROOT / "ansible/roles/horizon/tasks/precheck.yml"
++MISTRAL_REGISTER = ROOT / "ansible/roles/mistral/tasks/register.yml"
+ 
+ POWEROPS_TIMING_DEFAULTS = {
+     "powerops_host_lock_timeout": 30,
+@@ -54,6 +57,15 @@ POWEROPS_IMAGE_DEFAULTS = {
+     "powerops_mistral_executor_tag": "",
+ }
+ 
++HORIZON_POWEROPS_DEFAULTS = {
++    "enable_horizon_powerops": (
++        "{{ enable_horizon | bool and enable_mistral | bool and "
++        "enable_powerops | bool }}"
++    ),
++    "powerops_horizon_image": "",
++    "powerops_horizon_tag": "",
++}
++
+ POWEROPS_DEFAULTS = {
+     "enable_powerops": "no",
+     "powerops_coordination_url": (
+@@ -201,6 +213,114 @@ class PowerOpsConfigurationContractTest(unittest.TestCase):
+ 
+         self.assertEqual(POWEROPS_DEFAULTS, actual)
+ 
++    def test_horizon_powerops_defaults_and_derived_enablement_are_exact(self):
++        variables = _load_yaml(GROUP_VARS)
++        actual = {
++            name: variables.get(name)
++            for name in HORIZON_POWEROPS_DEFAULTS
++        }
++        self.assertEqual(HORIZON_POWEROPS_DEFAULTS, actual)
++
++        expression = variables["enable_horizon_powerops"]
++        environment = _jinja_environment()
++        for horizon in (False, True):
++            for mistral in (False, True):
++                for powerops in (False, True):
++                    with self.subTest(
++                            horizon=horizon,
++                            mistral=mistral,
++                            powerops=powerops):
++                        rendered = environment.from_string(expression).render(
++                            enable_horizon=horizon,
++                            enable_mistral=mistral,
++                            enable_powerops=powerops,
++                        )
++                        self.assertEqual(
++                            str(horizon and mistral and powerops),
++                            rendered,
++                        )
++
++    def test_horizon_powerops_selects_exact_image_and_environment(self):
++        horizon = _load_yaml(HORIZON_DEFAULTS)["horizon_services"][
++            "horizon"
++        ]
++        expression = horizon["image"]
++        expected = (
++            "{{ powerops_horizon_image ~ ':' ~ powerops_horizon_tag "
++            "if enable_horizon_powerops | bool else horizon_image_full }}"
++        )
++        self.assertEqual(
++            _normalize_jinja(expected),
++            _normalize_jinja(expression),
++        )
++        environment = _jinja_environment()
++        self.assertEqual(
++            "upstream/horizon:2025.1",
++            environment.from_string(expression).render(
++                enable_horizon_powerops=False,
++                horizon_image_full="upstream/horizon:2025.1",
++            ),
++        )
++        self.assertEqual(
++            "powerops-local/horizon:2025.1-powerops",
++            environment.from_string(expression).render(
++                enable_horizon_powerops=True,
++                powerops_horizon_image="powerops-local/horizon",
++                powerops_horizon_tag="2025.1-powerops",
++                horizon_image_full="upstream/horizon:2025.1",
++            ),
++        )
++        self.assertEqual(
++            "{{ 'yes' if enable_horizon_powerops | bool else 'no' }}",
++            horizon["environment"]["ENABLE_POWEROPS"],
++        )
++        self.assertEqual(
++            "{{ 'yes' if enable_horizon_mistral | bool else 'no' }}",
++            horizon["environment"]["ENABLE_MISTRAL"],
++        )
++
++    def test_horizon_precheck_requires_shared_memcached(self):
++        tasks = _load_yaml(HORIZON_PRECHECK)
++        matches = [
++            task for task in tasks
++            if task.get("name") == (
++                "Validate Horizon PowerOps image and shared cache"
++            )
++        ]
++        self.assertEqual(1, len(matches))
++        task = matches[0]
++        self.assertEqual("enable_horizon_powerops | bool", task["when"])
++        combined = "\n".join(task["ansible.builtin.assert"]["that"])
++        for required in (
++                "enable_memcached",
++                "groups['memcached']",
++                "horizon_backend_database",
++                "powerops_horizon_image",
++                "powerops_horizon_tag"):
++            self.assertIn(required, combined)
++
++    def test_mistral_creates_powerops_role_object_without_assignment(self):
++        defaults = _load_yaml(ROLE_PATHS["mistral"]["defaults"])
++        expression = defaults["mistral_ks_roles"]
++        for enabled, expected in (("yes", ["powerops_operator"]),
++                                  ("no", [])):
++            with self.subTest(enabled=enabled):
++                templar = Templar(
++                    loader=DataLoader(),
++                    variables={"enable_powerops": enabled},
++                )
++                self.assertEqual(
++                    expected,
++                    templar.template(expression, fail_on_undefined=True),
++                )
++
++        variables = _load_yaml(MISTRAL_REGISTER)[0]["vars"]
++        self.assertEqual(
++            "{{ mistral_ks_roles }}",
++            variables["service_ks_register_roles"],
++        )
++        self.assertNotIn("service_ks_register_user_roles", variables)
++
+     def test_etcd3gw_url_has_one_query_separator(self):
+         variables = _load_yaml(GROUP_VARS)
+         expression = variables.get("powerops_coordination_url", "")
+@@ -318,6 +438,7 @@ class PowerOpsConfigurationContractTest(unittest.TestCase):
+                 "powerops_masakari_engine_tag",
+             },
+             "mistral": {
++                "mistral_ks_roles",
+                 "powerops_mistral_api_image",
+                 "powerops_mistral_api_tag",
+                 "powerops_mistral_engine_image",
+@@ -405,6 +526,7 @@ class PowerOpsConfigurationContractTest(unittest.TestCase):
+             ),
+             "powerops_allowed_project_names": ["powerops-project"],
+             "powerops_allowed_user_names": ["powerops-user"],
++            "mistral_ks_roles": ["powerops_operator"],
+             **{
+                 name: "patched-image" if name.endswith("_image") else "v1"
+                 for name in POWEROPS_IMAGE_DEFAULTS
+@@ -417,6 +539,36 @@ class PowerOpsConfigurationContractTest(unittest.TestCase):
+             conditions = task["ansible.builtin.assert"]["that"]
+             self.assertTrue(_conditions_pass(conditions, valid))
+ 
++    def test_mistral_precheck_rejects_duplicate_allowlist_values(self):
++        valid = {
++            "enable_ironic": "yes",
++            "enable_masakari": "yes",
++            "enable_mistral": "yes",
++            "enable_etcd": "yes",
++            "powerops_coordination_url": (
++                "etcd3+http://controller.internal:2379?api_version=v3"
++            ),
++            "powerops_allowed_project_names": ["powerops-project"],
++            "powerops_allowed_user_names": ["powerops-user"],
++            "mistral_ks_roles": ["powerops_operator"],
++            **{
++                name: "patched-image" if name.endswith("_image") else "v1"
++                for name in POWEROPS_IMAGE_DEFAULTS
++            },
++        }
++        conditions = _powerops_assertion("mistral")[
++            "ansible.builtin.assert"
++        ]["that"]
++        self.assertIn("unique", "\n".join(conditions))
++
++        for name in (
++                "powerops_allowed_project_names",
++                "powerops_allowed_user_names"):
++            with self.subTest(name=name):
++                values = copy.deepcopy(valid)
++                values[name] = values[name] * 2
++                self.assertFalse(_conditions_pass(conditions, values))
++
+     def test_prechecks_reject_malformed_values(self):
+         valid = {
+             "enable_ironic": "yes",
+@@ -428,6 +580,7 @@ class PowerOpsConfigurationContractTest(unittest.TestCase):
+             ),
+             "powerops_allowed_project_names": ["powerops-project"],
+             "powerops_allowed_user_names": ["powerops-user"],
++            "mistral_ks_roles": ["powerops_operator"],
+             **{
+                 name: "patched-image" if name.endswith("_image") else "v1"
+                 for name in POWEROPS_IMAGE_DEFAULTS
+@@ -467,6 +620,8 @@ class PowerOpsConfigurationContractTest(unittest.TestCase):
+             {"powerops_allowed_user_names": [123]},
+             {"powerops_allowed_user_names": ["operator,backup"]},
+             {"powerops_allowed_user_names": [" operator\t"]},
++            {"mistral_ks_roles": []},
++            {"mistral_ks_roles": ["admin", "powerops_operator"]},
+             {"powerops_masakari_engine_image": "   "},
+             {"powerops_masakari_engine_tag": " \t "},
+             {"powerops_mistral_api_image": "   "},
+@@ -493,7 +648,7 @@ class PowerOpsConfigurationContractTest(unittest.TestCase):
+                     for name in override
+                 )
+                 else ["mistral"]
+-                if any(
++                if "mistral_ks_roles" in override or any(
+                     name.startswith("powerops_mistral")
+                     for name in override
+                 )
+diff --git a/kolla_ansible/tests/unit/test_powerops_templates.py b/kolla_ansible/tests/unit/test_powerops_templates.py
+index a3d190c..8b39da5 100644
+--- a/kolla_ansible/tests/unit/test_powerops_templates.py
++++ b/kolla_ansible/tests/unit/test_powerops_templates.py
+@@ -11,6 +11,7 @@
+ # limitations under the License.
+ 
+ import configparser
++import json
+ from pathlib import Path
+ import unittest
+ 
+@@ -20,6 +21,9 @@ import jinja2
+ ROOT = Path(__file__).resolve().parents[3]
+ MASAKARI_TEMPLATE = "ansible/roles/masakari/templates/masakari.conf.j2"
+ MISTRAL_TEMPLATE = "ansible/roles/mistral/templates/mistral.conf.j2"
++HORIZON_TEMPLATE = (
++    "ansible/roles/horizon/templates/_9998-kolla-settings.py.j2"
++)
+ 
+ PLAIN_ETCD_URL = (
+     "etcd3+http://controller.internal:2379?api_version=v3"
+@@ -90,6 +94,7 @@ def _environment():
+         "bool": _ansible_bool,
+         "kolla_address": _kolla_address,
+         "put_address_in_context": _put_address_in_context,
++        "to_json": json.dumps,
+     })
+     return environment
+ 
+@@ -200,6 +205,119 @@ def _parse(rendered):
+     return parser
+ 
+ 
++def _marked_template(relative_path, begin, end):
++    source = (ROOT / relative_path).read_text(encoding="utf-8")
++    if begin not in source or end not in source:
++        raise AssertionError(f"missing template markers {begin!r}/{end!r}")
++    return source[source.index(begin):source.index(end) + len(end)]
++
++
++class HorizonPowerOpsTemplateTest(unittest.TestCase):
++
++    def test_powerops_settings_are_exact_python_values(self):
++        source = _marked_template(
++            HORIZON_TEMPLATE,
++            "# BEGIN PowerOps settings",
++            "# END PowerOps settings",
++        )
++        rendered = _environment().from_string(source).render(
++            enable_horizon_powerops=True,
++            openstack_region_name="RegionOne",
++            powerops_allowed_project_names=["admin", "ops-project"],
++            powerops_allowed_user_names=["admin", "ops-user"],
++        )
++        namespace = {}
++        exec(rendered, {}, namespace)  # nosec: local rendered constants only
++
++        self.assertEqual("RegionOne", namespace["POWEROPS_REGION_NAME"])
++        self.assertEqual(
++            ["admin", "ops-project"],
++            namespace["POWEROPS_ALLOWED_PROJECT_NAMES"],
++        )
++        self.assertEqual(
++            ["admin", "ops-user"],
++            namespace["POWEROPS_ALLOWED_USER_NAMES"],
++        )
++        self.assertIs(namespace["POWEROPS_MOCK_MODE"], False)
++        self.assertEqual(
++            {
++                "POWEROPS_REGION_NAME",
++                "POWEROPS_ALLOWED_PROJECT_NAMES",
++                "POWEROPS_ALLOWED_USER_NAMES",
++                "POWEROPS_MOCK_MODE",
++            },
++            {name for name in namespace if name.startswith("POWEROPS_")},
++        )
++        for forbidden in ("PASSWORD", "TOKEN", "CREDENTIAL", "SECRET"):
++            self.assertNotIn(forbidden, rendered.upper())
++
++        disabled = _environment().from_string(source).render(
++            enable_horizon_powerops=False,
++            openstack_region_name="RegionOne",
++            powerops_allowed_project_names=["admin", "ops-project"],
++            powerops_allowed_user_names=["admin", "ops-user"],
++        )
++        self.assertNotIn("POWEROPS_REGION_NAME =", disabled)
++
++    def test_powerops_uses_shared_pymemcache_default_cache(self):
++        source = _marked_template(
++            HORIZON_TEMPLATE,
++            "# BEGIN Horizon cache settings",
++            "# END Horizon cache settings",
++        )
++        rendered = _environment().from_string(source).render(
++            enable_horizon_powerops=True,
++            horizon_backend_database=False,
++            groups={"memcached": ["cache-1", "cache-2"]},
++            memcached_port=11211,
++        )
++        self.assertIn(
++            "django.core.cache.backends.memcached.PyMemcacheCache",
++            rendered,
++        )
++        self.assertIn("'cache-1:11211','cache-2:11211'", rendered)
++        self.assertNotIn("LocMemCache", rendered)
++        self.assertNotIn("DummyCache", rendered)
++
++    def test_horizon_and_mistral_share_region_and_allowlists(self):
++        project_names = ["admin", "ops-project"]
++        user_names = ["admin", "ops-user"]
++        source = _marked_template(
++            HORIZON_TEMPLATE,
++            "# BEGIN PowerOps settings",
++            "# END PowerOps settings",
++        )
++        rendered = _environment().from_string(source).render(
++            enable_horizon_powerops=True,
++            openstack_region_name="RegionOne",
++            powerops_allowed_project_names=project_names,
++            powerops_allowed_user_names=user_names,
++        )
++        namespace = {}
++        exec(rendered, {}, namespace)  # nosec: local rendered constants only
++
++        variables = _mistral_variables("mistral-api", True, "")
++        variables.update({
++            "openstack_region_name": "RegionOne",
++            "powerops_allowed_project_names": project_names,
++            "powerops_allowed_user_names": user_names,
++        })
++        mistral_rendered = _render(MISTRAL_TEMPLATE, variables)
++        config = _parse(mistral_rendered)
++        self.assertEqual(
++            namespace["POWEROPS_REGION_NAME"],
++            config["powerops"]["region_name"],
++        )
++        self.assertEqual(
++            namespace["POWEROPS_ALLOWED_PROJECT_NAMES"],
++            config["powerops"]["allowed_project_names"].split(","),
++        )
++        self.assertEqual(
++            namespace["POWEROPS_ALLOWED_USER_NAMES"],
++            config["powerops"]["allowed_user_names"].split(","),
++        )
++
++
+ class MasakariPowerOpsTemplateTest(unittest.TestCase):
+ 
+     def _render(self, service_name, enabled, backend, ca_cert):
+-- 
+2.49.0
+
