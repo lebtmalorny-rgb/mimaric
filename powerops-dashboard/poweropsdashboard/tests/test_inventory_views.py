@@ -228,6 +228,7 @@ class InventoryParserTests(SimpleTestCase):
         first = _row(operable=False)
         first['blocking_reason'] = 'ambiguous_masakari_host'
         second = copy.deepcopy(first)
+        second['segment_uuid'] = SECOND_SEGMENT_UUID
 
         rows = presentation.parse_inventory_execution(
             _execution({'result': [first, second]}))
@@ -236,6 +237,15 @@ class InventoryParserTests(SimpleTestCase):
             (INSTANCE_UUID, INSTANCE_UUID),
             tuple(row.instances[0].id for row in rows),
         )
+
+    def test_rejects_duplicate_exact_host_segment_targets(self):
+        first = _row(operable=False)
+        first['blocking_reason'] = 'ambiguous_masakari_host'
+        second = copy.deepcopy(first)
+
+        with self.assertRaises(exceptions.InvalidBackendData):
+            presentation.parse_inventory_execution(
+                _execution({'result': [first, second]}))
 
     def test_rejects_forbidden_keys_at_every_inventory_depth(self):
         payloads = []

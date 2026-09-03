@@ -291,6 +291,10 @@ def _parse_row(value):
 def _validate_inventory_relationships(rows):
     rows_by_host = {}
     rows_by_instance = {}
+    targets = {(row.host, row.segment_uuid) for row in rows}
+
+    if len(targets) != len(rows):
+        raise _invalid()
 
     for row in rows:
         rows_by_host.setdefault(row.host, []).append(row)
