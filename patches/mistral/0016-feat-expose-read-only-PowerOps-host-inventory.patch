@@ -1,0 +1,981 @@
+From 16888b4b5364bb219efdb8806ebc2808bdd74096 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Thu, 3 Sep 2026 10:49:53 +0300
+Subject: [PATCH 16/16] feat: expose read-only PowerOps host inventory
+
+---
+ etc/mistral/power_ops.yaml                    |   9 +
+ mistral/actions/powerops/clients.py           | 271 ++++++++++
+ mistral/actions/powerops/exceptions.py        |   4 +
+ mistral/actions/powerops/inventory.py         |  45 ++
+ .../unit/actions/powerops/test_inventory.py   | 488 ++++++++++++++++++
+ .../actions/powerops/test_registration.py     |   3 +
+ .../unit/actions/powerops/test_workbook.py    |  13 +
+ setup.cfg                                     |   1 +
+ 8 files changed, 834 insertions(+)
+ create mode 100644 mistral/actions/powerops/inventory.py
+ create mode 100644 mistral/tests/unit/actions/powerops/test_inventory.py
+
+diff --git a/etc/mistral/power_ops.yaml b/etc/mistral/power_ops.yaml
+index 119be4e8..c8da55a9 100644
+--- a/etc/mistral/power_ops.yaml
++++ b/etc/mistral/power_ops.yaml
+@@ -3,6 +3,15 @@ version: '2.0'
+ name: power_ops
+ 
+ workflows:
++  host_inventory:
++    tasks:
++      inventory:
++        action: powerops.host_inventory
++        publish:
++          result: <% task().result %>
++    output:
++      result: <% $.result %>
++
+   host_power_status:
+     input:
+       - host
+diff --git a/mistral/actions/powerops/clients.py b/mistral/actions/powerops/clients.py
+index d3d9d276..bd665e98 100644
+--- a/mistral/actions/powerops/clients.py
++++ b/mistral/actions/powerops/clients.py
+@@ -389,6 +389,277 @@ class CloudClients:
+ 
+         return matches[0]
+ 
++    def _list_masakari_inventory(self, deadline):
++        body = self._call_with_deadline(
++            lambda: self.ha_adapter.get('/segments').json(),
++            deadline,
++            'timed out listing Masakari segments',
++        )
++
++        if not isinstance(body, dict):
++            raise exceptions.HostResolutionError(
++                'Masakari segments response must be a mapping'
++            )
++
++        segment_entries = body.get('segments')
++
++        if not isinstance(segment_entries, list):
++            raise exceptions.HostResolutionError(
++                'Masakari segments response must contain a segments list'
++            )
++
++        result = []
++
++        for segment_entry in segment_entries:
++            if not isinstance(segment_entry, dict):
++                raise exceptions.HostResolutionError(
++                    'Masakari segment entry must be a mapping'
++                )
++
++            segment_uuid = self._masakari_identifier(
++                segment_entry, 'Masakari segment UUID'
++            )
++            hosts_url = '/segments/{}/hosts'.format(segment_uuid)
++            hosts_body = self._call_with_deadline(
++                lambda url=hosts_url: self.ha_adapter.get(url).json(),
++                deadline,
++                'timed out listing Masakari hosts',
++            )
++
++            if not isinstance(hosts_body, dict):
++                raise exceptions.HostResolutionError(
++                    'Masakari hosts response must be a mapping'
++                )
++
++            host_entries = hosts_body.get('hosts')
++
++            if not isinstance(host_entries, list):
++                raise exceptions.HostResolutionError(
++                    'Masakari hosts response must contain a hosts list'
++                )
++
++            result.extend(
++                (segment_uuid, self._masakari_resource(host_entry))
++                for host_entry in host_entries
++            )
++
++        return result
++
++    @staticmethod
++    def _inventory_node_fields(node):
++        node_id = getattr(node, 'id', None)
++        power_state = getattr(node, 'power_state', None)
++        target_power_state = getattr(node, 'target_power_state', None)
++        compatible = (
++            isinstance(node_id, str)
++            and _PATH_RESOURCE_ID_RE.fullmatch(node_id)
++            and getattr(node, 'provision_state', None) == 'manageable'
++            and getattr(node, 'network_interface', None) == 'noop'
++            and not getattr(node, 'last_error', None)
++            and power_state in _KNOWN_POWER_STATES
++            and target_power_state in (None, power_state)
++        )
++
++        return {
++            'ironic_node_uuid': (
++                node_id
++                if isinstance(node_id, str)
++                and _PATH_RESOURCE_ID_RE.fullmatch(node_id)
++                else None
++            ),
++            'power_state': (
++                power_state if power_state in _KNOWN_POWER_STATES else None
++            ),
++            'target_power_state': (
++                target_power_state
++                if target_power_state in _KNOWN_POWER_STATES
++                else None
++            ),
++        }, compatible
++
++    @staticmethod
++    def _inventory_instances(servers):
++        records = []
++        valid = True
++        seen_ids = set()
++
++        for server in servers:
++            server_id = getattr(server, 'id', None)
++            name = getattr(server, 'name', None)
++            project_id = getattr(server, 'project_id', None)
++            status = getattr(server, 'status', None)
++
++            if (
++                    not isinstance(server_id, str)
++                    or not _PATH_RESOURCE_ID_RE.fullmatch(server_id)
++                    or server_id in seen_ids
++                    or not isinstance(name, str)
++                    or not name
++                    or not isinstance(project_id, str)
++                    or not project_id
++                    or not isinstance(status, str)
++                    or not status):
++                valid = False
++                continue
++
++            seen_ids.add(server_id)
++            records.append({
++                'id': server_id,
++                'name': name,
++                'project_id': project_id,
++                'status': status,
++            })
++
++        return sorted(records, key=lambda item: item['id']), valid
++
++    @classmethod
++    def _build_inventory_rows(
++            cls, segments_and_hosts, nodes, services, servers):
++        masakari_host_counts = {}
++
++        for _segment_uuid, masakari_host in segments_and_hosts:
++            masakari_host_counts[masakari_host.name] = (
++                masakari_host_counts.get(masakari_host.name, 0) + 1
++            )
++
++        servers_by_host = {}
++
++        for server in servers:
++            compute_host = getattr(server, 'compute_host', None)
++
++            if (
++                    not isinstance(compute_host, str)
++                    or not coordination.HOST_RE.fullmatch(compute_host)):
++                raise exceptions.InventoryUnavailable(
++                    'PowerOps inventory is unavailable'
++                )
++
++            servers_by_host.setdefault(compute_host, []).append(server)
++
++        rows = []
++
++        for segment_uuid, masakari_host in segments_and_hosts:
++            host = masakari_host.name
++            matching_services = [
++                service for service in services
++                if (
++                    getattr(service, 'binary', None) == 'nova-compute'
++                    and getattr(service, 'host', None) == host
++                )
++            ]
++            matching_nodes = [
++                node for node in nodes
++                if getattr(node, 'name', None) == host
++            ]
++            host_servers = servers_by_host.get(host, [])
++            instance_records, instance_data_valid = (
++                cls._inventory_instances(host_servers)
++            )
++            row = {
++                'region_name': CONF.powerops.region_name,
++                'segment_uuid': segment_uuid,
++                'host': host,
++                'ironic_node_uuid': None,
++                'power_state': None,
++                'target_power_state': None,
++                'nova_status': None,
++                'nova_state': None,
++                'masakari_maintenance': masakari_host.on_maintenance,
++                'instance_count': len(host_servers),
++                'instances': instance_records,
++                'operable': False,
++                'blocking_reason': None,
++            }
++
++            if masakari_host_counts[host] != 1:
++                row['blocking_reason'] = 'ambiguous_masakari_host'
++            elif not matching_services:
++                row['blocking_reason'] = 'missing_nova_service'
++            elif len(matching_services) != 1:
++                row['blocking_reason'] = 'ambiguous_nova_service'
++            else:
++                service = matching_services[0]
++                service_status = getattr(service, 'status', None)
++                service_state = getattr(service, 'state', None)
++                row['nova_status'] = (
++                    service_status
++                    if service_status in ('enabled', 'disabled')
++                    else None
++                )
++                row['nova_state'] = (
++                    service_state
++                    if service_state in ('up', 'down')
++                    else None
++                )
++
++                if row['nova_status'] is None or row['nova_state'] is None:
++                    row['blocking_reason'] = 'missing_nova_service'
++
++            if row['blocking_reason'] is None:
++                if not matching_nodes:
++                    row['blocking_reason'] = 'missing_ironic_node'
++                elif len(matching_nodes) != 1:
++                    row['blocking_reason'] = 'ambiguous_ironic_node'
++                else:
++                    node_fields, compatible = cls._inventory_node_fields(
++                        matching_nodes[0]
++                    )
++                    row.update(node_fields)
++
++                    if not compatible:
++                        row['blocking_reason'] = (
++                            'ironic_node_incompatible'
++                        )
++
++            if (
++                    row['blocking_reason'] is None
++                    and not instance_data_valid):
++                row['blocking_reason'] = 'invalid_instance_data'
++
++            row['operable'] = row['blocking_reason'] is None
++            rows.append(row)
++
++        return sorted(
++            rows,
++            key=lambda row: (row['segment_uuid'], row['host']),
++        )
++
++    def host_inventory(self):
++        try:
++            deadline = self._deadline(CONF.powerops.service_timeout)
++            nodes = self._call_with_deadline(
++                lambda: list(
++                    self.connection.baremetal.nodes(details=True)
++                ),
++                deadline,
++                'timed out listing Ironic nodes',
++            )
++            services = self._call_with_deadline(
++                lambda: list(self.connection.compute.services(
++                    binary='nova-compute'
++                )),
++                deadline,
++                'timed out listing Nova compute services',
++            )
++            servers = self._call_with_deadline(
++                lambda: list(self.connection.compute.servers(
++                    details=True, all_projects=True
++                )),
++                deadline,
++                'timed out listing Nova instances',
++            )
++            segments_and_hosts = self._list_masakari_inventory(deadline)
++
++            return self._build_inventory_rows(
++                segments_and_hosts, nodes, services, servers
++            )
++        except exceptions.InventoryUnavailable:
++            raise
++        except Exception:
++            raise exceptions.InventoryUnavailable(
++                'PowerOps inventory is unavailable'
++            ) from None
++
+     def resolve_host_set(self, segment_uuid, host):
+         deadline = self._deadline(CONF.powerops.service_timeout)
+         node = self.ironic_node(host, _deadline=deadline)
+diff --git a/mistral/actions/powerops/exceptions.py b/mistral/actions/powerops/exceptions.py
+index e7b0c0f9..9d9ac7fb 100644
+--- a/mistral/actions/powerops/exceptions.py
++++ b/mistral/actions/powerops/exceptions.py
+@@ -29,6 +29,10 @@ class PowerOpsCallTimeout(PowerOpsTimeout):
+     """An individual yielding SDK or adapter call hit its deadline."""
+ 
+ 
++class InventoryUnavailable(PowerOpsError):
++    """A complete and safely attributable inventory is unavailable."""
++
++
+ class HostResolutionError(PowerOpsError):
+     """A host did not resolve to one exact compatible resource."""
+ 
+diff --git a/mistral/actions/powerops/inventory.py b/mistral/actions/powerops/inventory.py
+new file mode 100644
+index 00000000..0f113b2b
+--- /dev/null
++++ b/mistral/actions/powerops/inventory.py
+@@ -0,0 +1,45 @@
++# Copyright 2026 OpenStack Foundation
++#
++# Licensed under the Apache License, Version 2.0 (the "License"); you may
++# not use this file except in compliance with the License. You may obtain
++# a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++# License for the specific language governing permissions and limitations
++# under the License.
++
++from oslo_config import cfg
++
++from mistral.actions.powerops import base
++from mistral.actions.powerops import clients
++from mistral.actions.powerops import exceptions
++
++
++CONF = cfg.CONF
++
++
++class HostInventoryAction(base.PowerOpsAction):
++    """Return a read-only all-project PowerOps host snapshot."""
++
++    host = None
++    segment_uuid = None
++
++    def run(self, context):
++        if not CONF.powerops.enabled:
++            raise exceptions.PowerOpsDisabled()
++
++        self._authorization_branch = self._authorize(context)
++        cloud = clients.CloudClients(clients.connection_from_conf())
++        result = cloud.host_inventory()
++        self._audit(
++            context,
++            'host_inventory',
++            'success',
++            {'host_count': len(result)},
++        )
++
++        return result
+diff --git a/mistral/tests/unit/actions/powerops/test_inventory.py b/mistral/tests/unit/actions/powerops/test_inventory.py
+new file mode 100644
+index 00000000..51e710b7
+--- /dev/null
++++ b/mistral/tests/unit/actions/powerops/test_inventory.py
+@@ -0,0 +1,488 @@
++# Copyright 2026 OpenStack Foundation
++#
++# Licensed under the Apache License, Version 2.0 (the "License"); you may
++# not use this file except in compliance with the License. You may obtain
++# a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++# License for the specific language governing permissions and limitations
++# under the License.
++
++import importlib
++from types import SimpleNamespace
++from unittest import mock
++
++from mistral.actions.powerops import base as action_base
++from mistral.actions.powerops import clients
++from mistral.actions.powerops import exceptions
++from mistral.tests.unit.actions.powerops import fakes
++from mistral.tests.unit import base
++
++
++SEGMENT_UUID = '11111111-1111-1111-1111-111111111111'
++SECOND_SEGMENT_UUID = '55555555-5555-5555-5555-555555555555'
++NODE_UUID = '22222222-2222-2222-2222-222222222222'
++FIRST_SERVER_UUID = '33333333-3333-3333-3333-333333333333'
++SECOND_SERVER_UUID = '44444444-4444-4444-4444-444444444444'
++HOST = 'compute-01'
++
++ROW_KEYS = {
++    'region_name',
++    'segment_uuid',
++    'host',
++    'ironic_node_uuid',
++    'power_state',
++    'target_power_state',
++    'nova_status',
++    'nova_state',
++    'masakari_maintenance',
++    'instance_count',
++    'instances',
++    'operable',
++    'blocking_reason',
++}
++INSTANCE_KEYS = {'id', 'name', 'project_id', 'status'}
++BLOCKING_REASONS = {
++    'ambiguous_masakari_host',
++    'missing_nova_service',
++    'ambiguous_nova_service',
++    'missing_ironic_node',
++    'ambiguous_ironic_node',
++    'ironic_node_incompatible',
++    'invalid_instance_data',
++}
++
++
++def _node(node_id=NODE_UUID, host=HOST, **overrides):
++    values = {
++        'id': node_id,
++        'name': host,
++        'power_state': 'power on',
++        'target_power_state': None,
++        'last_error': None,
++        'provision_state': 'manageable',
++        'network_interface': 'noop',
++        'driver_info': {'redfish_password': 'node-secret'},
++        'instance_info': {'image_source': 'private-image'},
++    }
++    values.update(overrides)
++
++    return SimpleNamespace(**values)
++
++
++def _service(service_id='service-1', host=HOST, **overrides):
++    values = {
++        'id': service_id,
++        'host': host,
++        'binary': 'nova-compute',
++        'status': 'enabled',
++        'state': 'up',
++        'service_catalog': {'password': 'service-secret'},
++    }
++    values.update(overrides)
++
++    return SimpleNamespace(**values)
++
++
++def _server(server_id, name, project_id, status, host=HOST, **overrides):
++    values = {
++        'id': server_id,
++        'name': name,
++        'project_id': project_id,
++        'status': status,
++        'compute_host': host,
++        'metadata': {'token': 'server-secret'},
++    }
++    values.update(overrides)
++
++    return SimpleNamespace(**values)
++
++
++def _segments(*items):
++    return {
++        '/segments': {
++            'segments': [
++                {'uuid': segment_uuid}
++                for segment_uuid, _hosts in items
++            ],
++        },
++        **{
++            '/segments/{}/hosts'.format(segment_uuid): {
++                'hosts': hosts,
++            }
++            for segment_uuid, hosts in items
++        },
++    }
++
++
++def _masakari_host(host=HOST, maintenance=False, host_id='host-1'):
++    return {
++        'uuid': host_id,
++        'name': host,
++        'on_maintenance': maintenance,
++        'password': 'masakari-secret',
++    }
++
++
++def _cloud(nodes=None, services=None, servers=None, responses=None):
++    connection = mock.Mock()
++    connection.session = SimpleNamespace(
++        timeout=17,
++        token='connection-secret',
++        endpoint='https://secret.invalid',
++    )
++    connection.baremetal.nodes.return_value = list(
++        [_node()] if nodes is None else nodes
++    )
++    connection.compute.services.return_value = list(
++        [_service()] if services is None else services
++    )
++    connection.compute.servers.return_value = list(
++        [
++            _server(
++                SECOND_SERVER_UUID, 'vm-b', 'project-b', 'SHUTOFF'
++            ),
++            _server(
++                FIRST_SERVER_UUID, 'vm-a', 'project-a', 'ACTIVE'
++            ),
++        ] if servers is None else servers
++    )
++    response_bodies = responses or _segments(
++        (SEGMENT_UUID, [_masakari_host()])
++    )
++    ha_adapter = mock.Mock()
++
++    def get(path):
++        response = mock.Mock()
++        response.json.return_value = response_bodies[path]
++
++        return response
++
++    ha_adapter.get.side_effect = get
++
++    return (
++        clients.CloudClients(
++            connection,
++            ha_adapter=ha_adapter,
++            monotonic=fakes.monotonic(),
++        ),
++        connection,
++        ha_adapter,
++    )
++
++
++class HostInventoryClientsTest(base.BaseTest):
++    def setUp(self):
++        super(HostInventoryClientsTest, self).setUp()
++
++        self.override_config('region_name', 'RegionOne', 'powerops')
++
++    def test_complete_snapshot_has_exact_sorted_secret_free_shape(self):
++        cloud, connection, ha_adapter = _cloud()
++
++        result = cloud.host_inventory()
++
++        self.assertEqual(
++            [{
++                'region_name': 'RegionOne',
++                'segment_uuid': SEGMENT_UUID,
++                'host': HOST,
++                'ironic_node_uuid': NODE_UUID,
++                'power_state': 'power on',
++                'target_power_state': None,
++                'nova_status': 'enabled',
++                'nova_state': 'up',
++                'masakari_maintenance': False,
++                'instance_count': 2,
++                'instances': [
++                    {
++                        'id': FIRST_SERVER_UUID,
++                        'name': 'vm-a',
++                        'project_id': 'project-a',
++                        'status': 'ACTIVE',
++                    },
++                    {
++                        'id': SECOND_SERVER_UUID,
++                        'name': 'vm-b',
++                        'project_id': 'project-b',
++                        'status': 'SHUTOFF',
++                    },
++                ],
++                'operable': True,
++                'blocking_reason': None,
++            }],
++            result,
++        )
++        connection.baremetal.nodes.assert_called_once_with(details=True)
++        connection.compute.services.assert_called_once_with(
++            binary='nova-compute'
++        )
++        connection.compute.servers.assert_called_once_with(
++            details=True, all_projects=True
++        )
++        self.assertEqual(
++            [
++                mock.call('/segments'),
++                mock.call('/segments/{}/hosts'.format(SEGMENT_UUID)),
++            ],
++            ha_adapter.get.call_args_list,
++        )
++
++        for method in (
++                connection.baremetal.set_node_power_state,
++                connection.baremetal.update_node,
++                connection.compute.get_server,
++                connection.compute.stop_server,
++                connection.compute.start_server,
++                connection.compute.live_migrate_server,
++                connection.compute.disable_service,
++                connection.compute.enable_service,
++                ha_adapter.post,
++                ha_adapter.put,
++                ha_adapter.delete):
++            method.assert_not_called()
++
++        self.assertEqual(ROW_KEYS, set(result[0]))
++        self.assertEqual(INSTANCE_KEYS, set(result[0]['instances'][0]))
++        serialized = repr(result)
++
++        for forbidden in (
++                'node-secret',
++                'private-image',
++                'service-secret',
++                'server-secret',
++                'masakari-secret',
++                'connection-secret',
++                'secret.invalid',
++                'driver_info',
++                'instance_info',
++                'service_catalog'):
++            self.assertNotIn(forbidden, serialized)
++
++    def test_any_required_dataset_failure_raises_one_sanitized_error(self):
++        cases = ('nodes', 'services', 'servers', 'segments', 'hosts')
++
++        for failed_dataset in cases:
++            with self.subTest(dataset=failed_dataset):
++                cloud, connection, ha_adapter = _cloud()
++                failure = RuntimeError(
++                    '{} backend password=secret'.format(failed_dataset)
++                )
++
++                if failed_dataset == 'nodes':
++                    connection.baremetal.nodes.side_effect = failure
++                elif failed_dataset == 'services':
++                    connection.compute.services.side_effect = failure
++                elif failed_dataset == 'servers':
++                    connection.compute.servers.side_effect = failure
++                elif failed_dataset == 'segments':
++                    ha_adapter.get.side_effect = failure
++                else:
++                    original_get = ha_adapter.get.side_effect
++
++                    def fail_hosts(path, original_get=original_get):
++                        if path.endswith('/hosts'):
++                            raise failure
++
++                        return original_get(path)
++
++                    ha_adapter.get.side_effect = fail_hosts
++
++                exc = self.assertRaises(
++                    exceptions.InventoryUnavailable,
++                    cloud.host_inventory,
++                )
++                self.assertNotIn('password', str(exc))
++                self.assertNotIn('secret', str(exc))
++
++    def test_server_without_canonical_compute_host_fails_complete_snapshot(
++            self):
++        for compute_host in (None, '', 'compute host'):
++            with self.subTest(compute_host=compute_host):
++                server = _server(
++                    FIRST_SERVER_UUID,
++                    'vm-a',
++                    'project-a',
++                    'ACTIVE',
++                    host=compute_host,
++                )
++                cloud, _connection, _ha_adapter = _cloud(
++                    servers=[server]
++                )
++
++                self.assertRaises(
++                    exceptions.InventoryUnavailable,
++                    cloud.host_inventory,
++                )
++
++    def test_each_row_failure_uses_only_fixed_blocking_identifier(self):
++        cases = (
++            (
++                'ambiguous_masakari_host',
++                {
++                    'responses': _segments(
++                        (SEGMENT_UUID, [_masakari_host()]),
++                        (SECOND_SEGMENT_UUID, [
++                            _masakari_host(host_id='host-2')
++                        ]),
++                    ),
++                },
++                2,
++            ),
++            ('missing_nova_service', {'services': []}, 1),
++            (
++                'ambiguous_nova_service',
++                {'services': [_service(), _service('service-2')]},
++                1,
++            ),
++            ('missing_ironic_node', {'nodes': []}, 1),
++            (
++                'ambiguous_ironic_node',
++                {'nodes': [_node(), _node('node-2')]},
++                1,
++            ),
++            (
++                'ironic_node_incompatible',
++                {'nodes': [_node(last_error='BMC password=secret')]},
++                1,
++            ),
++            (
++                'invalid_instance_data',
++                {'servers': [
++                    _server(None, 'vm-a', 'project-a', 'ACTIVE')
++                ]},
++                1,
++            ),
++        )
++
++        observed = set()
++
++        for expected_reason, changes, expected_rows in cases:
++            with self.subTest(reason=expected_reason):
++                cloud, _connection, _ha_adapter = _cloud(**changes)
++
++                rows = cloud.host_inventory()
++
++                self.assertEqual(expected_rows, len(rows))
++                self.assertTrue(all(not row['operable'] for row in rows))
++                self.assertEqual(
++                    {expected_reason},
++                    {row['blocking_reason'] for row in rows},
++                )
++                self.assertTrue(all(set(row) == ROW_KEYS for row in rows))
++                self.assertNotIn('password=secret', repr(rows))
++                observed.update(row['blocking_reason'] for row in rows)
++
++        self.assertEqual(BLOCKING_REASONS, observed)
++
++    def test_rows_and_instances_are_sorted_by_canonical_identifiers(self):
++        responses = _segments(
++            (SECOND_SEGMENT_UUID, [
++                _masakari_host('compute-02', host_id='host-2')
++            ]),
++            (SEGMENT_UUID, [_masakari_host()]),
++        )
++        nodes = [_node(host='compute-02', node_id='node-2'), _node()]
++        services = [_service(host='compute-02'), _service()]
++        servers = [
++            _server(
++                SECOND_SERVER_UUID, 'vm-b', 'project-b', 'SHUTOFF'
++            ),
++            _server(
++                FIRST_SERVER_UUID, 'vm-a', 'project-a', 'ACTIVE'
++            ),
++        ]
++        cloud, _connection, _ha_adapter = _cloud(
++            nodes=nodes,
++            services=services,
++            servers=servers,
++            responses=responses,
++        )
++
++        rows = cloud.host_inventory()
++
++        self.assertEqual(
++            [(SEGMENT_UUID, HOST), (SECOND_SEGMENT_UUID, 'compute-02')],
++            [(row['segment_uuid'], row['host']) for row in rows],
++        )
++        self.assertEqual(
++            [FIRST_SERVER_UUID, SECOND_SERVER_UUID],
++            [item['id'] for item in rows[0]['instances']],
++        )
++
++
++class HostInventoryActionTest(base.BaseTest):
++    def setUp(self):
++        super(HostInventoryActionTest, self).setUp()
++
++        self.override_config('enabled', True, 'powerops')
++        self.override_config(
++            'allowed_project_names', ['operations'], 'powerops'
++        )
++        self.override_config(
++            'allowed_user_names', ['powerops-operator'], 'powerops'
++        )
++
++    @staticmethod
++    def _inventory_module():
++        return importlib.import_module('mistral.actions.powerops.inventory')
++
++    def test_authorization_precedes_service_client_construction(self):
++        inventory = self._inventory_module()
++
++        with mock.patch.object(
++                inventory.clients, 'connection_from_conf') as connection:
++            self.assertRaises(
++                exceptions.PowerOpsUnauthorized,
++                inventory.HostInventoryAction().run,
++                fakes.action_context(
++                    'inventory-unauthorized', roles=['member']
++                ),
++            )
++
++        connection.assert_not_called()
++
++    def test_read_only_action_returns_snapshot_without_host_lock(self):
++        inventory = self._inventory_module()
++        context = fakes.action_context('inventory-success')
++        expected = [{'host': HOST}]
++
++        with mock.patch.object(
++                inventory.clients, 'connection_from_conf') as connection, \
++                mock.patch.object(
++                    inventory.clients, 'CloudClients'
++                ) as cloud_cls, \
++                mock.patch.object(
++                    action_base.coordination, 'OperationCoordinator'
++                ) as coordinator:
++            cloud_cls.return_value.host_inventory.return_value = expected
++            result = inventory.HostInventoryAction().run(context)
++
++        self.assertIs(expected, result)
++        connection.assert_called_once_with()
++        cloud_cls.assert_called_once_with(connection.return_value)
++        cloud_cls.return_value.host_inventory.assert_called_once_with()
++        coordinator.assert_not_called()
++
++    def test_disabled_action_stops_before_authorization_and_clients(self):
++        inventory = self._inventory_module()
++        self.override_config('enabled', False, 'powerops')
++
++        with mock.patch.object(
++                inventory.clients, 'connection_from_conf') as connection, \
++                mock.patch.object(
++                    inventory.HostInventoryAction,
++                    '_authorize',
++                ) as authorize:
++            self.assertRaises(
++                exceptions.PowerOpsDisabled,
++                inventory.HostInventoryAction().run,
++                fakes.action_context('inventory-disabled'),
++            )
++
++        authorize.assert_not_called()
++        connection.assert_not_called()
+diff --git a/mistral/tests/unit/actions/powerops/test_registration.py b/mistral/tests/unit/actions/powerops/test_registration.py
+index 6d0408ba..61831eb1 100644
+--- a/mistral/tests/unit/actions/powerops/test_registration.py
++++ b/mistral/tests/unit/actions/powerops/test_registration.py
+@@ -15,6 +15,7 @@
+ import importlib.metadata
+ 
+ from mistral.actions import legacy
++from mistral.actions.powerops import inventory
+ from mistral.actions.powerops import planned
+ from mistral.actions.powerops import return_host
+ from mistral.tests.unit import base
+@@ -22,6 +23,7 @@ from mistral_lib import actions as ml_actions
+ 
+ 
+ EXPECTED_ACTIONS = {
++    'powerops.host_inventory': inventory.HostInventoryAction,
+     'powerops.host_power_status': return_host.HostPowerStatusAction,
+     'powerops.planned_power_off': planned.PlannedPowerOffAction,
+     'powerops.planned_reboot': planned.PlannedRebootAction,
+@@ -31,6 +33,7 @@ EXPECTED_ACTIONS = {
+     'powerops.return_to_service': return_host.ReturnToServiceAction,
+ }
+ EXPECTED_PARAMS_SPECS = {
++    'powerops.host_inventory': '',
+     'powerops.host_power_status': 'host, segment_uuid',
+     'powerops.planned_power_off': (
+         'host, segment_uuid, instance_policy="require_empty", '
+diff --git a/mistral/tests/unit/actions/powerops/test_workbook.py b/mistral/tests/unit/actions/powerops/test_workbook.py
+index 4cd8e725..2e6756a3 100644
+--- a/mistral/tests/unit/actions/powerops/test_workbook.py
++++ b/mistral/tests/unit/actions/powerops/test_workbook.py
+@@ -23,12 +23,16 @@ from mistral_lib import utils as ml_utils
+ 
+ WORKBOOK_PATH = pathlib.Path('etc/mistral/power_ops.yaml')
+ EXPECTED_WORKFLOWS = {
++    'host_inventory',
+     'host_power_status',
+     'planned_power_off',
+     'planned_reboot',
+     'power_on_and_return',
+ }
+ EXPECTED_TASK_ACTIONS = {
++    'host_inventory': {
++        'inventory': 'powerops.host_inventory',
++    },
+     'host_power_status': {
+         'status': 'powerops.host_power_status',
+     },
+@@ -45,6 +49,9 @@ EXPECTED_TASK_ACTIONS = {
+     },
+ }
+ EXPECTED_TASK_INPUTS = {
++    'host_inventory': {
++        'inventory': {},
++    },
+     'host_power_status': {
+         'status': {
+             'host': '<% $.host %>',
+@@ -84,6 +91,7 @@ EXPECTED_TASK_INPUTS = {
+     },
+ }
+ RESULT_TASKS = {
++    'host_inventory': 'inventory',
+     'host_power_status': 'status',
+     'planned_power_off': 'power_off',
+     'planned_reboot': 'reboot',
+@@ -109,6 +117,7 @@ class PowerOpsWorkbookTest(base.BaseTest):
+         )
+ 
+         expected_inputs = {
++            'host_inventory': {},
+             'host_power_status': {
+                 'host': ml_utils.NotDefined,
+                 'segment_uuid': ml_utils.NotDefined,
+@@ -161,6 +170,10 @@ class PowerOpsWorkbookTest(base.BaseTest):
+                     result_publish.get_branch(),
+                 )
+ 
++        self.assertEqual(
++            {'result': '<% $.result %>'},
++            self.workflows['host_inventory'].get_output(),
++        )
+         self.assertEqual(
+             {'result': '<% $.result %>'},
+             self.workflows['host_power_status'].get_output(),
+diff --git a/setup.cfg b/setup.cfg
+index b49ab88e..2575553e 100644
+--- a/setup.cfg
++++ b/setup.cfg
+@@ -58,6 +58,7 @@ mistral.action.providers =
+     dynamic = mistral.actions.dynamic_action:DynamicActionProvider
+ 
+ mistral.actions =
++    powerops.host_inventory = mistral.actions.powerops.inventory:HostInventoryAction
+     powerops.host_power_status = mistral.actions.powerops.return_host:HostPowerStatusAction
+     powerops.planned_power_off = mistral.actions.powerops.planned:PlannedPowerOffAction
+     powerops.planned_reboot = mistral.actions.powerops.planned:PlannedRebootAction
+-- 
+2.49.0
+

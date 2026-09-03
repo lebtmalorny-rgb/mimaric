@@ -1,0 +1,546 @@
+From 76a24293d413ae3a0963401c3af34047ee679643 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Thu, 3 Sep 2026 10:07:33 +0300
+Subject: [PATCH 15/16] feat: enforce PowerOps roles and hard-off policy
+
+---
+ mistral/actions/powerops/base.py              |  83 ++++--
+ mistral/actions/powerops/planned.py           |  12 +-
+ mistral/actions/powerops/return_host.py       |   4 +-
+ mistral/tests/unit/actions/powerops/fakes.py  |   4 +-
+ .../unit/actions/powerops/test_planned.py     | 239 ++++++++++++++++++
+ .../unit/actions/powerops/test_return_host.py |  75 ++++++
+ 6 files changed, 391 insertions(+), 26 deletions(-)
+
+diff --git a/mistral/actions/powerops/base.py b/mistral/actions/powerops/base.py
+index a4c9824e..c850c4ac 100644
+--- a/mistral/actions/powerops/base.py
++++ b/mistral/actions/powerops/base.py
+@@ -18,6 +18,7 @@ from oslo_log import log as logging
+ from mistral.actions.powerops import clients
+ from mistral.actions.powerops import coordination
+ from mistral.actions.powerops import exceptions
++from mistral.services import powerops
+ from mistral_lib import actions
+ 
+ 
+@@ -28,17 +29,12 @@ LOG = logging.getLogger(__name__)
+ class PowerOpsAction(actions.Action):
+     """Shared authorization, coordination and fail-safe action template."""
+ 
+-    def _authorize(self, context):
+-        security = context.security
+-
+-        if (
+-                security.project_name
+-                not in CONF.powerops.allowed_project_names
+-                or security.user_name
+-                not in CONF.powerops.allowed_user_names):
+-            raise exceptions.PowerOpsUnauthorized(
+-                'caller is not authorized for PowerOps'
+-            )
++    def _authorize(self, context, allow_hard_off=False):
++        return powerops.authorize(
++            context.security,
++            allow_hard_off=allow_hard_off,
++            error_cls=exceptions.PowerOpsUnauthorized,
++        )
+ 
+     def _validate_inputs(self):
+         try:
+@@ -55,11 +51,20 @@ class PowerOpsAction(actions.Action):
+     def _validate_action_context(self, context):
+         pass
+ 
+-    def _run_locked(self, context, operation_name, operation):
++    def _run_locked(self, context, operation_name, operation,
++                    allow_hard_off=False):
+         if not CONF.powerops.enabled:
+             raise exceptions.PowerOpsDisabled()
+ 
+-        self._authorize(context)
++        branch = self._authorize(
++            context,
++            allow_hard_off=allow_hard_off,
++        )
++        self._authorization_branch = branch
++        self._hard_off_authorized = (
++            allow_hard_off is True
++            and branch == powerops.ADMIN_BRANCH
++        )
+         self._validate_action_context(context)
+         self._validate_inputs()
+         execution_id = context.execution.action_execution_id
+@@ -147,12 +152,46 @@ class PowerOpsAction(actions.Action):
+         return errors
+ 
+     def _audit(self, context, operation, outcome, details):
+-        LOG.info(
+-            'PowerOps audit operation=%s outcome=%s host=%s '
+-            'workflow_execution_id=%s details=%s',
+-            operation,
+-            outcome,
+-            self.host,
+-            context.execution.workflow_execution_id,
+-            details,
+-        )
++        error_type = None
++        fail_safe_error_count = 0
++
++        if isinstance(details, dict):
++            if isinstance(details.get('error_type'), str):
++                error_type = details['error_type']
++
++            if (type(details.get('fail_safe_error_count')) is int
++                    and details['fail_safe_error_count'] >= 0):
++                fail_safe_error_count = details[
++                    'fail_safe_error_count'
++                ]
++
++        audit_record = {
++            'actor_user_id': getattr(
++                context.security, 'user_id', None
++            ),
++            'actor_project_id': getattr(
++                context.security, 'project_id', None
++            ),
++            'authorization_branch': getattr(
++                self, '_authorization_branch', None
++            ),
++            'region_name': CONF.powerops.region_name,
++            'host': self.host,
++            'segment_uuid': self.segment_uuid,
++            'operation': operation,
++            'instance_policy': getattr(self, 'instance_policy', None),
++            'hard_off_authorized': getattr(
++                self, '_hard_off_authorized', False
++            ),
++            'workflow_execution_id': (
++                context.execution.workflow_execution_id
++            ),
++            'action_execution_id': (
++                context.execution.action_execution_id
++            ),
++            'outcome': outcome,
++            'error_type': error_type,
++            'fail_safe_error_count': fail_safe_error_count,
++        }
++
++        LOG.info('PowerOps audit %s', audit_record)
+diff --git a/mistral/actions/powerops/planned.py b/mistral/actions/powerops/planned.py
+index 919a9fc1..d732a881 100644
+--- a/mistral/actions/powerops/planned.py
++++ b/mistral/actions/powerops/planned.py
+@@ -82,7 +82,10 @@ class PlannedPowerOffAction(_PlannedPowerAction):
+             return result
+ 
+         return self._run_locked(
+-            context, 'planned_power_off', operation
++            context,
++            'planned_power_off',
++            operation,
++            allow_hard_off=self.allow_hard_off,
+         )
+ 
+ 
+@@ -135,4 +138,9 @@ class PlannedRebootAction(_PlannedPowerAction):
+ 
+             return result
+ 
+-        return self._run_locked(context, 'planned_reboot', operation)
++        return self._run_locked(
++            context,
++            'planned_reboot',
++            operation,
++            allow_hard_off=self.allow_hard_off,
++        )
+diff --git a/mistral/actions/powerops/return_host.py b/mistral/actions/powerops/return_host.py
+index 92fbf358..8ea78069 100644
+--- a/mistral/actions/powerops/return_host.py
++++ b/mistral/actions/powerops/return_host.py
+@@ -38,7 +38,9 @@ class HostPowerStatusAction(base.PowerOpsAction):
+         if not CONF.powerops.enabled:
+             raise exceptions.PowerOpsDisabled()
+ 
+-        self._authorize(context)
++        branch = self._authorize(context)
++        self._authorization_branch = branch
++        self._hard_off_authorized = False
+         self._validate_inputs()
+         cloud = clients.CloudClients(clients.connection_from_conf())
+         node = cloud.ironic_node(self.host)
+diff --git a/mistral/tests/unit/actions/powerops/fakes.py b/mistral/tests/unit/actions/powerops/fakes.py
+index 60b8240e..6bc8c712 100644
+--- a/mistral/tests/unit/actions/powerops/fakes.py
++++ b/mistral/tests/unit/actions/powerops/fakes.py
+@@ -55,7 +55,8 @@ def masakari_host(host_id, name, on_maintenance=True):
+ 
+ def action_context(execution_id, project_name="operations",
+                    user_name="powerops-operator",
+-                   user_id="powerops-user-id", roles=None,
++                   user_id="powerops-user-id",
++                   project_id="powerops-project-id", roles=None,
+                    resume_authorization=_DEFAULT_RESUME_AUTHORIZATION):
+     roles = ['powerops_operator'] if roles is None else roles
+ 
+@@ -72,6 +73,7 @@ def action_context(execution_id, project_name="operations",
+             project_name=project_name,
+             user_name=user_name,
+             user_id=user_id,
++            project_id=project_id,
+             roles=roles,
+         ),
+         execution=SimpleNamespace(
+diff --git a/mistral/tests/unit/actions/powerops/test_planned.py b/mistral/tests/unit/actions/powerops/test_planned.py
+index 98b8d220..8d37d833 100644
+--- a/mistral/tests/unit/actions/powerops/test_planned.py
++++ b/mistral/tests/unit/actions/powerops/test_planned.py
+@@ -17,6 +17,7 @@ from unittest import mock
+ 
+ from mistral.actions.powerops import exceptions
+ from mistral.actions.powerops import planned
++from mistral.services import powerops
+ from mistral.tests.unit.actions.powerops import fakes
+ from mistral.tests.unit import base
+ 
+@@ -96,6 +97,244 @@ class PlannedPowerActionsTest(base.BaseTest):
+         cloud.start_instances.return_value = None
+         cloud.enable_nova.return_value = None
+ 
++    @mock.patch.object(planned.coordination, 'OperationCoordinator')
++    @mock.patch.object(planned.clients, 'connection_from_conf')
++    def test_planned_actions_authorize_before_external_objects(
++            self, connection_from_conf, coordinator_cls):
++        actions = (
++            planned.PlannedPowerOffAction(
++                'compute-01', 'segment-1', allow_hard_off=False
++            ),
++            planned.PlannedRebootAction(
++                'compute-01', 'segment-1', allow_hard_off=False
++            ),
++        )
++
++        for action in actions:
++            with self.subTest(action=type(action).__name__):
++                self.assertRaises(
++                    exceptions.PowerOpsUnauthorized,
++                    action.run,
++                    fakes.action_context(
++                        'execution-unauthorized-{}'.format(
++                            type(action).__name__
++                        ),
++                        roles=['member'],
++                    ),
++                )
++
++                coordinator_cls.assert_not_called()
++                connection_from_conf.assert_not_called()
++
++    @mock.patch.object(planned.coordination, 'OperationCoordinator')
++    @mock.patch.object(planned.clients, 'connection_from_conf')
++    def test_planned_actions_pass_exact_hard_off_to_shared_authorizer(
++            self, connection_from_conf, coordinator_cls):
++        action_cases = (
++            (
++                planned.PlannedPowerOffAction(
++                    'compute-01', 'segment-1', allow_hard_off=False
++                ),
++                False,
++            ),
++            (
++                planned.PlannedRebootAction(
++                    'compute-01', 'segment-1', allow_hard_off=True
++                ),
++                True,
++            ),
++        )
++
++        for action, hard_off in action_cases:
++            with self.subTest(action=type(action).__name__):
++                context = fakes.action_context(
++                    'execution-routed-{}'.format(type(action).__name__)
++                )
++
++                with mock.patch.object(
++                        powerops,
++                        'authorize',
++                        side_effect=exceptions.PowerOpsUnauthorized(
++                            'denied by shared helper'
++                        )) as authorize:
++                    self.assertRaises(
++                        exceptions.PowerOpsUnauthorized,
++                        action.run,
++                        context,
++                    )
++
++                authorize.assert_called_once_with(
++                    context.security,
++                    allow_hard_off=hard_off,
++                    error_cls=exceptions.PowerOpsUnauthorized,
++                )
++                coordinator_cls.assert_not_called()
++                connection_from_conf.assert_not_called()
++
++    @mock.patch.object(planned.coordination, 'OperationCoordinator')
++    @mock.patch.object(planned.clients, 'CloudClients')
++    @mock.patch.object(planned.clients, 'connection_from_conf')
++    def test_hard_off_is_admin_only_before_host_resolution(
++            self, connection_from_conf, cloud_cls, coordinator_cls):
++        delegated = planned.PlannedPowerOffAction(
++            'compute-01',
++            'segment-1',
++            allow_hard_off=True,
++        )
++
++        self.assertRaises(
++            exceptions.PowerOpsUnauthorized,
++            delegated.run,
++            fakes.action_context('execution-delegated-hard-off'),
++        )
++
++        coordinator_cls.assert_not_called()
++        connection_from_conf.assert_not_called()
++        cloud_cls.assert_not_called()
++
++        events = []
++        coordinator_cls.return_value = self._coordinator(events)
++        cloud = mock.Mock(unsafe=True)
++        cloud_cls.return_value = cloud
++        self._successful_cloud(cloud)
++        admin = planned.PlannedPowerOffAction(
++            'compute-01',
++            'segment-1',
++            allow_hard_off=True,
++        )
++        admin._audit = mock.Mock()
++
++        result = admin.run(
++            fakes.action_context(
++                'execution-admin-hard-off',
++                project_name='outside-allowlist',
++                user_name='outside-allowlist',
++                roles=['admin', 'powerops_operator'],
++            )
++        )
++
++        self.assertEqual('power off', result['power_state'])
++        cloud.resolve_host_set.assert_called_once_with(
++            'segment-1', 'compute-01'
++        )
++        cloud.power_off.assert_called_once_with('compute-01', True)
++
++    def test_action_rbac_is_exact_and_malformed_roles_fail_closed(self):
++        action = planned.PlannedPowerOffAction(
++            'compute-01', 'segment-1'
++        )
++        cases = (
++            (['admin'], 'other-project', 'other-user', 'admin'),
++            (['admin', 'powerops_operator'], 'other-project', 'other-user',
++             'admin'),
++            (['powerops_operator'], 'operations', 'powerops-operator',
++             'powerops_operator'),
++            (['PowerOps_Operator'], 'operations', 'powerops-operator', None),
++            ('admin', 'operations', 'powerops-operator', None),
++            (('admin',), 'operations', 'powerops-operator', None),
++            ({'admin': True}, 'operations', 'powerops-operator', None),
++        )
++
++        for roles, project_name, user_name, expected in cases:
++            with self.subTest(roles=roles):
++                context = fakes.action_context(
++                    'execution-rbac',
++                    project_name=project_name,
++                    user_name=user_name,
++                    roles=roles,
++                )
++
++                if expected is None:
++                    self.assertRaises(
++                        exceptions.PowerOpsUnauthorized,
++                        action._authorize,
++                        context,
++                    )
++                else:
++                    self.assertEqual(
++                        expected,
++                        action._authorize(context),
++                    )
++
++    def test_audit_has_only_bounded_secret_free_fields(self):
++        self.override_config('region_name', 'RegionPowerOps', 'powerops')
++        action = planned.PlannedPowerOffAction(
++            'compute-01',
++            'segment-1',
++            instance_policy='stop',
++            allow_hard_off=True,
++        )
++        action._authorization_branch = 'admin'
++        action._hard_off_authorized = True
++        context = fakes.action_context(
++            'workflow-execution-id',
++            project_id='actor-project-id',
++            user_id='actor-user-id',
++            roles=['admin'],
++        )
++        context.security.auth_token = 'audit-token-secret'
++        context.security.password = 'audit-password-secret'
++        context.security.service_catalog = {'secret': 'catalog-secret'}
++
++        with mock.patch.object(planned.base.LOG, 'info') as log_info:
++            action._audit(
++                context,
++                'planned_power_off',
++                'failure',
++                {
++                    'error_type': 'PowerStateError',
++                    'fail_safe_error_count': 2,
++                    'driver_info': {'address': '192.0.2.99'},
++                },
++            )
++
++        log_info.assert_called_once()
++        self.assertEqual('PowerOps audit %s', log_info.call_args.args[0])
++        record = log_info.call_args.args[1]
++        self.assertEqual(
++            {
++                'actor_user_id',
++                'actor_project_id',
++                'authorization_branch',
++                'region_name',
++                'host',
++                'segment_uuid',
++                'operation',
++                'instance_policy',
++                'hard_off_authorized',
++                'workflow_execution_id',
++                'action_execution_id',
++                'outcome',
++                'error_type',
++                'fail_safe_error_count',
++            },
++            set(record),
++        )
++        self.assertEqual('actor-user-id', record['actor_user_id'])
++        self.assertEqual('actor-project-id', record['actor_project_id'])
++        self.assertEqual('admin', record['authorization_branch'])
++        self.assertEqual('RegionPowerOps', record['region_name'])
++        self.assertEqual('compute-01', record['host'])
++        self.assertEqual('segment-1', record['segment_uuid'])
++        self.assertEqual('planned_power_off', record['operation'])
++        self.assertEqual('stop', record['instance_policy'])
++        self.assertIs(True, record['hard_off_authorized'])
++        self.assertEqual(
++            'workflow-execution-id', record['workflow_execution_id']
++        )
++        self.assertEqual(
++            'workflow-execution-id-action', record['action_execution_id']
++        )
++        serialized_arguments = repr(log_info.call_args)
++
++        for forbidden in (
++                'audit-token-secret',
++                'audit-password-secret',
++                'catalog-secret',
++                'driver_info',
++                '192.0.2.99'):
++            self.assertNotIn(forbidden, serialized_arguments)
++
+     @mock.patch.object(planned.coordination, 'OperationCoordinator')
+     @mock.patch.object(planned.clients, 'connection_from_conf')
+     def test_disabled_action_stops_before_coordination_or_auth(
+diff --git a/mistral/tests/unit/actions/powerops/test_return_host.py b/mistral/tests/unit/actions/powerops/test_return_host.py
+index 0a1f7312..41894f22 100644
+--- a/mistral/tests/unit/actions/powerops/test_return_host.py
++++ b/mistral/tests/unit/actions/powerops/test_return_host.py
+@@ -17,6 +17,7 @@ from unittest import mock
+ 
+ from mistral.actions.powerops import exceptions
+ from mistral.actions.powerops import return_host
++from mistral.services import powerops
+ from mistral.tests.unit.actions.powerops import fakes
+ from mistral.tests.unit import base
+ 
+@@ -99,6 +100,80 @@ class ReturnHostActionsTest(base.BaseTest):
+         cloud.set_masakari_maintenance.return_value = None
+         cloud.disable_nova.return_value = None
+ 
++    @mock.patch.object(return_host.coordination, 'OperationCoordinator')
++    @mock.patch.object(return_host.clients, 'connection_from_conf')
++    def test_return_actions_authorize_before_external_objects(
++            self, connection_from_conf, coordinator_cls):
++        actions = (
++            return_host.HostPowerStatusAction(
++                'compute-01', 'segment-1'
++            ),
++            return_host.PowerOnForInspectionAction(
++                'compute-01', 'segment-1'
++            ),
++            return_host.ReturnToServiceAction(
++                'compute-01', 'segment-1', [], True
++            ),
++        )
++
++        for action in actions:
++            with self.subTest(action=type(action).__name__):
++                self.assertRaises(
++                    exceptions.PowerOpsUnauthorized,
++                    action.run,
++                    fakes.action_context(
++                        'execution-unauthorized-{}'.format(
++                            type(action).__name__
++                        ),
++                        roles=['member'],
++                    ),
++                )
++
++                coordinator_cls.assert_not_called()
++                connection_from_conf.assert_not_called()
++
++    @mock.patch.object(return_host.coordination, 'OperationCoordinator')
++    @mock.patch.object(return_host.clients, 'connection_from_conf')
++    def test_return_actions_use_shared_authorizer_default_hard_off(
++            self, connection_from_conf, coordinator_cls):
++        actions = (
++            return_host.HostPowerStatusAction(
++                'compute-01', 'segment-1'
++            ),
++            return_host.PowerOnForInspectionAction(
++                'compute-01', 'segment-1'
++            ),
++            return_host.ReturnToServiceAction(
++                'compute-01', 'segment-1', [], True
++            ),
++        )
++
++        for action in actions:
++            with self.subTest(action=type(action).__name__):
++                context = fakes.action_context(
++                    'execution-routed-{}'.format(type(action).__name__)
++                )
++
++                with mock.patch.object(
++                        powerops,
++                        'authorize',
++                        side_effect=exceptions.PowerOpsUnauthorized(
++                            'denied by shared helper'
++                        )) as authorize:
++                    self.assertRaises(
++                        exceptions.PowerOpsUnauthorized,
++                        action.run,
++                        context,
++                    )
++
++                authorize.assert_called_once_with(
++                    context.security,
++                    allow_hard_off=False,
++                    error_cls=exceptions.PowerOpsUnauthorized,
++                )
++                coordinator_cls.assert_not_called()
++                connection_from_conf.assert_not_called()
++
+     @mock.patch.object(return_host.coordination, 'OperationCoordinator')
+     @mock.patch.object(return_host.clients, 'connection_from_conf')
+     def test_status_disabled_gate_precedes_auth_and_external_objects(
+-- 
+2.49.0
+

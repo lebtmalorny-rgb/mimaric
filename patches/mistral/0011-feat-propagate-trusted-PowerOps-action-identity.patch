@@ -1,0 +1,245 @@
+From 62621ca774090701fd79fa52f68eddc7a732aeb1 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Thu, 3 Sep 2026 10:51:01 +0300
+Subject: [PATCH 11/16] feat: propagate trusted PowerOps action identity
+
+---
+ mistral/context.py                            |   4 +-
+ mistral/engine/actions.py                     |   5 +
+ mistral/tests/unit/actions/powerops/fakes.py  |  10 +-
+ .../tests/unit/engine/test_action_context.py  | 136 ++++++++++++++++++
+ 4 files changed, 152 insertions(+), 3 deletions(-)
+
+diff --git a/mistral/context.py b/mistral/context.py
+index adc684c2..d6650a6f 100644
+--- a/mistral/context.py
++++ b/mistral/context.py
+@@ -322,11 +322,13 @@ def create_action_context(execution_ctx):
+         is_trust_scoped=context.is_trust_scoped,
+         project_id=context.project_id,
+         project_name=context.project_name,
+-        user_name=context.user_name,
+         redelivered=context.redelivered,
+         region_name=context.region_name,
+         service_catalog=context.service_catalog,
+         trust_id=context.trust_id,
++        user_id=context.user_id,
++        user_name=context.user_name,
++        roles=list(context.roles or []),
+     )
+ 
+     ex_ctx = lib_ctx.ExecutionContext(**execution_ctx)
+diff --git a/mistral/engine/actions.py b/mistral/engine/actions.py
+index a259faa3..05e64909 100644
+--- a/mistral/engine/actions.py
++++ b/mistral/engine/actions.py
+@@ -147,6 +147,11 @@ class Action(object, metaclass=abc.ABCMeta):
+             res['workflow_execution_id'] = wf_ex.id
+             res['task_execution_id'] = self.task_ex.id
+             res['workflow_name'] = wf_ex.name
++            res['workflow_resume_authorization'] = (
++                (wf_ex.runtime_context or {}).get(
++                    '__powerops_resume_authorization'
++                )
++            )
+ 
+         if self.action_ex:
+             res['action_execution_id'] = self.action_ex.id
+diff --git a/mistral/tests/unit/actions/powerops/fakes.py b/mistral/tests/unit/actions/powerops/fakes.py
+index 77e48c0a..c1a9903a 100644
+--- a/mistral/tests/unit/actions/powerops/fakes.py
++++ b/mistral/tests/unit/actions/powerops/fakes.py
+@@ -51,10 +51,16 @@ def masakari_host(host_id, name, on_maintenance=True):
+ 
+ 
+ def action_context(execution_id, project_name="operations",
+-                   user_name="powerops-operator"):
++                   user_name="powerops-operator",
++                   user_id="powerops-user-id", roles=None):
++    roles = ['powerops_operator'] if roles is None else list(roles)
++
+     return SimpleNamespace(
+         security=SimpleNamespace(
+-            project_name=project_name, user_name=user_name
++            project_name=project_name,
++            user_name=user_name,
++            user_id=user_id,
++            roles=roles,
+         ),
+         execution=SimpleNamespace(
+             action_execution_id=execution_id + "-action",
+diff --git a/mistral/tests/unit/engine/test_action_context.py b/mistral/tests/unit/engine/test_action_context.py
+index 8bbc0cb5..eaef8bea 100644
+--- a/mistral/tests/unit/engine/test_action_context.py
++++ b/mistral/tests/unit/engine/test_action_context.py
+@@ -12,6 +12,7 @@
+ 
+ from unittest import mock
+ 
++from mistral import context as auth_context
+ from mistral.db.v2 import api as db_api
+ from mistral.services import workflows as wf_service
+ from mistral.tests.unit.engine import base
+@@ -28,6 +29,19 @@ wf:
+       action: my_action
+ """
+ 
++WF_PAUSED = """
++---
++version: '2.0'
++
++wf_paused:
++  tasks:
++    task1:
++      action: my_action
++      pause-before: true
++"""
++
++RESUME_AUTH_KEY = '__powerops_resume_authorization'
++
+ 
+ class MyAction(actions_base.Action):
+     def run(self, context):
+@@ -42,6 +56,26 @@ class ActionContextTest(base.EngineTestCase):
+ 
+     @mock.patch.object(MyAction, 'run', return_value=None)
+     def test_context(self, mocked_run):
++        roles = ['admin', 'powerops_operator']
++        service_catalog = {'service': 'catalog'}
++
++        self.ctx.auth_cacert = '/etc/ssl/certs/ca.pem'
++        self.ctx.auth_token = 'auth-token'
++        self.ctx.auth_uri = 'https://identity.example/v3'
++        self.ctx.expires_at = '2026-09-03T12:00:00Z'
++        self.ctx.insecure = True
++        self.ctx.is_target = True
++        self.ctx.is_trust_scoped = True
++        self.ctx.project_id = 'project-id'
++        self.ctx.project_name = 'project-name'
++        self.ctx.redelivered = True
++        self.ctx.region_name = 'RegionTwo'
++        self.ctx.service_catalog = service_catalog
++        self.ctx.trust_id = 'trust-id'
++        self.ctx.user_id = 'user-id'
++        self.ctx.user_name = 'user-name'
++        self.ctx.roles = roles
++
+         wf_service.create_workflows(WF)
+ 
+         # Start workflow.
+@@ -54,6 +88,44 @@ class ActionContextTest(base.EngineTestCase):
+         action_context = mocked_run.call_args[0][0]
+         exec_context = action_context.execution
+ 
++        self.assertEqual(
++            '/etc/ssl/certs/ca.pem', action_context.security.auth_cacert
++        )
++        self.assertEqual('auth-token', action_context.security.auth_token)
++        self.assertEqual(
++            'https://identity.example/v3', action_context.security.auth_uri
++        )
++        self.assertEqual(
++            '2026-09-03T12:00:00Z', action_context.security.expires_at
++        )
++        self.assertIs(True, action_context.security.insecure)
++        self.assertIs(True, action_context.security.is_target)
++        self.assertIs(True, action_context.security.is_trust_scoped)
++        self.assertEqual('project-id', action_context.security.project_id)
++        self.assertEqual(
++            'project-name', action_context.security.project_name
++        )
++        self.assertIs(True, action_context.security.redelivered)
++        self.assertEqual('RegionTwo', action_context.security.region_name)
++        self.assertEqual(
++            service_catalog, action_context.security.service_catalog
++        )
++        self.assertEqual('trust-id', action_context.security.trust_id)
++        self.assertEqual('user-id', action_context.security.user_id)
++        self.assertEqual('user-name', action_context.security.user_name)
++        self.assertEqual(
++            ['admin', 'powerops_operator'],
++            action_context.security.roles,
++        )
++        self.assertIsNone(exec_context.workflow_resume_authorization)
++
++        roles.append('member')
++
++        self.assertEqual(
++            ['admin', 'powerops_operator'],
++            action_context.security.roles,
++        )
++
+         with db_api.transaction():
+             # Note: We need to reread execution to access related tasks.
+             wf_ex = db_api.get_workflow_execution(wf_ex.id)
+@@ -72,3 +144,67 @@ class ActionContextTest(base.EngineTestCase):
+ 
+             self.assertEqual(exec_context.callback_url, callback_url)
+             self.assertEqual(exec_context.action_execution_id, a_ex.id)
++
++    @mock.patch.object(MyAction, 'run', return_value=None)
++    def test_resume_authorization_comes_from_workflow_runtime_context(
++            self, mocked_run):
++        expected_resume_record = {
++            'branch': 'admin',
++            'project_id': 'project-id',
++            'user_id': 'user-id',
++        }
++
++        wf_service.create_workflows(WF_PAUSED)
++
++        wf_ex = self.engine.start_workflow('wf_paused')
++
++        self.await_workflow_paused(wf_ex.id)
++
++        with db_api.transaction():
++            wf_ex = db_api.get_workflow_execution(wf_ex.id)
++            runtime_context = dict(wf_ex.runtime_context)
++            runtime_context[RESUME_AUTH_KEY] = expected_resume_record
++            wf_ex.runtime_context = runtime_context
++
++        self.engine.resume_workflow(wf_ex.id)
++
++        self.await_workflow_success(wf_ex.id)
++
++        action_context = mocked_run.call_args[0][0]
++
++        self.assertEqual(
++            expected_resume_record,
++            action_context.execution.workflow_resume_authorization,
++        )
++
++    def test_create_context_copies_resume_authorization(self):
++        roles = ['admin', 'powerops_operator']
++        resume_record = {
++            'branch': 'admin',
++            'project_id': 'project-id',
++            'user_id': 'user-id',
++        }
++
++        self.ctx.user_id = 'user-id'
++        self.ctx.roles = roles
++
++        action_context = auth_context.create_action_context({
++            'workflow_resume_authorization': resume_record,
++        })
++
++        roles.append('member')
++        resume_record['branch'] = 'powerops_operator'
++
++        self.assertEqual('user-id', action_context.security.user_id)
++        self.assertEqual(
++            ['admin', 'powerops_operator'],
++            action_context.security.roles,
++        )
++        self.assertEqual(
++            {
++                'branch': 'admin',
++                'project_id': 'project-id',
++                'user_id': 'user-id',
++            },
++            action_context.execution.workflow_resume_authorization,
++        )
+-- 
+2.49.0
+
