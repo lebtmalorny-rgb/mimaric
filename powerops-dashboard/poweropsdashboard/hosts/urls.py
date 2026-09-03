@@ -26,4 +26,18 @@ urlpatterns = [
         views.PlannedOperationView.as_view(),
         name='planned',
     ),
+    re_path(
+        r'^return/start/(?P<source_execution_id>'
+        r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-'
+        r'[0-9a-f]{4}-[0-9a-f]{12})/$',
+        views.StartReturnView.as_view(),
+        name='start_return',
+    ),
+    re_path(
+        r'^return/resume/(?P<execution_id>'
+        r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-'
+        r'[0-9a-f]{4}-[0-9a-f]{12})/$',
+        views.ResumeReturnView.as_view(),
+        name='resume_return',
+    ),
 ]

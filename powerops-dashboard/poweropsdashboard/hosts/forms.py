@@ -14,6 +14,55 @@ _HARD_OFF_FIELDS = frozenset({'allow_hard_off', 'confirm_hard_off'})
 _FRAMEWORK_FIELDS = frozenset({'csrfmiddlewaretoken'})
 
 
+class _ExactFieldsForm(forms.Form):
+
+    def __init__(self, *args, **kwargs):
+        data = kwargs.get('data')
+        if data is None and args:
+            data = args[0]
+        self._ambiguous_browser_data = self._is_ambiguous(data)
+        super().__init__(*args, **kwargs)
+
+    def _is_ambiguous(self, data):
+        if data is None:
+            return False
+        try:
+            keys = set(data.keys())
+        except (AttributeError, TypeError):
+            return True
+        allowed = set(self.base_fields) | _FRAMEWORK_FIELDS
+        if not keys.issubset(allowed):
+            return True
+        for key in keys:
+            if hasattr(data, 'getlist'):
+                values = data.getlist(key)
+            else:
+                value = data[key]
+                values = value if isinstance(value, (list, tuple)) else [value]
+            if len(values) != 1:
+                return True
+        return False
+
+    def clean(self):
+        cleaned_data = super().clean()
+        if self._ambiguous_browser_data:
+            raise forms.ValidationError(
+                _('The submitted fields are not valid for this operation.'))
+        return cleaned_data
+
+
+class StartReturnForm(_ExactFieldsForm):
+    submission_token = forms.CharField(widget=forms.HiddenInput)
+
+
+class ResumeReturnForm(_ExactFieldsForm):
+    stale_domains_checked = forms.BooleanField(
+        label=_('I verified that no stale domains remain on the host'),
+        required=True,
+    )
+    submission_token = forms.CharField(widget=forms.HiddenInput)
+
+
 class PlannedOperationForm(forms.Form):
     typed_host = forms.CharField(
         label=_('Type the exact compute host name'),

@@ -1,0 +1,9 @@
+.powerops-manifest {
+  font-family: monospace;
+  overflow-wrap: anywhere;
+}
+
+[data-powerops-execution-state],
+[data-powerops-task-state] {
+  font-weight: 600;
+}

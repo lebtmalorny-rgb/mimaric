@@ -44,6 +44,19 @@ class MistralPowerOpsClient:
             workflow_input=dict(payload),
         )
 
+    def start_return(self, payload):
+        return self._client.executions.create(
+            constants.POWER_ON_AND_RETURN,
+            workflow_input=dict(payload),
+        )
+
+    def resume_return(self, execution_id):
+        return self._client.executions.update(
+            execution_id,
+            'RUNNING',
+            env={'stale_domains_checked': True},
+        )
+
     def get_execution(self, execution_id):
         return self._client.executions.get(execution_id)
 
@@ -74,13 +87,17 @@ class MockPowerOpsClient:
         return copy.deepcopy(mock_data.INVENTORY_EXECUTION)
 
     def start_host_status(self, host, segment_uuid):
-        expected_input = mock_data.STATUS_EXECUTION['input']
-        if (host != expected_input['host']
-                or segment_uuid != expected_input['segment_uuid']):
-            raise exceptions.InvalidBackendData(
-                'Mock host status fixture is unavailable'
-            )
-        return copy.deepcopy(mock_data.STATUS_EXECUTION)
+        for execution in (
+                mock_data.STATUS_EXECUTION,
+                mock_data.RETURN_STATUS_EXECUTION,
+                mock_data.ACTION_STATUS_EXECUTION):
+            expected_input = execution['input']
+            if (host == expected_input['host']
+                    and segment_uuid == expected_input['segment_uuid']):
+                return copy.deepcopy(execution)
+        raise exceptions.InvalidBackendData(
+            'Mock host status fixture is unavailable'
+        )
 
     def get_execution(self, execution_id):
         for execution in mock_data.EXECUTIONS:

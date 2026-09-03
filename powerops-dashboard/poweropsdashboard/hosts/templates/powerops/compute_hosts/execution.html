@@ -1,19 +1,28 @@
 {% extends 'base.html' %}
-{% load i18n %}
+{% load i18n static %}
 
 {% block title %}{% trans "PowerOps Execution" %}{% endblock %}
+
+{% block css %}
+  {{ block.super }}
+  <link rel="stylesheet"
+        href="{% static 'poweropsdashboard/css/powerops.css' %}">
+{% endblock %}
 
 {% block main %}
   <div class="page-header">
     <h1>{% trans "PowerOps Execution" %}</h1>
   </div>
+  <div data-powerops-execution-poll
+       data-powerops-execution-id="{{ execution.id }}"
+       data-powerops-execution-url="{% url 'horizon:powerops:compute_hosts:execution' execution.id %}">
   <dl class="dl-horizontal">
     <dt>{% trans "Execution ID" %}</dt>
     <dd>{{ execution.id }}</dd>
     <dt>{% trans "Workflow" %}</dt>
     <dd>{{ execution.workflow_name }}</dd>
     <dt>{% trans "State" %}</dt>
-    <dd>{{ execution.state }}</dd>
+    <dd data-powerops-execution-state>{{ execution.state }}</dd>
   </dl>
   {% if execution.verification_required %}
     <p class="alert alert-danger">
@@ -32,6 +41,22 @@
       {% endfor %}
     </dl>
   {% endif %}
+  {% if can_start_return %}
+    <p>
+      <a class="btn btn-primary"
+         href="{% url 'horizon:powerops:compute_hosts:start_return' execution.id %}">
+        {% trans "Start controlled power-on and return" %}
+      </a>
+    </p>
+  {% endif %}
+  {% if can_resume_return %}
+    <p>
+      <a class="btn btn-warning"
+         href="{% url 'horizon:powerops:compute_hosts:resume_return' execution.id %}">
+        {% trans "Inspect and resume controlled return" %}
+      </a>
+    </p>
+  {% endif %}
   <h2>{% trans "Tasks and actions" %}</h2>
   <table class="table table-striped">
     <thead>
@@ -46,11 +71,13 @@
         <tr>
           <td>{{ task.name }}</td>
           <td>{{ task.task_type|default:"-" }}</td>
-          <td>{{ task.state }}</td>
+          <td data-powerops-task-state
+              data-powerops-task-id="{{ task.id }}">{{ task.state }}</td>
         </tr>
       {% empty %}
         <tr><td colspan="3">{% trans "No task state available" %}</td></tr>
       {% endfor %}
     </tbody>
   </table>
+  </div>
 {% endblock %}
