@@ -1,0 +1,159 @@
+From 899e34077910c63bf179789956f47d5135714f59 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Thu, 3 Sep 2026 16:00:05 +0300
+Subject: [PATCH] feat: package PowerOps Horizon and Mistral components
+
+---
+ docker/horizon/extend_start.sh       |  7 +++
+ kolla/common/sources.py              |  8 +++
+ kolla/tests/test_powerops_plugins.py | 87 ++++++++++++++++++++++++++++
+ 3 files changed, 102 insertions(+)
+ create mode 100644 kolla/tests/test_powerops_plugins.py
+
+diff --git a/docker/horizon/extend_start.sh b/docker/horizon/extend_start.sh
+index 506c503c5..9b40b69e4 100644
+--- a/docker/horizon/extend_start.sh
++++ b/docker/horizon/extend_start.sh
+@@ -143,6 +143,12 @@ function config_mistral_dashboard {
+         "${SITE_PACKAGES}/openstack_dashboard/local/enabled/_50_mistral.py"
+ }
+ 
++function config_powerops_dashboard {
++    config_dashboard "${ENABLE_POWEROPS:-no}" \
++        "${SITE_PACKAGES}/poweropsdashboard/enabled/_50_powerops.py" \
++        "${SITE_PACKAGES}/openstack_dashboard/local/enabled/_50_powerops.py"
++}
++
+ function config_neutron_vpnaas_dashboard {
+     config_dashboard "${ENABLE_NEUTRON_VPNAAS:-no}" \
+         "${SITE_PACKAGES}/neutron_vpnaas_dashboard/enabled/_7100_project_vpn_panel.py" \
+@@ -233,6 +239,7 @@ config_magnum_dashboard
+ config_manila_ui
+ config_masakari_dashboard
+ config_mistral_dashboard
++config_powerops_dashboard
+ config_neutron_vpnaas_dashboard
+ config_octavia_dashboard
+ config_tacker_dashboard
+diff --git a/kolla/common/sources.py b/kolla/common/sources.py
+index 0c010d6a9..2a204cd37 100644
+--- a/kolla/common/sources.py
++++ b/kolla/common/sources.py
+@@ -127,6 +127,10 @@ SOURCES = {
+         'type': 'url',
+         'location': ('$tarballs_base/openstack/octavia-dashboard/'
+                      'octavia-dashboard-${openstack_branch}.tar.gz')},
++    'horizon-plugin-powerops-dashboard': {
++        'type': 'local',
++        'location': '$locals_base/powerops-dashboard',
++        'enabled': False},
+     'horizon-plugin-tacker-dashboard': {
+         'type': 'url',
+         'location': ('$tarballs_base/openstack/tacker-horizon/'
+@@ -209,6 +213,10 @@ SOURCES = {
+         'type': 'url',
+         'location': ('$tarballs_base/openstack/mistral/'
+                      'mistral-${openstack_branch}.tar.gz')},
++    'mistral-base-plugin-mistral-lib': {
++        'type': 'local',
++        'location': '$locals_base/worktrees/mistral-lib-horizon-clean',
++        'enabled': False},
+     'mistral-base-plugin-tacker': {
+         'type': 'url',
+         'location': ('$tarballs_base/openstack/tacker/'
+diff --git a/kolla/tests/test_powerops_plugins.py b/kolla/tests/test_powerops_plugins.py
+new file mode 100644
+index 000000000..8684e3f70
+--- /dev/null
++++ b/kolla/tests/test_powerops_plugins.py
+@@ -0,0 +1,87 @@
++# Licensed under the Apache License, Version 2.0 (the "License"); you may
++# not use this file except in compliance with the License. You may obtain
++# a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++# License for the specific language governing permissions and limitations
++# under the License.
++
++import os
++from unittest import mock
++
++import fixtures
++
++from kolla.common import sources
++from kolla.image import build
++from kolla.tests import base
++
++
++POWEROPS_SOURCES = {
++    'horizon-plugin-powerops-dashboard': {
++        'type': 'local',
++        'location': '$locals_base/powerops-dashboard',
++        'enabled': False,
++    },
++    'mistral-base-plugin-mistral-lib': {
++        'type': 'local',
++        'location': '$locals_base/worktrees/mistral-lib-horizon-clean',
++        'enabled': False,
++    },
++}
++
++
++class PowerOpsPluginTest(base.TestCase):
++
++    def _write_image(self, images_dir, name):
++        image_dir = os.path.join(images_dir, name)
++        os.makedirs(image_dir)
++        with open(os.path.join(image_dir, 'Dockerfile'), 'w') as dockerfile:
++            dockerfile.write('FROM base\n')
++
++    @mock.patch('kolla.image.kolla_worker.engine.getEngineClient')
++    def test_sources_are_disabled_local_and_have_exact_parents(
++            self, mock_engine):
++        for name, expected in POWEROPS_SOURCES.items():
++            self.assertEqual(expected, sources.SOURCES.get(name))
++
++        images_dir = self.useFixture(fixtures.TempDir()).path
++        for image_name in ('horizon', 'mistral-base', 'mistral'):
++            self._write_image(images_dir, image_name)
++
++        worker = build.KollaWorker(self.conf)
++        worker.working_dir = images_dir
++        worker.find_dockerfiles()
++        worker.build_image_list()
++
++        parents = {}
++        for image in worker.images:
++            for plugin in image.plugins:
++                parents.setdefault(plugin['name'], set()).add(image.name)
++
++        self.assertEqual(
++            {'horizon'}, parents['horizon-plugin-powerops-dashboard'])
++        self.assertEqual(
++            {'mistral-base'},
++            parents['mistral-base-plugin-mistral-lib'])
++
++    def test_horizon_activation_is_opt_in_and_precedes_static_collection(self):
++        script_path = os.path.abspath(os.path.join(
++            os.path.dirname(__file__), '..', '..',
++            'docker', 'horizon', 'extend_start.sh'))
++        with open(script_path) as script_file:
++            script = script_file.read()
++
++        expected_function = '''function config_powerops_dashboard {
++    config_dashboard "${ENABLE_POWEROPS:-no}" \\
++        "${SITE_PACKAGES}/poweropsdashboard/enabled/_50_powerops.py" \\
++        "${SITE_PACKAGES}/openstack_dashboard/local/enabled/_50_powerops.py"
++}'''
++        self.assertIn(expected_function, script)
++        self.assertLess(
++            script.index('\nconfig_powerops_dashboard\n'),
++            script.index('\nif settings_changed; then\n'))
++        self.assertNotIn('pip install', script)
+-- 
+2.49.0
+
