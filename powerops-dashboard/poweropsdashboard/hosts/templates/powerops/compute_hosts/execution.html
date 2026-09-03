@@ -1,0 +1,56 @@
+{% extends 'base.html' %}
+{% load i18n %}
+
+{% block title %}{% trans "PowerOps Execution" %}{% endblock %}
+
+{% block main %}
+  <div class="page-header">
+    <h1>{% trans "PowerOps Execution" %}</h1>
+  </div>
+  <dl class="dl-horizontal">
+    <dt>{% trans "Execution ID" %}</dt>
+    <dd>{{ execution.id }}</dd>
+    <dt>{% trans "Workflow" %}</dt>
+    <dd>{{ execution.workflow_name }}</dd>
+    <dt>{% trans "State" %}</dt>
+    <dd>{{ execution.state }}</dd>
+  </dl>
+  {% if execution.verification_required %}
+    <p class="alert alert-danger">
+      {% trans "Verification required before another operation." %}
+    </p>
+  {% endif %}
+  {% if execution.state_info %}
+    <p>{{ execution.state_info }}</p>
+  {% endif %}
+  {% if execution.output %}
+    <h2>{% trans "Sanitized output" %}</h2>
+    <dl>
+      {% for key, value in execution.output.items %}
+        <dt>{{ key }}</dt>
+        <dd>{{ value }}</dd>
+      {% endfor %}
+    </dl>
+  {% endif %}
+  <h2>{% trans "Tasks and actions" %}</h2>
+  <table class="table table-striped">
+    <thead>
+      <tr>
+        <th>{% trans "Task" %}</th>
+        <th>{% trans "Action type" %}</th>
+        <th>{% trans "State" %}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for task in tasks %}
+        <tr>
+          <td>{{ task.name }}</td>
+          <td>{{ task.task_type|default:"-" }}</td>
+          <td>{{ task.state }}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="3">{% trans "No task state available" %}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endblock %}
