@@ -34,6 +34,16 @@ class MistralPowerOpsClient:
             },
         )
 
+    def start_planned(self, operation, payload):
+        workflow = {
+            'power_off': constants.PLANNED_POWER_OFF,
+            'reboot': constants.PLANNED_REBOOT,
+        }[operation]
+        return self._client.executions.create(
+            workflow,
+            workflow_input=dict(payload),
+        )
+
     def get_execution(self, execution_id):
         return self._client.executions.get(execution_id)
 

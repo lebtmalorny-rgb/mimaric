@@ -44,6 +44,34 @@ def blocking_reason(host_row):
     return constants.BLOCKING_REASON_MESSAGES[host_row.blocking_reason]
 
 
+class PlannedOperationAction(tables.LinkAction):
+    url = 'horizon:powerops:compute_hosts:planned'
+    operation = None
+
+    def allowed(self, request, datum):
+        active = getattr(self.table, 'active_executions', {})
+        return (datum.operable
+                and (datum.host, datum.segment_uuid) not in active)
+
+    def get_link_url(self, datum):
+        return reverse(
+            self.url,
+            args=(self.operation, datum.segment_uuid, datum.host),
+        )
+
+
+class PlannedPowerOffAction(PlannedOperationAction):
+    name = 'planned_power_off'
+    verbose_name = _('Plan power-off')
+    operation = 'power_off'
+
+
+class PlannedRebootAction(PlannedOperationAction):
+    name = 'planned_reboot'
+    verbose_name = _('Plan reboot')
+    operation = 'reboot'
+
+
 class ActiveExecutionColumn(tables.Column):
 
     def get_raw_data(self, datum):
@@ -122,7 +150,7 @@ class ComputeHostsTable(tables.DataTable):
         name = 'compute_hosts'
         verbose_name = _('Compute Hosts')
         table_actions = ()
-        row_actions = ()
+        row_actions = (PlannedPowerOffAction, PlannedRebootAction)
         multi_select = False
         status_columns = (
             'power_state',

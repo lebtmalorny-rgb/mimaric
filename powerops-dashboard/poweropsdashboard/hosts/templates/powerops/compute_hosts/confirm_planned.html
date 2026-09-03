@@ -1,0 +1,78 @@
+{% extends 'base.html' %}
+{% load i18n %}
+
+{% block title %}{% trans "Confirm planned PowerOps operation" %}{% endblock %}
+
+{% block main %}
+  <div class="page-header">
+    <h1>{% trans "Confirm planned PowerOps operation" %}</h1>
+  </div>
+  <p>
+    {% blocktrans with operation=operation_label host=host_row.host %}
+      Confirm {{ operation }} for compute host {{ host }}.
+    {% endblocktrans %}
+  </p>
+  <p class="alert alert-warning">
+    {% trans "This infrastructure operation affects listed instances from all projects." %}
+  </p>
+  {% if verification_required %}
+    <p class="alert alert-danger">
+      {% trans "Verification required: the submission result is uncertain. Do not retry. Read Mistral executions and verify infrastructure state first." %}
+    </p>
+    <p>
+      <a href="{% url 'horizon:powerops:compute_hosts:index' %}">
+        {% trans "Read PowerOps executions" %}
+      </a>
+    </p>
+  {% else %}
+    <dl class="dl-horizontal">
+      <dt>{% trans "Region" %}</dt>
+      <dd>{{ host_row.region_name }}</dd>
+      <dt>{% trans "Compute host" %}</dt>
+      <dd>{{ host_row.host }}</dd>
+      <dt>{% trans "Masakari segment" %}</dt>
+      <dd>{{ host_row.segment_uuid }}</dd>
+      <dt>{% trans "Selected policy" %}</dt>
+      <dd>{{ selected_policy }}</dd>
+    </dl>
+    <h2>{% trans "All-project instance impact" %}</h2>
+    <table class="table table-striped">
+      <thead>
+        <tr>
+          <th>{% trans "UUID" %}</th>
+          <th>{% trans "Name" %}</th>
+          <th>{% trans "Project ID" %}</th>
+          <th>{% trans "Status" %}</th>
+          <th>{% trans "Selected policy" %}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for instance in host_row.instances %}
+          <tr>
+            <td>{{ instance.id }}</td>
+            <td>{{ instance.name }}</td>
+            <td>{{ instance.project_id }}</td>
+            <td>{{ instance.status }}</td>
+            <td>{{ selected_policy }}</td>
+          </tr>
+        {% empty %}
+          <tr>
+            <td colspan="5">{% trans "No instances currently mapped to this host" %}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if show_hard_off %}
+      <p class="alert alert-danger">
+        {% trans "Hard power-off is destructive and requires both admin controls below." %}
+      </p>
+    {% endif %}
+    <form method="post">
+      {% csrf_token %}
+      {{ form.as_p }}
+      <button type="submit" class="btn btn-danger">
+        {% trans "Start planned operation" %}
+      </button>
+    </form>
+  {% endif %}
+{% endblock %}
