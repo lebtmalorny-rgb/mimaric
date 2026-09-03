@@ -242,17 +242,21 @@ def _parse_row(value):
 
     instances = tuple(_parse_instance(item)
                       for item in value['instances'])
-    if value['instance_count'] != len(instances):
-        raise _invalid()
-    if len({item.id for item in instances}) != len(instances):
-        raise _invalid()
-
     operable = _boolean(value['operable'])
     blocking_reason = value['blocking_reason']
     if operable:
         if blocking_reason is not None:
             raise _invalid()
     elif blocking_reason not in constants.BLOCKING_REASONS:
+        raise _invalid()
+
+    instance_count = value['instance_count']
+    if instance_count < len(instances):
+        raise _invalid()
+    if (instance_count != len(instances)
+            and (operable or blocking_reason != 'invalid_instance_data')):
+        raise _invalid()
+    if len({item.id for item in instances}) != len(instances):
         raise _invalid()
 
     region_name = _string(value['region_name'])
@@ -277,11 +281,37 @@ def _parse_row(value):
             value['nova_state'], {'up', 'down'}, optional=True),
         masakari_maintenance=_boolean(
             value['masakari_maintenance'], optional=True),
-        instance_count=value['instance_count'],
+        instance_count=instance_count,
         instances=instances,
         operable=operable,
         blocking_reason=blocking_reason,
     )
+
+
+def _validate_inventory_relationships(rows):
+    rows_by_host = {}
+    rows_by_instance = {}
+
+    for row in rows:
+        rows_by_host.setdefault(row.host, []).append(row)
+        for instance in row.instances:
+            rows_by_instance.setdefault(instance.id, []).append(row)
+
+    for host_rows in rows_by_host.values():
+        if len(host_rows) > 1 and any(
+                row.operable
+                or row.blocking_reason != 'ambiguous_masakari_host'
+                for row in host_rows):
+            raise _invalid()
+
+    for instance_rows in rows_by_instance.values():
+        if len({row.host for row in instance_rows}) <= 1:
+            continue
+        if any(
+                row.operable
+                or row.blocking_reason != 'invalid_instance_data'
+                for row in instance_rows):
+            raise _invalid()
 
 
 def parse_inventory_execution(execution):
@@ -296,9 +326,7 @@ def parse_inventory_execution(execution):
         raise _invalid()
 
     rows = tuple(_parse_row(item) for item in output['result'])
-    targets = {(row.host, row.segment_uuid) for row in rows}
-    if len(targets) != len(rows):
-        raise _invalid()
+    _validate_inventory_relationships(rows)
     return rows
 
 
