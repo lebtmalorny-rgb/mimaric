@@ -28,6 +28,8 @@ LOG = logging.getLogger(__name__)
 
 _HOST_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]*$')
 _CORRELATION_RE = re.compile(r'^[A-Za-z0-9._-]{1,128}$')
+_EXCEPTION_TYPE_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]{0,127}$')
+_UNAVAILABLE_MESSAGE = 'Обязательный сервис временно недоступен.'
 _SOURCE_INPUT_KEYS = frozenset({
     'host', 'segment_uuid', 'instance_policy', 'allow_hard_off',
 })
@@ -178,14 +180,12 @@ def _return_payload(source_execution_id, execution):
             'Source planned hard-off value is malformed')
 
     output = _mapping(_resource_value(execution, 'output'))
-    if (not set(output).issubset(_SOURCE_OUTPUT_KEYS)
-            or 'stopped_instance_ids' not in output):
+    if set(output) != _SOURCE_OUTPUT_KEYS:
         raise submission.InvalidSubmission(
             'Source planned power-off output is malformed')
     manifest = _manifest(output['stopped_instance_ids'])
-    if 'result' in output:
-        _validate_source_result(_mapping(output['result']),
-                                workflow_input, manifest)
+    _validate_source_result(
+        _mapping(output['result']), workflow_input, manifest)
 
     return {
         'host': host,
@@ -249,7 +249,7 @@ def _validate_paused_tasks(tasks):
     if manifest_restart_started:
         raise submission.SubmissionConflict(
             'Stopped instance restart has already started')
-    if len(active) != 1 or active[0][0] != 'operator_inspection_gate':
+    if active != [('operator_inspection_gate', 'IDLE')]:
         raise submission.SubmissionConflict(
             'PowerOps return is not at the operator inspection gate')
     return False
@@ -352,17 +352,35 @@ def _single_post_value(post, name):
     return values[0]
 
 
-def _classify_request_error(request, exc):
-    status_code, public_message, _verification_required = (
-        error_handling.classify_error(exc))
+def _safe_log_fields(request, exc):
     correlation_id = getattr(request, 'request_id', None)
     if (not isinstance(correlation_id, str)
             or not _CORRELATION_RE.fullmatch(correlation_id)):
         correlation_id = 'unavailable'
+    exception_type = type(exc).__name__
+    if not _EXCEPTION_TYPE_RE.fullmatch(exception_type):
+        exception_type = 'Exception'
+    return correlation_id, exception_type
+
+
+def _log_uncertain_mutation_response(request, exc):
+    correlation_id, exception_type = _safe_log_fields(request, exc)
+    LOG.error(
+        'PowerOps mutation response is uncertain '
+        '[request_id=%s, exception_type=%s]',
+        correlation_id,
+        exception_type,
+    )
+
+
+def _classify_request_error(request, exc):
+    status_code, public_message, _verification_required = (
+        error_handling.classify_error(exc))
+    correlation_id, exception_type = _safe_log_fields(request, exc)
     LOG.warning(
         'PowerOps HTTP request rejected [request_id=%s, exception_type=%s]',
         correlation_id,
-        type(exc).__name__,
+        exception_type,
     )
     return status_code, public_message, _verification_required
 
@@ -508,7 +526,7 @@ class PlannedOperationView(ProtectedViewMixin, views.HorizonTemplateView):
         return client, host_row
 
     def _context(self, form, host_row, operation,
-                 verification_required=False):
+                 verification_required=False, public_error=None):
         selected_policy = form['instance_policy'].value()
         return {
             'form': form,
@@ -524,6 +542,7 @@ class PlannedOperationView(ProtectedViewMixin, views.HorizonTemplateView):
                 and self.authorization.is_admin
             ),
             'verification_required': verification_required,
+            'public_error': public_error,
         }
 
     def get(self, request, operation, segment_uuid, host, *args, **kwargs):
@@ -587,11 +606,28 @@ class PlannedOperationView(ProtectedViewMixin, views.HorizonTemplateView):
         try:
             execution = client.start_planned(
                 operation, form.workflow_input())
+        except Exception as exc:
+            status_code, public_message, verification_required = (
+                _classify_request_error(request, exc))
+            if verification_required:
+                return render(
+                    request,
+                    self.template_name,
+                    self._context(
+                        form,
+                        host_row,
+                        operation,
+                        verification_required=True,
+                        public_error=public_message,
+                    ),
+                    status=status_code,
+                )
+            return HttpResponse(public_message, status=status_code)
+
+        try:
             execution_id = presentation.execution_id(execution)
-        except exceptions.MockMutationDisabled:
-            return self._conflict(
-                'PowerOps mutations are disabled in mock mode')
-        except TimeoutError:
+        except Exception as exc:
+            _log_uncertain_mutation_response(request, exc)
             return render(
                 request,
                 self.template_name,
@@ -600,12 +636,8 @@ class PlannedOperationView(ProtectedViewMixin, views.HorizonTemplateView):
                     host_row,
                     operation,
                     verification_required=True,
+                    public_error=_UNAVAILABLE_MESSAGE,
                 ),
-                status=503,
-            )
-        except Exception:
-            return HttpResponse(
-                'PowerOps submission is unavailable; verification required',
                 status=503,
             )
 
@@ -703,7 +735,8 @@ class StartReturnView(ProtectedViewMixin, views.HorizonTemplateView):
 
         try:
             execution_id = presentation.execution_id(result)
-        except Exception:
+        except Exception as exc:
+            _log_uncertain_mutation_response(request, exc)
             return render(
                 request,
                 self.template_name,
@@ -711,8 +744,7 @@ class StartReturnView(ProtectedViewMixin, views.HorizonTemplateView):
                     form,
                     payload,
                     verification_required=True,
-                    public_error=(
-                        'Обязательный сервис временно недоступен.'),
+                    public_error=_UNAVAILABLE_MESSAGE,
                 ),
                 status=503,
             )
@@ -813,7 +845,8 @@ class ResumeReturnView(ProtectedViewMixin, views.HorizonTemplateView):
             if returned_id != execution_id:
                 raise exceptions.InvalidBackendData(
                     'Resume response identifier changed')
-        except Exception:
+        except Exception as exc:
+            _log_uncertain_mutation_response(request, exc)
             return render(
                 request,
                 self.template_name,
@@ -823,8 +856,7 @@ class ResumeReturnView(ProtectedViewMixin, views.HorizonTemplateView):
                     payload,
                     status,
                     verification_required=True,
-                    public_error=(
-                        'Обязательный сервис временно недоступен.'),
+                    public_error=_UNAVAILABLE_MESSAGE,
                 ),
                 status=503,
             )

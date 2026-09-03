@@ -204,6 +204,39 @@ class ReturnFormTests(SimpleTestCase):
         self.assertFalse(forged.is_valid())
 
 
+class MutationResponseLoggingTests(SimpleTestCase):
+
+    @mock.patch.object(views.LOG, 'error')
+    def test_uncertain_response_log_bounds_correlation_and_type(
+            self, log_error):
+        views._log_uncertain_mutation_response(
+            SimpleNamespace(request_id='request.safe-1'),
+            RuntimeError('password=must-not-be-logged'),
+        )
+        unsafe_type = type('X' * 129, (Exception,), {})
+        views._log_uncertain_mutation_response(
+            SimpleNamespace(request_id='bad\ncorrelation'),
+            unsafe_type('token=must-not-be-logged'),
+        )
+
+        self.assertEqual([
+            mock.call(
+                'PowerOps mutation response is uncertain '
+                '[request_id=%s, exception_type=%s]',
+                'request.safe-1',
+                'RuntimeError',
+            ),
+            mock.call(
+                'PowerOps mutation response is uncertain '
+                '[request_id=%s, exception_type=%s]',
+                'unavailable',
+                'Exception',
+            ),
+        ], log_error.call_args_list)
+        self.assertNotIn('password', str(log_error.call_args_list))
+        self.assertNotIn('token=', str(log_error.call_args_list))
+
+
 class StartReturnViewTests(SimpleTestCase):
 
     @mock.patch.object(views.api, 'get_client')
@@ -329,6 +362,80 @@ class StartReturnViewTests(SimpleTestCase):
                     self.assertEqual(422, response.status_code)
                     client.start_return.assert_not_called()
 
+    @mock.patch.object(views.api, 'get_client')
+    @mock.patch.object(
+        views.auth,
+        'authorize_user',
+        return_value=auth.Authorization('powerops_operator', False),
+    )
+    def test_source_output_requires_exact_result_and_matching_manifest(
+            self, authorize, get_client):
+        missing_result = _source()
+        missing_result['output'].pop('result')
+        extra_output = _source()
+        extra_output['output']['extra'] = 'forged'
+        mismatched_manifest = _source()
+        mismatched_manifest['output']['result'][
+            'stopped_instance_ids'] = [SECOND_INSTANCE_UUID]
+
+        with mock.patch(
+                'django.contrib.auth.middleware.auth.get_user',
+                return_value=_user()):
+            for name, source in (
+                    ('missing result', missing_result),
+                    ('extra output', extra_output),
+                    ('mismatched manifest', mismatched_manifest)):
+                with self.subTest(name=name):
+                    client = _adapter()
+                    client.get_execution.return_value = source
+                    client.get_execution.side_effect = None
+                    get_client.return_value = client
+
+                    response = self.client.get(
+                        '/powerops/return/start/{}/'.format(SOURCE_UUID))
+
+                    self.assertEqual(422, response.status_code)
+                    client.start_return.assert_not_called()
+
+    @mock.patch.object(views.api, 'get_client')
+    @mock.patch.object(
+        views.auth,
+        'authorize_user',
+        return_value=auth.Authorization('powerops_operator', False),
+    )
+    def test_malformed_start_response_is_uncertain_logged_and_not_retried(
+            self, authorize, get_client):
+        client = _adapter()
+        client.start_return.return_value = {
+            'id': 'password=must-not-be-logged',
+        }
+        get_client.return_value = client
+
+        with mock.patch(
+                'django.contrib.auth.middleware.auth.get_user',
+                return_value=_user()), mock.patch.object(
+                    views.LOG, 'error') as log_error:
+            response = self.client.get(
+                '/powerops/return/start/{}/'.format(SOURCE_UUID))
+            token = _token(response)
+            response = self.client.post(
+                '/powerops/return/start/{}/'.format(SOURCE_UUID),
+                {'submission_token': token},
+            )
+
+        content = response.content.decode('utf-8')
+        self.assertEqual(503, response.status_code)
+        self.assertIn('Обязательный сервис временно недоступен.', content)
+        self.assertIn('Verification required', content)
+        client.start_return.assert_called_once()
+        log_error.assert_called_once_with(
+            'PowerOps mutation response is uncertain '
+            '[request_id=%s, exception_type=%s]',
+            'unavailable',
+            'InvalidBackendData',
+        )
+        self.assertNotIn('password', str(log_error.call_args))
+
     @override_settings(POWEROPS_ALLOWED_USER_NAMES=[])
     @mock.patch.object(views.api, 'get_client')
     def test_authorization_is_rechecked_after_allowlist_removal(
@@ -430,6 +537,60 @@ class ResumeReturnViewTests(SimpleTestCase):
         'authorize_user',
         return_value=auth.Authorization('powerops_operator', False),
     )
+    def test_pause_before_gate_requires_exact_idle_task_state(
+            self, authorize, get_client):
+        with mock.patch(
+                'django.contrib.auth.middleware.auth.get_user',
+                return_value=_user()):
+            for state in ('RUNNING', 'WAITING', 'DELAYED', 'PAUSED'):
+                with self.subTest(state=state):
+                    client = _adapter()
+                    client.list_tasks.return_value = _tasks(
+                        gate_state=state)
+                    get_client.return_value = client
+
+                    response = self.client.get(
+                        '/powerops/return/resume/{}/'.format(RETURN_UUID))
+
+                    self.assertEqual(409, response.status_code)
+                    client.resume_return.assert_not_called()
+
+    @mock.patch.object(views.api, 'get_client')
+    @mock.patch.object(
+        views.auth,
+        'authorize_user',
+        return_value=auth.Authorization('powerops_operator', False),
+    )
+    def test_any_created_return_to_service_task_rejects_resume(
+            self, authorize, get_client):
+        with mock.patch(
+                'django.contrib.auth.middleware.auth.get_user',
+                return_value=_user()):
+            for state in (
+                    'IDLE', 'RUNNING', 'WAITING', 'DELAYED', 'PAUSED',
+                    'SUCCESS', 'ERROR', 'CANCELLED'):
+                with self.subTest(state=state):
+                    client = _adapter()
+                    client.list_tasks.return_value = _tasks() + [{
+                        'id': 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
+                        'name': 'return_to_service',
+                        'type': 'ACTION',
+                        'state': state,
+                    }]
+                    get_client.return_value = client
+
+                    response = self.client.get(
+                        '/powerops/return/resume/{}/'.format(RETURN_UUID))
+
+                    self.assertEqual(409, response.status_code)
+                    client.resume_return.assert_not_called()
+
+    @mock.patch.object(views.api, 'get_client')
+    @mock.patch.object(
+        views.auth,
+        'authorize_user',
+        return_value=auth.Authorization('powerops_operator', False),
+    )
     def test_resume_rejects_browser_env_identity_and_manifest(
             self, authorize, get_client):
         client = _adapter()
@@ -486,3 +647,45 @@ class ResumeReturnViewTests(SimpleTestCase):
         self.assertEqual(403, response.status_code)
         self.assertEqual(2, authorize.call_count)
         get_client.return_value.resume_return.assert_not_called()
+
+    @mock.patch.object(views.api, 'get_client')
+    @mock.patch.object(
+        views.auth,
+        'authorize_user',
+        return_value=auth.Authorization('powerops_operator', False),
+    )
+    def test_malformed_resume_response_is_uncertain_logged_and_not_retried(
+            self, authorize, get_client):
+        client = _adapter()
+        client.resume_return.return_value = {
+            'id': 'token=must-not-be-logged',
+        }
+        get_client.return_value = client
+
+        with mock.patch(
+                'django.contrib.auth.middleware.auth.get_user',
+                return_value=_user()), mock.patch.object(
+                    views.LOG, 'error') as log_error:
+            response = self.client.get(
+                '/powerops/return/resume/{}/'.format(RETURN_UUID))
+            token = _token(response)
+            response = self.client.post(
+                '/powerops/return/resume/{}/'.format(RETURN_UUID),
+                {
+                    'submission_token': token,
+                    'stale_domains_checked': 'on',
+                },
+            )
+
+        content = response.content.decode('utf-8')
+        self.assertEqual(503, response.status_code)
+        self.assertIn('Обязательный сервис временно недоступен.', content)
+        self.assertIn('Verification required', content)
+        client.resume_return.assert_called_once_with(RETURN_UUID)
+        log_error.assert_called_once_with(
+            'PowerOps mutation response is uncertain '
+            '[request_id=%s, exception_type=%s]',
+            'unavailable',
+            'InvalidBackendData',
+        )
+        self.assertNotIn('token=', str(log_error.call_args))

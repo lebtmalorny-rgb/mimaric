@@ -15,6 +15,9 @@
   <p class="alert alert-warning">
     {% trans "This infrastructure operation affects listed instances from all projects." %}
   </p>
+  {% if public_error %}
+    <p class="alert alert-danger">{{ public_error }}</p>
+  {% endif %}
   {% if verification_required %}
     <p class="alert alert-danger">
       {% trans "Verification required: the submission result is uncertain. Do not retry. Read Mistral executions and verify infrastructure state first." %}

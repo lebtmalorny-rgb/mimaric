@@ -7,6 +7,7 @@ import threading
 from types import SimpleNamespace
 from unittest import mock
 
+from django.core.exceptions import PermissionDenied
 from django.test import SimpleTestCase
 from horizon.utils import file_discovery
 
@@ -780,6 +781,10 @@ class PlannedOperationViewTests(SimpleTestCase):
         self.assertEqual(503, response.status_code)
         self.assertIn(
             'verification required', response.content.decode('utf-8').lower())
+        self.assertIn(
+            'Обязательный сервис временно недоступен.',
+            response.content.decode('utf-8'),
+        )
         self.assertEqual(1, self.adapter.start_planned.call_count)
 
         self.adapter.start_planned.side_effect = AssertionError(
@@ -789,6 +794,80 @@ class PlannedOperationViewTests(SimpleTestCase):
         self.assertEqual(200, following.status_code)
         self.assertEqual(1, self.adapter.start_planned.call_count)
         self.assertGreaterEqual(self.adapter.list_executions.call_count, 3)
+
+    def test_planned_mutation_errors_use_fixed_shared_classification(self):
+        conflict = RuntimeError('password=must-not-render')
+        conflict.error_code = 409
+        cases = (
+            (
+                PermissionDenied('token=must-not-render'),
+                403,
+                'Недостаточно прав для операции PowerOps.',
+            ),
+            (
+                conflict,
+                409,
+                'Хост занят или его состояние изменилось.',
+            ),
+            (
+                submission.InvalidSubmission('token=must-not-render'),
+                422,
+                'Параметры операции не прошли проверку.',
+            ),
+        )
+
+        for error, status_code, public_message in cases:
+            with self.subTest(status_code=status_code):
+                self._set_valid_reads()
+                self.adapter.start_planned.reset_mock()
+                self.adapter.start_planned.side_effect = error
+                token = _token_from(self.client.get(_url()))
+
+                response = self.client.post(_url(), _post(token))
+
+                self.assertEqual(status_code, response.status_code)
+                self.assertEqual(
+                    public_message, response.content.decode('utf-8'))
+                self.assertNotIn(
+                    'must-not-render', response.content.decode('utf-8'))
+                self.assertEqual(1, self.adapter.start_planned.call_count)
+
+    def test_unknown_planned_mutation_error_requires_verification(self):
+        token = _token_from(self.client.get(_url()))
+        self.adapter.start_planned.side_effect = RuntimeError(
+            'password=must-not-render')
+
+        response = self.client.post(_url(), _post(token))
+
+        content = response.content.decode('utf-8')
+        self.assertEqual(503, response.status_code)
+        self.assertIn('Обязательный сервис временно недоступен.', content)
+        self.assertIn('Verification required', content)
+        self.assertNotIn('must-not-render', content)
+        self.assertEqual(1, self.adapter.start_planned.call_count)
+
+    def test_malformed_planned_response_is_uncertain_logged_and_not_retried(
+            self):
+        token = _token_from(self.client.get(_url()))
+        self.adapter.start_planned.return_value = {
+            'id': 'bmc_address=must-not-be-logged',
+        }
+
+        with mock.patch.object(views.LOG, 'error') as log_error:
+            response = self.client.post(_url(), _post(token))
+
+        content = response.content.decode('utf-8')
+        self.assertEqual(503, response.status_code)
+        self.assertIn('Обязательный сервис временно недоступен.', content)
+        self.assertIn('Verification required', content)
+        self.assertEqual(1, self.adapter.start_planned.call_count)
+        log_error.assert_called_once_with(
+            'PowerOps mutation response is uncertain '
+            '[request_id=%s, exception_type=%s]',
+            'unavailable',
+            'InvalidBackendData',
+        )
+        self.assertNotIn('bmc_address', str(log_error.call_args))
 
     def test_operation_route_is_closed(self):
         response = self.client.get(_url('shutdown'))
