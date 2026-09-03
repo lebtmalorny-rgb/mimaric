@@ -1,18 +1,18 @@
-From 16888b4b5364bb219efdb8806ebc2808bdd74096 Mon Sep 17 00:00:00 2001
+From 27d36b412f816f5cc21d6bfd0d176cab4482c430 Mon Sep 17 00:00:00 2001
 From: Lebt <lebtmalorny@gmail.com>
 Date: Thu, 3 Sep 2026 10:49:53 +0300
 Subject: [PATCH 16/16] feat: expose read-only PowerOps host inventory
 
 ---
  etc/mistral/power_ops.yaml                    |   9 +
- mistral/actions/powerops/clients.py           | 271 ++++++++++
+ mistral/actions/powerops/clients.py           | 460 +++++++++-
  mistral/actions/powerops/exceptions.py        |   4 +
- mistral/actions/powerops/inventory.py         |  45 ++
- .../unit/actions/powerops/test_inventory.py   | 488 ++++++++++++++++++
+ mistral/actions/powerops/inventory.py         |  45 +
+ .../unit/actions/powerops/test_inventory.py   | 827 ++++++++++++++++++
  .../actions/powerops/test_registration.py     |   3 +
  .../unit/actions/powerops/test_workbook.py    |  13 +
  setup.cfg                                     |   1 +
- 8 files changed, 834 insertions(+)
+ 8 files changed, 1351 insertions(+), 11 deletions(-)
  create mode 100644 mistral/actions/powerops/inventory.py
  create mode 100644 mistral/tests/unit/actions/powerops/test_inventory.py
 
@@ -37,31 +37,238 @@ index 119be4e8..c8da55a9 100644
      input:
        - host
 diff --git a/mistral/actions/powerops/clients.py b/mistral/actions/powerops/clients.py
-index d3d9d276..bd665e98 100644
+index d3d9d276..7638864d 100644
 --- a/mistral/actions/powerops/clients.py
 +++ b/mistral/actions/powerops/clients.py
-@@ -389,6 +389,277 @@ class CloudClients:
+@@ -15,6 +15,7 @@
+ import re
+ import time
+ from types import SimpleNamespace
++from urllib import parse as urlparse
+ 
+ import eventlet
+ from keystoneauth1 import adapter as ks_adapter
+@@ -37,6 +38,7 @@ _INSTANCE_POLICIES = frozenset({
+ })
+ _KNOWN_POWER_STATES = frozenset({'power on', 'power off'})
+ _PATH_RESOURCE_ID_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_-]*$')
++_MASAKARI_PAGE_LIMIT = 1000
+ 
+ 
+ def _register_keystone_authtoken_options():
+@@ -279,20 +281,16 @@ class CloudClients:
+ 
+     @classmethod
+     def _masakari_identifier(cls, item, description):
+-        identifiers = []
++        identifier = item.get('uuid', item.get('id'))
+ 
+-        for field in ('uuid', 'id'):
+-            if field in item:
+-                value = item[field]
+-                cls._validate_resource_id(value, description)
+-                identifiers.append(value)
+-
+-        if not identifiers or len(set(identifiers)) != 1:
++        try:
++            cls._validate_resource_id(identifier, description)
++        except exceptions.HostResolutionError:
+             raise exceptions.HostResolutionError(
+-                '{} is missing or ambiguous'.format(description)
+-            )
++                '{} is missing or invalid'.format(description)
++            ) from None
+ 
+-        return identifiers[0]
++        return identifier
+ 
+     @classmethod
+     def _masakari_resource(cls, item):
+@@ -389,6 +387,446 @@ class CloudClients:
  
          return matches[0]
  
++    @classmethod
++    def _masakari_page_marker(cls, item, description):
++        if not isinstance(item, dict):
++            raise exceptions.HostResolutionError(
++                '{} entry must be a mapping'.format(description)
++            )
++
++        marker = item.get('id')
++
++        if marker is None:
++            marker = item.get('uuid')
++
++        if isinstance(marker, bool):
++            marker = None
++        elif isinstance(marker, int):
++            marker = str(marker) if marker > 0 else None
++
++        try:
++            cls._validate_resource_id(marker, '{} marker'.format(description))
++        except exceptions.HostResolutionError:
++            raise exceptions.HostResolutionError(
++                '{} marker is invalid'.format(description)
++            ) from None
++
++        return marker
++
++    @classmethod
++    def _validate_masakari_page_links(
++            cls, body, collection, path, expected_marker):
++        if 'next' in body or 'next_marker' in body:
++            raise exceptions.HostResolutionError(
++                'Masakari pagination data is invalid'
++            )
++
++        link_keys = [
++            key for key in ('{}_links'.format(collection), 'links')
++            if key in body
++        ]
++
++        if len(link_keys) > 1:
++            raise exceptions.HostResolutionError(
++                'Masakari pagination data is ambiguous'
++            )
++
++        if not link_keys:
++            return
++
++        links = body[link_keys[0]]
++
++        if not isinstance(links, list):
++            raise exceptions.HostResolutionError(
++                'Masakari pagination links must be a list'
++            )
++
++        next_links = []
++
++        for link in links:
++            if (
++                    not isinstance(link, dict)
++                    or not isinstance(link.get('rel'), str)):
++                raise exceptions.HostResolutionError(
++                    'Masakari pagination link is invalid'
++                )
++
++            if link['rel'] == 'next':
++                next_links.append(link)
++
++        if len(next_links) > 1:
++            raise exceptions.HostResolutionError(
++                'Masakari pagination next link is ambiguous'
++            )
++
++        if not next_links:
++            return
++
++        href = next_links[0].get('href')
++
++        if not isinstance(href, str) or not href:
++            raise exceptions.HostResolutionError(
++                'Masakari pagination next link is invalid'
++            )
++
++        parsed = urlparse.urlsplit(href)
++
++        if (
++                parsed.scheme
++                or parsed.netloc
++                or parsed.fragment
++                or parsed.path not in ('', path)):
++            raise exceptions.HostResolutionError(
++                'Masakari pagination next target is unsafe'
++            )
++
++        try:
++            query = urlparse.parse_qs(
++                parsed.query,
++                keep_blank_values=True,
++                strict_parsing=True,
++                max_num_fields=2,
++            )
++        except ValueError:
++            raise exceptions.HostResolutionError(
++                'Masakari pagination next query is invalid'
++            ) from None
++
++        if (
++                set(query) != {'limit', 'marker'}
++                or len(query['limit']) != 1
++                or query['limit'][0] != str(_MASAKARI_PAGE_LIMIT)
++                or len(query['marker']) != 1
++                or query['marker'][0] != expected_marker):
++            raise exceptions.HostResolutionError(
++                'Masakari pagination next query is invalid'
++            )
++
++    def _list_masakari_collection(
++            self, path, collection, deadline, description):
++        result = []
++        marker = None
++        seen_markers = set()
++
++        while True:
++            params = {'limit': _MASAKARI_PAGE_LIMIT}
++
++            if marker is not None:
++                params['marker'] = marker
++
++            body = self._call_with_deadline(
++                lambda params=params: self.ha_adapter.get(
++                    path, params=params
++                ).json(),
++                deadline,
++                description,
++            )
++
++            if not isinstance(body, dict):
++                raise exceptions.HostResolutionError(
++                    'Masakari {} response must be a mapping'.format(
++                        collection
++                    )
++                )
++
++            entries = body.get(collection)
++
++            if not isinstance(entries, list):
++                raise exceptions.HostResolutionError(
++                    'Masakari {0} response must contain a {0} list'.format(
++                        collection
++                    )
++                )
++
++            next_marker = None
++
++            if entries:
++                next_marker = self._masakari_page_marker(
++                    entries[-1], 'Masakari {}'.format(collection)
++                )
++
++            self._validate_masakari_page_links(
++                body, collection, path, next_marker
++            )
++
++            if not entries:
++                return result
++
++            if next_marker in seen_markers:
++                raise exceptions.HostResolutionError(
++                    'Masakari pagination marker repeated'
++                )
++
++            seen_markers.add(next_marker)
++            result.extend(entries)
++            marker = next_marker
++
 +    def _list_masakari_inventory(self, deadline):
-+        body = self._call_with_deadline(
-+            lambda: self.ha_adapter.get('/segments').json(),
++        segment_entries = self._list_masakari_collection(
++            '/segments',
++            'segments',
 +            deadline,
 +            'timed out listing Masakari segments',
 +        )
-+
-+        if not isinstance(body, dict):
-+            raise exceptions.HostResolutionError(
-+                'Masakari segments response must be a mapping'
-+            )
-+
-+        segment_entries = body.get('segments')
-+
-+        if not isinstance(segment_entries, list):
-+            raise exceptions.HostResolutionError(
-+                'Masakari segments response must contain a segments list'
-+            )
 +
 +        result = []
 +
@@ -75,23 +282,12 @@ index d3d9d276..bd665e98 100644
 +                segment_entry, 'Masakari segment UUID'
 +            )
 +            hosts_url = '/segments/{}/hosts'.format(segment_uuid)
-+            hosts_body = self._call_with_deadline(
-+                lambda url=hosts_url: self.ha_adapter.get(url).json(),
++            host_entries = self._list_masakari_collection(
++                hosts_url,
++                'hosts',
 +                deadline,
 +                'timed out listing Masakari hosts',
 +            )
-+
-+            if not isinstance(hosts_body, dict):
-+                raise exceptions.HostResolutionError(
-+                    'Masakari hosts response must be a mapping'
-+                )
-+
-+            host_entries = hosts_body.get('hosts')
-+
-+            if not isinstance(host_entries, list):
-+                raise exceptions.HostResolutionError(
-+                    'Masakari hosts response must contain a hosts list'
-+                )
 +
 +            result.extend(
 +                (segment_uuid, self._masakari_resource(host_entry))
@@ -178,6 +374,7 @@ index d3d9d276..bd665e98 100644
 +            )
 +
 +        servers_by_host = {}
++        server_hosts_by_id = {}
 +
 +        for server in servers:
 +            compute_host = getattr(server, 'compute_host', None)
@@ -190,6 +387,20 @@ index d3d9d276..bd665e98 100644
 +                )
 +
 +            servers_by_host.setdefault(compute_host, []).append(server)
++            server_id = getattr(server, 'id', None)
++
++            if (
++                    isinstance(server_id, str)
++                    and _PATH_RESOURCE_ID_RE.fullmatch(server_id)):
++                server_hosts_by_id.setdefault(server_id, set()).add(
++                    compute_host
++                )
++
++        duplicate_instance_hosts = set()
++
++        for instance_hosts in server_hosts_by_id.values():
++            if len(instance_hosts) > 1:
++                duplicate_instance_hosts.update(instance_hosts)
 +
 +        rows = []
 +
@@ -266,7 +477,9 @@ index d3d9d276..bd665e98 100644
 +                            'ironic_node_incompatible'
 +                        )
 +
-+            if (
++            if host in duplicate_instance_hosts:
++                row['blocking_reason'] = 'invalid_instance_data'
++            elif (
 +                    row['blocking_reason'] is None
 +                    and not instance_data_valid):
 +                row['blocking_reason'] = 'invalid_instance_data'
@@ -386,10 +599,10 @@ index 00000000..0f113b2b
 +        return result
 diff --git a/mistral/tests/unit/actions/powerops/test_inventory.py b/mistral/tests/unit/actions/powerops/test_inventory.py
 new file mode 100644
-index 00000000..51e710b7
+index 00000000..717dc217
 --- /dev/null
 +++ b/mistral/tests/unit/actions/powerops/test_inventory.py
-@@ -0,0 +1,488 @@
+@@ -0,0 +1,827 @@
 +# Copyright 2026 OpenStack Foundation
 +#
 +# Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -421,6 +634,8 @@ index 00000000..51e710b7
 +FIRST_SERVER_UUID = '33333333-3333-3333-3333-333333333333'
 +SECOND_SERVER_UUID = '44444444-4444-4444-4444-444444444444'
 +HOST = 'compute-01'
++SECOND_HOST = 'compute-02'
++THIRD_HOST = 'compute-03'
 +
 +ROW_KEYS = {
 +    'region_name',
@@ -495,20 +710,34 @@ index 00000000..51e710b7
 +
 +
 +def _segments(*items):
-+    return {
-+        '/segments': {
++    responses = {
++        ('/segments', None): {
 +            'segments': [
 +                {'uuid': segment_uuid}
 +                for segment_uuid, _hosts in items
 +            ],
 +        },
-+        **{
-+            '/segments/{}/hosts'.format(segment_uuid): {
-+                'hosts': hosts,
-+            }
-+            for segment_uuid, hosts in items
-+        },
 +    }
++
++    if items:
++        responses[('/segments', items[-1][0])] = {'segments': []}
++
++    for segment_uuid, hosts in items:
++        hosts_url = '/segments/{}/hosts'.format(segment_uuid)
++        host_entries = []
++
++        for host in hosts:
++            host_entry = dict(host)
++            host_entries.append(host_entry)
++
++        responses[(hosts_url, None)] = {'hosts': host_entries}
++
++        if host_entries:
++            responses[(hosts_url, host_entries[-1]['uuid'])] = {
++                'hosts': [],
++            }
++
++    return responses
 +
 +
 +def _masakari_host(host=HOST, maintenance=False, host_id='host-1'):
@@ -548,9 +777,10 @@ index 00000000..51e710b7
 +    )
 +    ha_adapter = mock.Mock()
 +
-+    def get(path):
++    def get(path, params=None):
++        marker = (params or {}).get('marker')
 +        response = mock.Mock()
-+        response.json.return_value = response_bodies[path]
++        response.json.return_value = response_bodies[(path, marker)]
 +
 +        return response
 +
@@ -618,8 +848,19 @@ index 00000000..51e710b7
 +        )
 +        self.assertEqual(
 +            [
-+                mock.call('/segments'),
-+                mock.call('/segments/{}/hosts'.format(SEGMENT_UUID)),
++                mock.call('/segments', params={'limit': 1000}),
++                mock.call(
++                    '/segments',
++                    params={'limit': 1000, 'marker': SEGMENT_UUID},
++                ),
++                mock.call(
++                    '/segments/{}/hosts'.format(SEGMENT_UUID),
++                    params={'limit': 1000},
++                ),
++                mock.call(
++                    '/segments/{}/hosts'.format(SEGMENT_UUID),
++                    params={'limit': 1000, 'marker': 'host-1'},
++                ),
 +            ],
 +            ha_adapter.get.call_args_list,
 +        )
@@ -676,11 +917,12 @@ index 00000000..51e710b7
 +                else:
 +                    original_get = ha_adapter.get.side_effect
 +
-+                    def fail_hosts(path, original_get=original_get):
++                    def fail_hosts(path, params=None,
++                                   original_get=original_get):
 +                        if path.endswith('/hosts'):
 +                            raise failure
 +
-+                        return original_get(path)
++                        return original_get(path, params=params)
 +
 +                    ha_adapter.get.side_effect = fail_hosts
 +
@@ -710,6 +952,316 @@ index 00000000..51e710b7
 +                    exceptions.InventoryUnavailable,
 +                    cloud.host_inventory,
 +                )
++
++    def test_masakari_segments_and_hosts_follow_all_marker_pages(self):
++        second_segment_host = _masakari_host(
++            SECOND_HOST, host_id='host-2'
++        )
++        responses = {
++            ('/segments', None): {
++                'segments': [{'id': 1, 'uuid': SEGMENT_UUID}],
++                'segments_links': [{
++                    'rel': 'next',
++                    'href': '/segments?limit=1000&marker=1',
++                }],
++            },
++            ('/segments', '1'): {
++                'segments': [{'id': 2, 'uuid': SECOND_SEGMENT_UUID}],
++                'segments_links': [{
++                    'rel': 'next',
++                    'href': '/segments?limit=1000&marker=2',
++                }],
++            },
++            ('/segments', '2'): {'segments': []},
++            ('/segments/{}/hosts'.format(SEGMENT_UUID), None): {
++                'hosts': [dict(_masakari_host(), id=10)],
++                'hosts_links': [{
++                    'rel': 'next',
++                    'href': (
++                        '/segments/{}/hosts?limit=1000&marker=10'.format(
++                            SEGMENT_UUID
++                        )
++                    ),
++                }],
++            },
++            ('/segments/{}/hosts'.format(SEGMENT_UUID), '10'): {
++                'hosts': [dict(
++                    _masakari_host(THIRD_HOST, host_id='host-3'), id=11
++                )],
++            },
++            ('/segments/{}/hosts'.format(SEGMENT_UUID), '11'): {
++                'hosts': [],
++            },
++            ('/segments/{}/hosts'.format(SECOND_SEGMENT_UUID), None): {
++                'hosts': [dict(second_segment_host, id=20)],
++            },
++            ('/segments/{}/hosts'.format(SECOND_SEGMENT_UUID), '20'): {
++                'hosts': [],
++            },
++        }
++        nodes = [
++            _node(),
++            _node(node_id='node-2', host=SECOND_HOST),
++            _node(node_id='node-3', host=THIRD_HOST),
++        ]
++        services = [
++            _service(),
++            _service(service_id='service-2', host=SECOND_HOST),
++            _service(service_id='service-3', host=THIRD_HOST),
++        ]
++        cloud, _connection, ha_adapter = _cloud(
++            nodes=nodes,
++            services=services,
++            servers=[],
++            responses=responses,
++        )
++
++        rows = cloud.host_inventory()
++
++        self.assertEqual(
++            [
++                (SEGMENT_UUID, HOST),
++                (SEGMENT_UUID, THIRD_HOST),
++                (SECOND_SEGMENT_UUID, SECOND_HOST),
++            ],
++            [(row['segment_uuid'], row['host']) for row in rows],
++        )
++        self.assertEqual(
++            [
++                mock.call('/segments', params={'limit': 1000}),
++                mock.call(
++                    '/segments',
++                    params={'limit': 1000, 'marker': '1'},
++                ),
++                mock.call(
++                    '/segments',
++                    params={'limit': 1000, 'marker': '2'},
++                ),
++                mock.call(
++                    '/segments/{}/hosts'.format(SEGMENT_UUID),
++                    params={'limit': 1000},
++                ),
++                mock.call(
++                    '/segments/{}/hosts'.format(SEGMENT_UUID),
++                    params={'limit': 1000, 'marker': '10'},
++                ),
++                mock.call(
++                    '/segments/{}/hosts'.format(SEGMENT_UUID),
++                    params={'limit': 1000, 'marker': '11'},
++                ),
++                mock.call(
++                    '/segments/{}/hosts'.format(SECOND_SEGMENT_UUID),
++                    params={'limit': 1000},
++                ),
++                mock.call(
++                    '/segments/{}/hosts'.format(SECOND_SEGMENT_UUID),
++                    params={'limit': 1000, 'marker': '20'},
++                ),
++            ],
++            ha_adapter.get.call_args_list,
++        )
++
++    def test_masakari_repeated_or_invalid_marker_fails_snapshot(self):
++        cases = {
++            'repeated': {
++                ('/segments', None): {
++                    'segments': [{'uuid': SEGMENT_UUID}],
++                },
++                ('/segments', SEGMENT_UUID): {
++                    'segments': [{'uuid': SEGMENT_UUID}],
++                },
++                ('/segments/{}/hosts'.format(SEGMENT_UUID), None): {
++                    'hosts': [_masakari_host()],
++                },
++            },
++            'repeated_host': {
++                ('/segments', None): {
++                    'segments': [{'uuid': SEGMENT_UUID}],
++                },
++                ('/segments', SEGMENT_UUID): {'segments': []},
++                ('/segments/{}/hosts'.format(SEGMENT_UUID), None): {
++                    'hosts': [_masakari_host()],
++                },
++                ('/segments/{}/hosts'.format(
++                    SEGMENT_UUID
++                ), 'host-1'): {
++                    'hosts': [_masakari_host()],
++                },
++            },
++            'invalid_type': {
++                ('/segments', None): {
++                    'segments': [{
++                        'id': {'password': 'marker-secret'},
++                        'uuid': SEGMENT_UUID,
++                    }],
++                },
++            },
++            'invalid_value': {
++                ('/segments', None): {
++                    'segments': [{'id': 0, 'uuid': SEGMENT_UUID}],
++                },
++            },
++        }
++
++        for case, responses in cases.items():
++            with self.subTest(case=case):
++                cloud, _connection, _ha_adapter = _cloud(
++                    responses=responses
++                )
++
++                exc = self.assertRaises(
++                    exceptions.InventoryUnavailable,
++                    cloud.host_inventory,
++                )
++
++                self.assertEqual(
++                    'PowerOps inventory is unavailable', str(exc)
++                )
++                self.assertNotIn('marker-secret', str(exc))
++
++    def test_masakari_malformed_or_unsafe_next_link_fails_snapshot(self):
++        cases = {
++            'malformed_links': 'not-a-list',
++            'missing_href': [{'rel': 'next'}],
++            'duplicate_next': [
++                {
++                    'rel': 'next',
++                    'href': '/segments?limit=1000&marker=1',
++                },
++                {
++                    'rel': 'next',
++                    'href': '/segments?limit=1000&marker=1',
++                },
++            ],
++            'unsafe_target': [{
++                'rel': 'next',
++                'href': (
++                    'https://attacker.invalid/segments'
++                    '?limit=1000&marker=1'
++                ),
++            }],
++            'wrong_marker': [{
++                'rel': 'next',
++                'href': '/segments?limit=1000&marker=999',
++            }],
++            'top_level_next': None,
++        }
++
++        for case, links in cases.items():
++            with self.subTest(case=case):
++                pagination_data = (
++                    {'next': '/segments?limit=1000&marker=1'}
++                    if case == 'top_level_next'
++                    else {'segments_links': links}
++                )
++                responses = {
++                    ('/segments', None): {
++                        'segments': [{'uuid': SEGMENT_UUID}],
++                        **pagination_data,
++                    },
++                    ('/segments/{}/hosts'.format(SEGMENT_UUID), None): {
++                        'hosts': [_masakari_host()],
++                    },
++                }
++                cloud, _connection, _ha_adapter = _cloud(
++                    responses=responses
++                )
++
++                self.assertRaises(
++                    exceptions.InventoryUnavailable,
++                    cloud.host_inventory,
++                )
++
++    def test_masakari_later_page_failure_fails_complete_snapshot(self):
++        for failed_collection in ('segments', 'hosts'):
++            with self.subTest(collection=failed_collection):
++                cloud, _connection, ha_adapter = _cloud()
++                original_get = ha_adapter.get.side_effect
++
++                def fail_later_page(path, params=None,
++                                    failed_collection=failed_collection):
++                    marker = (params or {}).get('marker')
++                    is_target = (
++                        (failed_collection == 'segments'
++                         and path == '/segments')
++                        or (failed_collection == 'hosts'
++                            and path.endswith('/hosts'))
++                    )
++
++                    if is_target and marker is not None:
++                        raise RuntimeError(
++                            'later page password=page-secret'
++                        )
++
++                    return original_get(path, params=params)
++
++                ha_adapter.get.side_effect = fail_later_page
++
++                exc = self.assertRaises(
++                    exceptions.InventoryUnavailable,
++                    cloud.host_inventory,
++                )
++
++                self.assertEqual(
++                    'PowerOps inventory is unavailable', str(exc)
++                )
++                self.assertNotIn('page-secret', str(exc))
++
++    def test_duplicate_instance_uuid_across_hosts_blocks_all_implicated_rows(
++            self):
++        third_server_uuid = '66666666-6666-6666-6666-666666666666'
++        responses = _segments(
++            (SEGMENT_UUID, [
++                _masakari_host(),
++                _masakari_host(SECOND_HOST, host_id='host-2'),
++                _masakari_host(THIRD_HOST, host_id='host-3'),
++            ]),
++        )
++        nodes = [
++            _node(),
++            _node(node_id='node-2', host=SECOND_HOST),
++            _node(node_id='node-3', host=THIRD_HOST),
++        ]
++        services = [
++            _service(),
++            _service(service_id='service-2', host=SECOND_HOST),
++            _service(service_id='service-3', host=THIRD_HOST),
++        ]
++        servers = [
++            _server(
++                FIRST_SERVER_UUID, 'vm-a', 'project-a', 'ACTIVE',
++                host=HOST,
++            ),
++            _server(
++                FIRST_SERVER_UUID, 'vm-a-copy', 'project-a', 'ACTIVE',
++                host=SECOND_HOST,
++            ),
++            _server(
++                third_server_uuid, 'vm-c', 'project-c', 'SHUTOFF',
++                host=THIRD_HOST,
++            ),
++        ]
++        cloud, _connection, _ha_adapter = _cloud(
++            nodes=nodes,
++            services=services,
++            servers=servers,
++            responses=responses,
++        )
++
++        rows = {row['host']: row for row in cloud.host_inventory()}
++
++        for host in (HOST, SECOND_HOST):
++            self.assertFalse(rows[host]['operable'])
++            self.assertEqual(
++                'invalid_instance_data', rows[host]['blocking_reason']
++            )
++
++        self.assertTrue(rows[THIRD_HOST]['operable'])
++        self.assertIsNone(rows[THIRD_HOST]['blocking_reason'])
++        self.assertEqual(
++            [third_server_uuid],
++            [item['id'] for item in rows[THIRD_HOST]['instances']],
++        )
 +
 +    def test_each_row_failure_uses_only_fixed_blocking_identifier(self):
 +        cases = (
