@@ -1,0 +1,29 @@
+{
+  "horizon": {
+    "branch": "stable/2025.1",
+    "commit": "039850556d0516e52b94b28f95762f310d779f16"
+  },
+  "mistral_lib": {
+    "branch": "stable/2025.1",
+    "commit": "693174dd0aac1da22870b31e4a2481c4e749916a"
+  },
+  "mistral": {
+    "branch": "stable/2025.1",
+    "commit": "3b2eab29e9dc71a5ba250d989155eb69a9bd8e48",
+    "published_patches": 10
+  },
+  "masakari": {
+    "branch": "stable/2025.1",
+    "commit": "0fd34dd6a6d90525dbf806f35577c5ee1d7e9444",
+    "published_patches": 10
+  },
+  "kolla": {
+    "branch": "stable/2025.1",
+    "commit": "d14cef9bbafa0db561abfb0c0299d1d6bbbf8f0c"
+  },
+  "kolla_ansible": {
+    "branch": "powerops/kolla-ansible",
+    "commit": "703b06c9fa5771c758f703b424d63fb04192567a",
+    "published_patches": 6
+  }
+}
