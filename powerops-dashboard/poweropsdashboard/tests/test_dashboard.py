@@ -8,7 +8,6 @@ import horizon
 from mistralclient.api import client as mistral_client
 
 from poweropsdashboard import dashboard
-from poweropsdashboard.hosts import panel
 
 
 User = collections.namedtuple(
@@ -19,12 +18,16 @@ class DashboardRegistrationTests(SimpleTestCase):
 
     def test_registers_standalone_dashboard_and_compute_hosts_panel(self):
         registered_dashboard = horizon.get_dashboard('powerops')
+        registered_dashboard._autodiscover()
+        registered_panel = registered_dashboard.get_panel('compute_hosts')
 
         self.assertIsInstance(registered_dashboard, dashboard.PowerOps)
-        self.assertIsInstance(
-            registered_dashboard.get_panel('compute_hosts'),
-            panel.ComputeHosts,
+        self.assertIsNotNone(registered_panel)
+        self.assertEqual(
+            'poweropsdashboard.hosts.panel',
+            registered_panel.__class__.__module__,
         )
+        self.assertEqual('compute_hosts', registered_panel.slug)
         self.assertEqual(
             '/powerops/', registered_dashboard.get_absolute_url())
         self.assertEqual(
@@ -33,8 +36,9 @@ class DashboardRegistrationTests(SimpleTestCase):
         )
 
     def test_panel_visibility_uses_the_same_authorization_predicate(self):
-        compute_hosts = horizon.get_dashboard('powerops').get_panel(
-            'compute_hosts')
+        registered_dashboard = horizon.get_dashboard('powerops')
+        registered_dashboard._autodiscover()
+        compute_hosts = registered_dashboard.get_panel('compute_hosts')
         allowed_user = User(
             roles=[{'name': 'powerops_operator'}],
             project_name='ops-project',
