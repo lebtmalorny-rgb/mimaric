@@ -1,0 +1,70 @@
+---
+- name: Resolve driver and password variable for the current BMC host
+  ansible.builtin.set_fact:
+    _resolved: >-
+      {% set candidates = (ironic_bmc_resolved[item].type | lower).split('+') | map('trim') | list %}
+      {% set selection = namespace(chosen='') %}
+      {% for candidate in ironic_driver_priority %}
+        {% if not selection.chosen and
+              (candidate in candidates) and
+              (candidate in ironic_supported_bmc_types) %}
+          {% set selection.chosen = candidate %}
+        {% endif %}
+      {% endfor %}
+      {% if not selection.chosen and (candidates | length) > 0 %}
+        {% set selection.chosen = (
+          candidates
+          | reject('equalto', '')
+          | list
+          | first
+          | default('')
+        ) %}
+      {% endif %}
+      {% if selection.chosen and selection.chosen in ironic_supported_bmc_types %}
+        {{ ironic_supported_bmc_types[selection.chosen]
+           | combine({
+               'resolved_type': selection.chosen,
+               'host': item
+             }) }}
+      {% else %}
+        {{ {} }}
+      {% endif %}
+  vars:
+    item: "{{ inventory_hostname }}"
+  no_log: true
+
+- name: Normalize driver resolution as a native mapping
+  ansible.builtin.set_fact:
+    _resolved: >-
+      {{ _resolved
+         if _resolved is mapping
+         else (_resolved | from_yaml) }}
+  no_log: true
+
+- name: Validate the resolved Ironic driver
+  ansible.builtin.assert:
+    that:
+      - _resolved is mapping
+      - (_resolved.driver | default('')) | length > 0
+      - (_resolved.power_interface | default('')) | length > 0
+      - (_resolved.management_interface | default('')) | length > 0
+    fail_msg: >-
+      Could not resolve an Ironic driver for BMC {{ inventory_hostname }}
+      with type={{ ironic_bmc_resolved[inventory_hostname].type
+      | default('undefined') }}.
+
+- name: Store driver resolution for the current BMC host
+  ansible.builtin.set_fact:
+    ironic_bmc_resolved: >-
+      {{ ironic_bmc_resolved
+         | combine({
+              inventory_hostname: (ironic_bmc_resolved[inventory_hostname]
+                | combine({
+                  'ironic_bmc_resolved_driver': _resolved.driver,
+                  'ironic_bmc_resolved_power_interface': _resolved.power_interface,
+                  'ironic_bmc_resolved_management_interface': _resolved.management_interface,
+                  'ironic_bmc_resolved_password_var': _resolved.password_var,
+                  'ironic_bmc_resolved_type': _resolved.resolved_type
+                }))
+           }) }}
+  no_log: true
