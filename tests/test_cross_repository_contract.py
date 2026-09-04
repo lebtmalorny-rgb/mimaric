@@ -802,16 +802,17 @@ class CrossRepositoryContractTest(unittest.TestCase):
             self.kolla,
             "ansible/roles/mistral/templates/mistral.conf.j2",
         )
-        conditional = re.search(
-            r"backend_url\s*=\s*\{% if enable_powerops \| bool %\}"
-            r"\{\{ powerops_coordination_url \}\}"
-            r"\{% else %\}\{\{ redis_connection_string \}\}"
-            r"\{% endif %\}",
+        self.assertIn(
+            "backend_url = {{ powerops_coordination_url if "
+            "(enable_powerops | bool) else redis_connection_string }}\n"
+            "{% if enable_powerops | bool and service_name in "
+            "['mistral-api', 'mistral-engine', 'mistral-executor'] %}\n"
+            "[powerops]\n",
             mistral_template,
-        )
-        self.assertIsNotNone(
-            conditional,
-            "Mistral must select etcd in the enabled PowerOps branch",
+            (
+                "Mistral must select etcd without allowing Ansible "
+                "trim_blocks to join [powerops] to backend_url"
+            ),
         )
 
     def test_kolla_deploy_and_reconfigure_are_reconcile_only(self):

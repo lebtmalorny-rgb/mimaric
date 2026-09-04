@@ -106,7 +106,7 @@ connection_string = {{ osprofiler_backend_connection_string }}
 {% endif %}
 
 [coordination]
-backend_url = {% if enable_powerops | bool %}{{ powerops_coordination_url }}{% else %}{{ redis_connection_string }}{% endif %}
+backend_url = {{ powerops_coordination_url if (enable_powerops | bool) else redis_connection_string }}
 {% if enable_powerops | bool and service_name in ['mistral-api', 'mistral-engine', 'mistral-executor'] %}
 [powerops]
 enabled = true
