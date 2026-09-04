@@ -3,6 +3,9 @@ from poweropsdashboard.test.settings import *  # noqa: F403,H303
 
 DEBUG = True
 ALLOWED_HOSTS = ['127.0.0.1', 'localhost']
+AVAILABLE_REGIONS = [
+    ('http://localhost/identity/v3', 'RegionOne'),
+]
 POWEROPS_MOCK_MODE = True
 POWEROPS_REGION_NAME = 'RegionOne'
 POWEROPS_ALLOWED_PROJECT_NAMES = ['ops-project']

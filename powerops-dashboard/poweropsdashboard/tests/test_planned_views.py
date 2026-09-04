@@ -35,6 +35,11 @@ def _user():
         username='ops-user',
         project_id='project-id',
         services_region='RegionOne',
+        authorized_tenants=[],
+        available_services_regions=['RegionOne'],
+        user_domain_name='Default',
+        system_scoped=False,
+        is_system_user=False,
         token=SimpleNamespace(id='current-user-token'),
         is_authenticated=True,
         has_perms=lambda permissions: True,
@@ -513,7 +518,7 @@ class PlannedOperationViewTests(SimpleTestCase):
         self.client_patch = mock.patch.object(
             views.api, 'get_client', return_value=self.adapter)
         self.user_patch = mock.patch(
-            'django.contrib.auth.middleware.auth.get_user',
+            'openstack_auth.utils.get_user',
             return_value=_user(),
         )
         self.auth_patch.start()
@@ -610,10 +615,15 @@ class PlannedOperationViewTests(SimpleTestCase):
     def test_token_is_consumed_before_any_mistral_preflight_or_mutation(self):
         token = _token_from(self.client.get(_url()))
         self.adapter.reset_mock()
+        events = []
+        consume_submission_token = submission.consume_submission_token
+
+        def consume(*args, **kwargs):
+            consume_submission_token(*args, **kwargs)
+            events.append('consumed')
 
         def inspect_consumed():
-            self.assertNotIn(
-                submission.SESSION_DIGEST_KEY, self.client.session)
+            events.append('preflight')
             return _inventory()
 
         self.adapter.start_inventory.side_effect = inspect_consumed
@@ -621,9 +631,14 @@ class PlannedOperationViewTests(SimpleTestCase):
         self.adapter.list_executions.return_value = []
         self.adapter.start_planned.return_value = {'id': PLANNED_UUID}
 
-        response = self.client.post(_url(), _post(token))
+        with mock.patch.object(
+                submission,
+                'consume_submission_token',
+                side_effect=consume):
+            response = self.client.post(_url(), _post(token))
 
         self.assertEqual(302, response.status_code)
+        self.assertEqual(['consumed', 'preflight'], events[:2])
         self.adapter.start_planned.assert_called_once()
 
     def test_form_forgery_returns_422_before_planned_start(self):

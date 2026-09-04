@@ -22,6 +22,10 @@ class PreviewUserMiddleware:
             roles=[{'name': 'powerops_operator'}],
             authorized_tenants=[],
             services_region='RegionOne',
+            available_services_regions=['RegionOne'],
+            user_domain_name='Default',
+            system_scoped=False,
+            is_system_user=False,
             is_authenticated=True,
             has_perms=lambda permissions: True,
         )

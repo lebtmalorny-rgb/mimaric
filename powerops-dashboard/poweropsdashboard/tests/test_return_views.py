@@ -3,7 +3,6 @@ import re
 from types import SimpleNamespace
 from unittest import mock
 
-from django.core.exceptions import PermissionDenied
 from django.test import override_settings
 from django.test import SimpleTestCase
 
@@ -30,6 +29,11 @@ def _user():
         username='ops-user',
         project_id='project-id',
         services_region='RegionOne',
+        authorized_tenants=[],
+        available_services_regions=['RegionOne'],
+        user_domain_name='Default',
+        system_scoped=False,
+        is_system_user=False,
         token=SimpleNamespace(id='current-user-token'),
         is_authenticated=True,
         has_perms=lambda permissions: True,
@@ -261,7 +265,7 @@ class StartReturnViewTests(SimpleTestCase):
         get_client.return_value = client
 
         with mock.patch(
-                'django.contrib.auth.middleware.auth.get_user',
+                'openstack_auth.utils.get_user',
                 return_value=_user()):
             response = self.client.get(
                 '/powerops/return/start/{}/'.format(SOURCE_UUID))
@@ -301,7 +305,7 @@ class StartReturnViewTests(SimpleTestCase):
         get_client.return_value = client
 
         with mock.patch(
-                'django.contrib.auth.middleware.auth.get_user',
+                'openstack_auth.utils.get_user',
                 return_value=_user()):
             response = self.client.get(
                 '/powerops/return/start/{}/'.format(SOURCE_UUID))
@@ -349,7 +353,7 @@ class StartReturnViewTests(SimpleTestCase):
             invalid.append(bad)
 
         with mock.patch(
-                'django.contrib.auth.middleware.auth.get_user',
+                'openstack_auth.utils.get_user',
                 return_value=_user()):
             for source in invalid:
                 with self.subTest(source=source):
@@ -379,7 +383,7 @@ class StartReturnViewTests(SimpleTestCase):
             'stopped_instance_ids'] = [SECOND_INSTANCE_UUID]
 
         with mock.patch(
-                'django.contrib.auth.middleware.auth.get_user',
+                'openstack_auth.utils.get_user',
                 return_value=_user()):
             for name, source in (
                     ('missing result', missing_result),
@@ -412,7 +416,7 @@ class StartReturnViewTests(SimpleTestCase):
         get_client.return_value = client
 
         with mock.patch(
-                'django.contrib.auth.middleware.auth.get_user',
+                'openstack_auth.utils.get_user',
                 return_value=_user()), mock.patch.object(
                     views.LOG, 'error') as log_error:
             response = self.client.get(
@@ -443,7 +447,7 @@ class StartReturnViewTests(SimpleTestCase):
         get_client.return_value = _adapter()
 
         with mock.patch(
-                'django.contrib.auth.middleware.auth.get_user',
+                'openstack_auth.utils.get_user',
                 return_value=_user()):
             response = self.client.get(
                 '/powerops/return/start/{}/'.format(SOURCE_UUID))
@@ -466,7 +470,7 @@ class ResumeReturnViewTests(SimpleTestCase):
         get_client.return_value = client
 
         with mock.patch(
-                'django.contrib.auth.middleware.auth.get_user',
+                'openstack_auth.utils.get_user',
                 return_value=_user()):
             response = self.client.get(
                 '/powerops/return/resume/{}/'.format(RETURN_UUID))
@@ -516,7 +520,7 @@ class ResumeReturnViewTests(SimpleTestCase):
         }], _status()))
 
         with mock.patch(
-                'django.contrib.auth.middleware.auth.get_user',
+                'openstack_auth.utils.get_user',
                 return_value=_user()):
             for name, execution, tasks, status in cases:
                 with self.subTest(name=name):
@@ -540,7 +544,7 @@ class ResumeReturnViewTests(SimpleTestCase):
     def test_pause_before_gate_requires_exact_idle_task_state(
             self, authorize, get_client):
         with mock.patch(
-                'django.contrib.auth.middleware.auth.get_user',
+                'openstack_auth.utils.get_user',
                 return_value=_user()):
             for state in ('RUNNING', 'WAITING', 'DELAYED', 'PAUSED'):
                 with self.subTest(state=state):
@@ -564,7 +568,7 @@ class ResumeReturnViewTests(SimpleTestCase):
     def test_any_created_return_to_service_task_rejects_resume(
             self, authorize, get_client):
         with mock.patch(
-                'django.contrib.auth.middleware.auth.get_user',
+                'openstack_auth.utils.get_user',
                 return_value=_user()):
             for state in (
                     'IDLE', 'RUNNING', 'WAITING', 'DELAYED', 'PAUSED',
@@ -597,7 +601,7 @@ class ResumeReturnViewTests(SimpleTestCase):
         get_client.return_value = client
 
         with mock.patch(
-                'django.contrib.auth.middleware.auth.get_user',
+                'openstack_auth.utils.get_user',
                 return_value=_user()):
             response = self.client.get(
                 '/powerops/return/resume/{}/'.format(RETURN_UUID))
@@ -618,34 +622,26 @@ class ResumeReturnViewTests(SimpleTestCase):
         client.resume_return.assert_not_called()
 
     @mock.patch.object(views.api, 'get_client')
-    @mock.patch.object(
-        views.auth,
-        'authorize_user',
-        side_effect=(
-            auth.Authorization('powerops_operator', False),
-            PermissionDenied,
-        ),
-    )
     def test_resume_reauthorizes_every_request(
-            self, authorize, get_client):
+            self, get_client):
         get_client.return_value = _adapter()
 
         with mock.patch(
-                'django.contrib.auth.middleware.auth.get_user',
+                'openstack_auth.utils.get_user',
                 return_value=_user()):
             response = self.client.get(
                 '/powerops/return/resume/{}/'.format(RETURN_UUID))
             token = _token(response)
-            response = self.client.post(
-                '/powerops/return/resume/{}/'.format(RETURN_UUID),
-                {
-                    'submission_token': token,
-                    'stale_domains_checked': 'on',
-                },
-            )
+            with override_settings(POWEROPS_ALLOWED_USER_NAMES=[]):
+                response = self.client.post(
+                    '/powerops/return/resume/{}/'.format(RETURN_UUID),
+                    {
+                        'submission_token': token,
+                        'stale_domains_checked': 'on',
+                    },
+                )
 
         self.assertEqual(403, response.status_code)
-        self.assertEqual(2, authorize.call_count)
         get_client.return_value.resume_return.assert_not_called()
 
     @mock.patch.object(views.api, 'get_client')
@@ -663,7 +659,7 @@ class ResumeReturnViewTests(SimpleTestCase):
         get_client.return_value = client
 
         with mock.patch(
-                'django.contrib.auth.middleware.auth.get_user',
+                'openstack_auth.utils.get_user',
                 return_value=_user()), mock.patch.object(
                     views.LOG, 'error') as log_error:
             response = self.client.get(

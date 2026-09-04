@@ -1,200 +1,174 @@
 # OpenStack PowerOps patch delivery
 
-This repository delivers 26 ordered Git patches plus source-level tests and
-operator documentation for OpenStack Epoxy 2025.1. Detailed installation is
-in [`INSTALL.md`](INSTALL.md). Routine state checks, failure diagnosis and
-controlled runtime acceptance are in [`OPERATIONS.md`](OPERATIONS.md). The
-Russian component/scenario runbook is
-`docs/powerops/POWEROPS-ARCHITECTURE.md` after applying the Kolla-Ansible series;
-its source is delivered by
-[Kolla patch 0005](patches/kolla-ansible/0005-docs-add-Russian-PowerOps-operations-guide.patch).
+This repository delivers **36 ordered Git patches**, a standalone Horizon
+plugin, source-level contract tests, Kolla build inputs, Kolla-Ansible
+configuration, and Russian operator documentation for OpenStack Epoxy 2025.1.
+
+Installation is in [`INSTALL.md`](INSTALL.md). Routine backend checks remain
+in [`OPERATIONS.md`](OPERATIONS.md). Horizon-specific operation and RBAC are
+in [`POWEROPS_HORIZON_OPERATIONS.md`](POWEROPS_HORIZON_OPERATIONS.md). The
+component/scenario runbook remains `docs/powerops/POWEROPS-ARCHITECTURE.md`
+after applying Kolla-Ansible patch 0005.
 
 ## Baselines
 
-| Series | Exact baseline | Verified source HEAD | Commits |
+| Component | Exact baseline | Reviewed final source tree | Patches |
 |---|---|---|---:|
-| Masakari | `0fd34dd6a6d90525dbf806f35577c5ee1d7e9444` (`stable/2025.1`) | `9f3cb144958b8e60bba72adefb22edf51387c0ca` | 10 |
-| Mistral | `3b2eab29e9dc71a5ba250d989155eb69a9bd8e48` (`stable/2025.1`) | `3e4fe82455de7473809b0e0bc677fa3df3a3d1e2` | 10 |
-| Kolla-Ansible | `kolla-ansible-enroll-ironic-patch-3.zip`, SHA-256 `df27628ce641fefee30114ebeb3651490655aacb0930ad5bc30a298c88c3e08d`; internal force-tracked import `703b06c9fa5771c758f703b424d63fb04192567a` | `83ebf5ab09efe6f9c7baa729e5aa9a225d73ca4f` | 6 |
+| Horizon | `039850556d0516e52b94b28f95762f310d779f16` | `c50ffa875d2271700f8c2b24f8d7f71a6e01c395` (clean upstream; standalone plugin is outside this tree) | 0 |
+| Masakari | `0fd34dd6a6d90525dbf806f35577c5ee1d7e9444` | `83bb2fd7a2d8c2f8d97e26c12fb66e8e06436bc5` | 10 |
+| mistral-lib | `693174dd0aac1da22870b31e4a2481c4e749916a` | `cf20c15a39516272faf2ddfd69a74644fdc105c5` | 1 |
+| Mistral | `3b2eab29e9dc71a5ba250d989155eb69a9bd8e48` | `9f9dee83d0e7146ce3d2011bc2169f0834e94ae4` | 16 |
+| Kolla | `d14cef9bbafa0db561abfb0c0299d1d6bbbf8f0c` | `aba086df9f5a1e17f74eb5a67286fa00b805bb6b` | 1 |
+| Kolla-Ansible | `703b06c9fa5771c758f703b424d63fb04192567a` | `0870059ba6ea82621002286e679bb93fbf719733` | 8 |
 
-Clean `git am` reproduced the Masakari source tree
-`83bb2fd7a2d8c2f8d97e26c12fb66e8e06436bc5`, the Mistral source tree
-`8e3009eb1abf8033608d31d7e60cdb02ab8da1ed`, and the Kolla-Ansible source
-tree `c1488cb1a5db61d102bd55a9e9a2fafb5c25426c`. Commit IDs created by
-`git am` may differ because committer metadata changes; tree equality is the
-content proof.
+The machine-readable baseline source is
+`docs/evidence/horizon-powerops-baselines.json`. Git commit IDs created by
+`git am` may vary with committer metadata; final `git write-tree` equality is
+the content proof.
 
 ## Patch order
 
-Apply the complete series in project order Masakari → Mistral → Kolla-Ansible.
-Within each project, apply files exactly as listed.
+Apply complete series in this dependency order:
 
-Masakari:
+1. `patches/masakari/0001` through `0010`;
+2. `patches/mistral-lib/0001`;
+3. `patches/mistral/0001` through `0016` with patched mistral-lib available;
+4. `patches/kolla/0001`;
+5. `patches/kolla-ansible/0001` through `0008`.
 
-1. `patches/masakari/0001-feat-add-PowerOps-coordination-primitives.patch`
-2. `patches/masakari/0002-feat-fence-failed-hosts-through-Ironic.patch`
-3. `patches/masakari/0003-fix-enforce-Ironic-fencing-deadlines.patch`
-4. `patches/masakari/0004-fix-honor-service-TLS-for-Ironic.patch`
-5. `patches/masakari/0005-feat-lock-complete-Masakari-host-recovery.patch`
-6. `patches/masakari/0006-test-harden-Masakari-host-lock-coverage.patch`
-7. `patches/masakari/0007-feat-serialize-Masakari-evacuations-through-etcd.patch`
-8. `patches/masakari/0008-docs-describe-Masakari-PowerOps-fencing.patch`
-9. `patches/masakari/0009-fix-satisfy-PowerOps-package-lint.patch`
-10. `patches/masakari/0010-fix-fail-closed-on-PowerOps-coordination-loss.patch`
+The exact 36 file paths are listed in application order in `INSTALL.md`.
+`SHA256SUMS` is the complete byte manifest. Kolla-Ansible patch 0006 is the
+mandatory Masakari WSGI wrapper and must precede Horizon patches 0007/0008.
 
-Mistral:
-
-1. `patches/mistral/0001-feat-add-PowerOps-action-coordination.patch`
-2. `patches/mistral/0002-fix-declare-PowerOps-etcd-backend.patch`
-3. `patches/mistral/0003-feat-add-PowerOps-OpenStack-primitives.patch`
-4. `patches/mistral/0004-fix-align-PowerOps-with-SDK-resources.patch`
-5. `patches/mistral/0005-feat-add-planned-PowerOps-actions.patch`
-6. `patches/mistral/0006-fix-harden-planned-action-boundaries.patch`
-7. `patches/mistral/0007-feat-add-guarded-host-return-actions.patch`
-8. `patches/mistral/0008-feat-register-the-PowerOps-workbook-API.patch`
-9. `patches/mistral/0009-test-generalize-action-plugin-coverage.patch`
-10. `patches/mistral/0010-fix-scope-workbook-updates-to-request-project.patch`
-
-Kolla-Ansible:
-
-1. `patches/kolla-ansible/0001-fix-sanitize-Ironic-enrollment-baseline.patch`
-2. `patches/kolla-ansible/0002-feat-define-Kolla-PowerOps-deployment-contract.patch`
-3. `patches/kolla-ansible/0003-feat-render-etcd-backed-PowerOps-configuration.patch`
-4. `patches/kolla-ansible/0004-feat-reconcile-PowerOps-actions-and-workbook.patch`
-5. `patches/kolla-ansible/0005-docs-add-Russian-PowerOps-operations-guide.patch`
-6. `patches/kolla-ansible/0006-fix-load-Masakari-through-idempotent-WSGI-wrapper.patch`
-
-Dependency boundary: Kolla-Ansible patch 0004 requires Mistral patch 0010.
-The latter scopes the `Workbook` plus child `ActionDefinition` and
-`WorkflowDefinition` lookup/update to exact project, name and normalized
-namespace, passes `project_id=wb_db.project_id`, and performs all writes in
-one SQLAlchemy transaction. Kolla additionally rejects ambiguous or foreign
-public `power_ops` workbook matches before mutation and requires each
-validated workflow to be an exact token-project-owned match.
-
-Kolla-Ansible patch 0006 replaces Apache's legacy generated
-`/var/lib/kolla/venv/bin/masakari-wsgi` entry point with a role-managed
-`/etc/masakari/masakari-api.wsgi` wrapper exporting
-`masakari.wsgi.api.application`. This prevents repeated configuration parsing
-from raising `ArgsAlreadyParsedError`; it is independent of the Consul host
-monitor path.
+The standalone `powerops-dashboard` is installed into the Horizon image; no
+patch is applied to the clean Horizon source tree. Kolla's local source
+configuration attaches patched Mistral to `mistral-base`, patched mistral-lib
+to `mistral-base-plugin-mistral-lib`, and the plugin to
+`horizon-plugin-powerops-dashboard`.
 
 ## Implemented scenarios
 
-- point-in-time physical and OpenStack host status;
-- planned power-off using `require_empty`, deterministic `live_migrate` or
-  deterministic `stop` (planned evacuation is forbidden);
-- controlled planned off → proven stable-off → on reboot;
-- two-phase power-on/return with a real operator pause,
-  `stale_domains_checked=true` and sequential restart of only the explicit VM
-  manifest;
-- emergency Masakari fencing through exact Ironic node resolution before any
-  instance preparation/evacuation;
-- cluster-wide one-VM-at-a-time evacuation with completion confirmation and
-  pacing under `powerops/evacuation/global`;
-- shared per-host lock `powerops/host/<host>` across planned Mistral and
-  emergency Masakari paths;
-- etcd-backed tooz coordination with fail-closed ownership checks. Redis is
-  not used by the enabled PowerOps path.
+- exact read-only all-project compute-host inventory;
+- planned power-off and reboot with `require_empty`, `live_migrate`, or `stop`;
+- guarded hard-off only for `admin` power-off, never reboot;
+- two-phase power-on and return through `operator_inspection_gate`;
+- emergency Masakari fencing/evacuation kept outside Horizon and Mistral's
+  planned UI;
+- shared fail-closed `powerops/host/<host>` coordination namespace;
+- UI/server authorization `admin OR (powerops_operator AND project allowlist
+  AND user allowlist)`.
+
+`admin` is accepted in any project and bypasses both allowlists. The lists
+constrain only `powerops_operator`. Mistral service credentials do not need the
+human `powerops_operator` role; current human identity and roles arrive in the
+trusted action context.
 
 ## Test commands and results
 
-The following are the recorded local results from the final source trees and
-fresh-apply verification:
+The final local gate completed on 2026-09-04 with these results:
 
-- Masakari full unit suite: **895 passed, 3 skipped**, 0 failed (898 run).
-- Masakari final PowerOps-focused selection: **85 passed**, 0 failed; full
-  flake8 passed.
-- Historic pre-expanded Mistral evidence, before the final child-ownership
-  hardening: **1620 passed, 8 skipped**, 0 failed (1628 run). This is retained
-  as historical evidence only, not as a final full-suite claim.
-- Final expanded Mistral affected combined run: **332/332**. Additional
-  selection evidence (some selections overlap) is: new owner-scope security
-  regressions **6/6**, affected workbook boundary **120/120**,
-  **PowerOps 106/106**, and **broader 106/106** action/workflow coverage;
-  final flake8 and diff hygiene passed.
-- The final Mistral full serial attempt **stopped after 829** tests following
-  known sandbox WSGI socket `PermissionError` failures. It did not complete,
-  so this delivery makes no final full-suite pass claim.
-- Kolla-Ansible PowerOps plus Ironic enrollment suites: **64/64**; Ansible
-  syntax and diff hygiene passed.
-- New isolated Masakari WSGI wrapper regression suite: **3/3**; source diff
-  hygiene passed. The earlier 64/64 result was not rerun in the current system
-  Python because its Ansible test dependency is unavailable there.
-- Cross-repository source contract suite: **19/19**; artifact repository
-  discovery: **31/31** (12 delivery plus 19 cross-repository); flake8,
-  compileall and diff hygiene passed.
+- 14 delivery-artifact tests passed;
+- 30 cross-repository and Horizon contract tests passed;
+- 97 plugin tests passed under the isolated Horizon 2025.1 environment;
+- Django system check reported no issues;
+- plugin `tox -e pep8` passed;
+- 57 focused Kolla tests passed for build and PowerOps behavior;
+- 3 Kolla-Ansible Masakari WSGI tests passed;
+- all 36 patch checksums passed and the patch manifest remained exact;
+- Python test sources compiled and `git diff --check` passed.
 
-Representative verification commands:
+The repeatable source gate is:
 
 ```bash
 python3 -m unittest tests.test_delivery_artifacts -v
-python3 work/kolla-ansible/kolla_ansible/tests/unit/test_masakari_wsgi_wrapper.py -v
-POWEROPS_MASAKARI_TREE="$PWD/worktrees/masakari-powerops" \
-POWEROPS_MISTRAL_TREE="$PWD/worktrees/mistral-powerops" \
-POWEROPS_KOLLA_TREE="$PWD/work/kolla-ansible" \
-  python3 -m unittest tests.test_cross_repository_contract -v
-POWEROPS_MASAKARI_TREE="$PWD/worktrees/masakari-powerops" \
-POWEROPS_MISTRAL_TREE="$PWD/worktrees/mistral-powerops" \
-POWEROPS_KOLLA_TREE="$PWD/work/kolla-ansible" \
-  python3 -m unittest discover -s tests -v
+POWEROPS_MASAKARI_TREE="$MASAKARI_SRC" \
+POWEROPS_MISTRAL_LIB_TREE="$MISTRAL_LIB_SRC" \
+POWEROPS_MISTRAL_TREE="$MISTRAL_SRC" \
+POWEROPS_DASHBOARD_TREE="$POWEROPS_BUNDLE/powerops-dashboard" \
+POWEROPS_KOLLA_TREE="$KOLLA_BUILD_SRC" \
+POWEROPS_KOLLA_ANSIBLE_TREE="$KOLLA_SRC" \
+python3 -m unittest \
+  tests.test_cross_repository_contract \
+  tests.test_horizon_powerops_contract -v
 shasum -a 256 -c SHA256SUMS
+python3 -m compileall -q tests
 git diff --check
 ```
 
-The Mistral workbook bytes are identical in Mistral and Kolla-Ansible and have
-SHA-256
-`26c9f2a072827b5c342dcc1d51aacf5995110054a400efe3d68df0563f3e7921`.
+The standalone package also built successfully without Git metadata. The
+wheel and sdist are version `0.0.1`; both publish the required dependencies,
+and the wheel contains all five templates plus its JavaScript and CSS assets.
+Recorded SHA-256 values are:
+
+- wheel: `991db0117185d0160b7e0dd185a0573e470244a898a051c489c07420ad84f454`;
+- sdist: `12f895d31e1655fe5e02f829bb23a208b9867c915810768430c04e39376f2249`.
+
+The mock UI was started and inspected at all six routes: host inventory,
+execution details for `RUNNING` and uncertain `ERROR`, planned operation,
+return start, and return resume. Every route returned HTTP 200, the uncertain
+result displayed `Verification required:`, and a single configured region hid
+the region selector.
+
+The four target images were built and inspected locally:
+
+| Image | Local image ID |
+|---|---|
+| `powerops-local/horizon:2025.1-powerops` | `sha256:0c7b0faf396df276b42755995d32637aba094e4a3ccbcd241575c41e4a1af493` |
+| `powerops-local/mistral-api:2025.1-powerops` | `sha256:5c4d2161a68132e10d568a28ce348ca4567572d502804d3f36a1cf4553e30f98` |
+| `powerops-local/mistral-engine:2025.1-powerops` | `sha256:0f82a26ecf8ea0a04a691b53b724c3c263ec088c5313fc310849c0863694ef5e` |
+| `powerops-local/mistral-executor:2025.1-powerops` | `sha256:07af76f4172c6bfffb55b7b5b36a49ff8f812cece5d19cd20c154b04f9e7471b` |
+
+Read-only checks independently loaded the Horizon plugin and every one of the
+six `powerops.*` action entry points in each Mistral replica. Each target image
+passed `pip check`; all three Mistral images contained the patched
+`mistral-lib` version `3.3.1+powerops.1`.
+
+The Kolla-Ansible workbook is byte-identical to the reviewed Mistral workbook.
+The mandatory WSGI patch 0006 remains byte-identical at SHA-256
+`b8e41f6ff7c8e54d0f14fdbe175b95d43d1d65ca542ec2d0f549fd0a98d0a27a`.
 
 PowerOps action audit output is a `structured LOG.info process log` only.
-There is `no external durable audit store` in this patch set and there is
-`no delivery or persistence guarantee`; durable collection and retention are
-an operator logging-platform responsibility and were not verified here.
+There is `no external durable audit store` and `no delivery or persistence
+guarantee`; durable collection remains an operator logging-platform duty.
 
 ## Static verification boundary
 
-The evidence proves patch checksums, exact source baselines, clean mailbox
-application, final tree equality, unit/source contracts, syntax and lint in
-the recorded local environments. It also proves that deploy/reconfigure source
-contains only registration/reconciliation/validation operations and no
-workflow execution or Nova/Ironic power mutation.
+Proven locally are the exact component baselines, current patch count and
+checksums, clean patch application and reviewed tree hashes, source contract
+invariants, workbook equality, mandatory WSGI patch immutability, standalone
+package contents, plugin tests, mock UI rendering, local image builds, and
+read-only imports from every target image. No image was pushed.
 
-This bundle contains source patches and documentation: no images were built or
-pushed, and the bundle does not define an image-build command or replace the
-operator's existing image pipeline. Also, no deployment or reconfiguration was
-run. No external API or production state was changed while producing it.
+No deployment or reconfiguration was run. No workflow was started or resumed,
+no Nova service/VM state changed, no Ironic/BMC power request was made, and no
+Masakari notification/fencing/evacuation was triggered.
 
 ## Live verification still required
 
-Runtime acceptance still must validate the four built images, actual Kolla
-prechecks/deploy or reconfigure, successful Masakari API `/` and `/v1`
-responses without `ArgsAlreadyParsedError`, controller-to-Keystone/Mistral TLS,
-project-scoped workbook collision handling, Mistral action population, etcd
-session/lease/heartbeat behavior, exact Nova/Masakari/Ironic name mapping,
-Redfish/BMC stable power observations, live migration, emergency evacuation,
-VM pacing and the return operator gate.
+Not proven by this source delivery:
 
-No physical power command, Masakari notification, workflow execution, Nova
-migration/evacuation, VM stop/start or host return was performed. Those are
-separately authorised operator changes, not implied by local PASS results.
+- deployed Horizon/Mistral/Masakari behavior;
+- real Keystone assignments and the effective scoped token roles;
+- real service endpoints and TLS paths;
+- live shared Memcached and etcd ownership/lease behavior;
+- VM migration/stop/start;
+- Ironic/BMC power and stable-state observation;
+- Masakari evacuation;
+- a real host mapping across Nova, Masakari, and Ironic.
+
+The completed local package, Django, mock-preview, image-build, and image-import
+gates do not prove the live items above. Those require a separately approved
+deployment and controlled acceptance window.
 
 ## Safe apply and rollback notes
 
-Verify `SHA256SUMS`, use a clean integration branch per repository, apply each
-complete series with `git am`, and use `git am --abort` on any conflict. Do not
-resolve a baseline mismatch by editing a published patch. Detailed commands,
-globals example, image acceptance requirements and gates are in
-[`INSTALL.md`](INSTALL.md).
+Verify `SHA256SUMS`, start every integration branch from its exact baseline,
+and apply each complete series with `git am`. On conflict, preserve diagnostic
+output and use `git am --abort`; do not edit a published patch to fit another
+baseline.
 
-Kolla prechecks do not prove `kolla_admin_openrc_cacert` readability. Before
-approving deploy/reconfigure, perform the documented control-node `test -f`
-and `test -r`. Kolla repeats followed-link regular/readable validation only
-inside deploy/reconfigure, after handler flush and Mistral action population
-but before Keystone/Mistral reconciliation.
-
-Before live rollout, retain known-good branches, immutable image tags and the
-previous Kolla configuration. Runtime rollback is a separately approved
-reconfigure after active workflows/notifications are drained and actual host
-state is recorded. Disabling PowerOps does not automatically delete the public
-workbook or reverse an already completed physical/Nova operation; workbook
-mutation and host return remain separate controlled operations.
+Before any deploy/reconfigure, retain known-good images, configuration, and
+branches, and obtain separate change approval. Disabling PowerOps does not
+undo completed host or VM operations and does not automatically delete the
+public Mistral workbook. Runtime rollback is a state-aware operation described
+in `INSTALL.md` and `OPERATIONS.md`.

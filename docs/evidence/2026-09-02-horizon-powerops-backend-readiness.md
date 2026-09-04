@@ -1,12 +1,12 @@
-# Horizon PowerOps backend baseline readiness
+# Horizon PowerOps backend and delivery readiness
 
-Date: 2026-09-02
+Date: 2026-09-02; final local verification: 2026-09-04
 
 ## Scope and safety boundary
 
-This evidence establishes immutable local source baselines and proves that the
-already published Masakari, Mistral, and Kolla-Ansible patch series apply
-cleanly. It does not add component implementation.
+This evidence records immutable source baselines, clean application of every
+published patch series, the standalone Horizon plugin gate, local package and
+image builds, and read-only inspection of every target image.
 
 No live OpenStack cloud was accessed. No workflow was started, no service was
 deployed, reconfigured, or restarted, and no VM, power, fencing, or evacuation
@@ -51,22 +51,29 @@ All six worktrees had empty `git status --short` immediately after creation.
 
 ## Published series clean-apply proof
 
-The existing patch files were applied without modification:
+The existing patch files were applied without modification to their exact
+baselines:
 
 ```console
 git -C worktrees/masakari-horizon-verify am "$PWD"/patches/masakari/*.patch
+git -C worktrees/mistral-lib-horizon-clean am "$PWD"/patches/mistral-lib/*.patch
 git -C worktrees/mistral-horizon-clean am "$PWD"/patches/mistral/*.patch
+git -C worktrees/kolla-horizon-clean am "$PWD"/patches/kolla/*.patch
 git -C worktrees/kolla-ansible-horizon-verify am "$PWD"/patches/kolla-ansible/*.patch
 ```
 
-All 10 Masakari patches, all 10 Mistral patches, and all 6 Kolla-Ansible
-patches applied successfully. The resulting clean tree hashes are:
+All 36 patches applied successfully: 10 Masakari, 1 mistral-lib, 16 Mistral,
+1 Kolla, and 8 Kolla-Ansible. The standalone plugin does not modify the clean
+Horizon tree. The resulting reviewed tree hashes are:
 
 | Series | `git write-tree` result |
 | --- | --- |
+| Horizon upstream | `c50ffa875d2271700f8c2b24f8d7f71a6e01c395` |
 | Masakari | `83bb2fd7a2d8c2f8d97e26c12fb66e8e06436bc5` |
-| Mistral | `8e3009eb1abf8033608d31d7e60cdb02ab8da1ed` |
-| Kolla-Ansible | `c1488cb1a5db61d102bd55a9e9a2fafb5c25426c` |
+| mistral-lib | `cf20c15a39516272faf2ddfd69a74644fdc105c5` |
+| Mistral | `9f9dee83d0e7146ce3d2011bc2169f0834e94ae4` |
+| Kolla | `aba086df9f5a1e17f74eb5a67286fa00b805bb6b` |
+| Kolla-Ansible | `0870059ba6ea82621002286e679bb93fbf719733` |
 
 Each hash exactly matches the published expected tree. This proves clean
 application without changing any published patch byte.
@@ -91,8 +98,8 @@ fencing, evacuation, deployment, or service operation.
 
 ## Baseline gate commands
 
-The baseline contract was first run before the JSON manifest existed and
-failed with `FileNotFoundError`, establishing RED:
+The immutable baseline contract was first run before the JSON manifest existed
+and failed with `FileNotFoundError`, establishing RED:
 
 ```console
 python3 -m unittest tests.test_horizon_backend_baselines -v
@@ -107,3 +114,64 @@ git diff --check
 ```
 
 The final command completed without whitespace errors.
+
+## Final Task 12 verification
+
+The fresh local verification completed with:
+
+| Gate | Result |
+| --- | --- |
+| Delivery artifact suite | 14 passed |
+| Cross-repository and Horizon contracts | 30 passed |
+| Standalone plugin suite | 97 passed |
+| Django system check | 0 issues |
+| Plugin `tox -e pep8` | passed |
+| Focused Kolla PowerOps/build suite | 57 passed |
+| Kolla-Ansible Masakari WSGI suite | 3 passed |
+| Patch checksum manifest | 36 of 36 passed |
+| Python compile and whitespace gates | passed |
+
+The standalone plugin built from a source copy without `.git`, proving the PBR
+fallback. Its wheel metadata records version `0.0.1` and dependencies on
+`pbr`, `horizon`, and `python-mistralclient`; the sdist includes
+`requirements.txt`. The wheel contains all five templates and its JavaScript
+and CSS assets.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `powerops_dashboard-0.0.1-py3-none-any.whl` | `991db0117185d0160b7e0dd185a0573e470244a898a051c489c07420ad84f454` |
+| `powerops_dashboard-0.0.1.tar.gz` | `12f895d31e1655fe5e02f829bb23a208b9867c915810768430c04e39376f2249` |
+
+The isolated mock server returned HTTP 200 for host inventory, RUNNING
+execution details, uncertain ERROR details, planned power-off, return start,
+and return resume. The uncertain outcome included `Verification required:`;
+the single-region configuration hid the region selector.
+
+## Local image evidence
+
+Kolla built the four target Linux/arm64 images locally:
+
+| Image | Image ID |
+| --- | --- |
+| `powerops-local/horizon:2025.1-powerops` | `sha256:0c7b0faf396df276b42755995d32637aba094e4a3ccbcd241575c41e4a1af493` |
+| `powerops-local/mistral-api:2025.1-powerops` | `sha256:5c4d2161a68132e10d568a28ce348ca4567572d502804d3f36a1cf4553e30f98` |
+| `powerops-local/mistral-engine:2025.1-powerops` | `sha256:0f82a26ecf8ea0a04a691b53b724c3c263ec088c5313fc310849c0863694ef5e` |
+| `powerops-local/mistral-executor:2025.1-powerops` | `sha256:07af76f4172c6bfffb55b7b5b36a49ff8f812cece5d19cd20c154b04f9e7471b` |
+
+Read-only inspection imported the Horizon plugin and independently loaded all
+six `powerops.*` action entry points in `mistral-api`, `mistral-engine`, and
+`mistral-executor`. Every image passed `pip check`; each Mistral image reported
+the patched fork as `mistral-lib=3.3.1+powerops.1`. No image was pushed.
+
+## Proof boundary
+
+This evidence proves source structure, clean patch application, unit and
+contract behavior, mock rendering, Python package contents, local container
+assembly, dependency consistency, and imports from every target image. It does
+not prove deployed Horizon/Mistral/Masakari behavior, Keystone assignments,
+real service endpoints, shared etcd ownership, VM migration/stop/start,
+Ironic/BMC power, Masakari evacuation, or a real cross-service host mapping.
+
+No deployment or reconfiguration was run. No workflow was started or resumed,
+no service was restarted, and no Nova, Ironic, BMC, Masakari, fencing, or
+evacuation mutation was performed.

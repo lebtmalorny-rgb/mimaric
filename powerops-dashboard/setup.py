@@ -1,4 +1,9 @@
+import os
+
 import setuptools
+
+
+os.environ.setdefault('PBR_VERSION', '0.0.1')
 
 
 setuptools.setup(

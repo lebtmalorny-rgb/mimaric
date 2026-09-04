@@ -21,6 +21,9 @@ PATCHES = {
         "0009-fix-satisfy-PowerOps-package-lint.patch",
         "0010-fix-fail-closed-on-PowerOps-coordination-loss.patch",
     ],
+    "mistral-lib": [
+        "0001-feat-carry-PowerOps-identity-in-action-context.patch",
+    ],
     "mistral": [
         "0001-feat-add-PowerOps-action-coordination.patch",
         "0002-fix-declare-PowerOps-etcd-backend.patch",
@@ -32,6 +35,15 @@ PATCHES = {
         "0008-feat-register-the-PowerOps-workbook-API.patch",
         "0009-test-generalize-action-plugin-coverage.patch",
         "0010-fix-scope-workbook-updates-to-request-project.patch",
+        "0011-feat-propagate-trusted-PowerOps-action-identity.patch",
+        "0012-feat-define-PowerOps-role-authorization.patch",
+        "0013-feat-reject-unauthorized-PowerOps-starts.patch",
+        "0014-feat-reauthorize-PowerOps-workflow-resume.patch",
+        "0015-feat-enforce-PowerOps-roles-and-hard-off-policy.patch",
+        "0016-feat-expose-read-only-PowerOps-host-inventory.patch",
+    ],
+    "kolla": [
+        "0001-feat-package-PowerOps-Horizon-and-Mistral-components.patch",
     ],
     "kolla-ansible": [
         "0001-fix-sanitize-Ironic-enrollment-baseline.patch",
@@ -40,7 +52,17 @@ PATCHES = {
         "0004-feat-reconcile-PowerOps-actions-and-workbook.patch",
         "0005-docs-add-Russian-PowerOps-operations-guide.patch",
         "0006-fix-load-Masakari-through-idempotent-WSGI-wrapper.patch",
+        "0007-feat-configure-Horizon-PowerOps-RBAC-and-image.patch",
+        "0008-feat-validate-Horizon-PowerOps-runtime-contract.patch",
     ],
+}
+
+EXPECTED_PATCH_COUNTS = {
+    'masakari': 10,
+    'mistral-lib': 1,
+    'mistral': 16,
+    'kolla': 1,
+    'kolla-ansible': 8,
 }
 
 
@@ -62,7 +84,9 @@ class DeliveryArtifactsTest(unittest.TestCase):
             "## Проверка комплекта",
             "## Подготовка исходных репозиториев",
             "## Установка патчей Masakari",
+            "## Установка патча mistral-lib",
             "## Установка патчей Mistral",
+            "## Установка патча Kolla",
             "## Установка патчей Kolla-Ansible",
             "## Требования к сборке образов",
             "## Настройка globals.yml",
@@ -140,7 +164,9 @@ class DeliveryArtifactsTest(unittest.TestCase):
     def test_install_guide_lists_exact_patch_order(self):
         text = _read("INSTALL.md")
         previous = -1
-        for project in ("masakari", "mistral", "kolla-ansible"):
+        for project in (
+                "masakari", "mistral-lib", "mistral", "kolla",
+                "kolla-ansible"):
             for filename in PATCHES[project]:
                 token = "patches/{}/{}".format(project, filename)
                 position = text.find(token, previous + 1)
@@ -151,22 +177,23 @@ class DeliveryArtifactsTest(unittest.TestCase):
                 )
                 previous = position
 
-        self.assertEqual(3, text.count("git am \\\n"))
+        self.assertEqual(5, text.count("git am \\\n"))
 
     def test_install_guide_pins_baselines_and_final_commits(self):
         text = _read("INSTALL.md")
         delivery = _read("DELIVERY.md")
         required = {
+            "039850556d0516e52b94b28f95762f310d779f16",
+            "693174dd0aac1da22870b31e4a2481c4e749916a",
+            "cf20c15a39516272faf2ddfd69a74644fdc105c5",
             "0fd34dd6a6d90525dbf806f35577c5ee1d7e9444",
-            "9f3cb144958b8e60bba72adefb22edf51387c0ca",
             "83bb2fd7a2d8c2f8d97e26c12fb66e8e06436bc5",
             "3b2eab29e9dc71a5ba250d989155eb69a9bd8e48",
-            "3e4fe82455de7473809b0e0bc677fa3df3a3d1e2",
-            "8e3009eb1abf8033608d31d7e60cdb02ab8da1ed",
-            "df27628ce641fefee30114ebeb3651490655aacb0930ad5bc30a298c88c3e08d",
+            "9f9dee83d0e7146ce3d2011bc2169f0834e94ae4",
+            "d14cef9bbafa0db561abfb0c0299d1d6bbbf8f0c",
+            "aba086df9f5a1e17f74eb5a67286fa00b805bb6b",
             "703b06c9fa5771c758f703b424d63fb04192567a",
-            "83ebf5ab09efe6f9c7baa729e5aa9a225d73ca4f",
-            "c1488cb1a5db61d102bd55a9e9a2fafb5c25426c",
+            "0870059ba6ea82621002286e679bb93fbf719733",
         }
         found = set(re.findall(r"[0-9a-f]{40,64}", text))
         self.assertEqual(set(), required - found)
@@ -189,7 +216,7 @@ class DeliveryArtifactsTest(unittest.TestCase):
             delivery,
         )
 
-    def test_install_guide_declares_exact_images_and_no_build_recipe(self):
+    def test_install_guide_declares_exact_component_and_image_dependencies(self):
         text = _read("INSTALL.md")
         for variable in (
             "powerops_masakari_engine_image",
@@ -200,10 +227,16 @@ class DeliveryArtifactsTest(unittest.TestCase):
             "powerops_mistral_engine_tag",
             "powerops_mistral_executor_image",
             "powerops_mistral_executor_tag",
+            "powerops_horizon_image",
+            "powerops_horizon_tag",
         ):
             self.assertIn(variable, text)
         self.assertIn("Mistral Event Engine", text)
-        self.assertNotRegex(text, r"(?m)^\s*(?:kolla-build|kolla build)\b")
+        self.assertIn("powerops-local/horizon:2025.1-powerops", text)
+        self.assertIn("powerops-local/mistral-api:2025.1-powerops", text)
+        self.assertIn("powerops-local/mistral-engine:2025.1-powerops", text)
+        self.assertIn("powerops-local/mistral-executor:2025.1-powerops", text)
+        self.assertIn("build/kolla-build.conf", text)
         self.assertNotIn("powerops_mistral_event_engine_image", text)
 
     def test_globals_example_is_etcd_only_and_has_exact_allowlists(self):
@@ -212,8 +245,10 @@ class DeliveryArtifactsTest(unittest.TestCase):
             'enable_ironic: "yes"',
             'enable_masakari: "yes"',
             'enable_mistral: "yes"',
+            'enable_horizon: "yes"',
             'enable_etcd: "yes"',
             'enable_powerops: "yes"',
+            "openstack_region_name: RegionOne",
             "etcd3+{{ internal_protocol }}",
             "powerops_allowed_project_names:",
             "  - powerops-operators",
@@ -240,8 +275,10 @@ class DeliveryArtifactsTest(unittest.TestCase):
             "enable_ironic",
             "enable_masakari",
             "enable_mistral",
+            "enable_horizon",
             "enable_etcd",
             "enable_powerops",
+            "openstack_region_name",
             "powerops_coordination_url",
             "powerops_masakari_engine_image",
             "powerops_masakari_engine_tag",
@@ -251,6 +288,8 @@ class DeliveryArtifactsTest(unittest.TestCase):
             "powerops_mistral_engine_tag",
             "powerops_mistral_executor_image",
             "powerops_mistral_executor_tag",
+            "powerops_horizon_image",
+            "powerops_horizon_tag",
             "powerops_allowed_project_names",
             "powerops_allowed_user_names",
             "powerops_host_lock_timeout",
@@ -286,6 +325,9 @@ class DeliveryArtifactsTest(unittest.TestCase):
             "любая комбинация пользователя и проекта",
             "регистрозависимо",
             "сервисными credentials Mistral",
+            "admin разрешён в любом проекте",
+            "только к powerops_operator",
+            "не требуется человеческая роль powerops_operator",
         ):
             self.assertIn(statement, normalized)
 
@@ -388,54 +430,113 @@ class DeliveryArtifactsTest(unittest.TestCase):
             "## Safe apply and rollback notes",
         ):
             self.assertIn(heading, text)
-        for result in (
-            "895 passed, 3 skipped",
-            "85 passed",
-            "1620 passed, 8 skipped",
-            "332/332",
-            "6/6",
-            "120/120",
-            "PowerOps 106/106",
-            "broader 106/106",
-            "stopped after 829",
-            "64/64",
-            "3/3",
-            "19/19",
-            "31/31",
-        ):
-            self.assertIn(result, text)
-        self.assertNotIn("29/29", text)
-        self.assertNotIn("30/30", text)
         self.assertIn("INSTALL.md", text)
         self.assertIn("OPERATIONS.md", text)
+        self.assertIn("POWEROPS_HORIZON_OPERATIONS.md", text)
         self.assertIn("POWEROPS-ARCHITECTURE.md", text)
-        self.assertIn("25", text)
+        self.assertIn("36 ordered Git patches", text)
         normalized = " ".join(text.split())
-        self.assertIn("no images were built or pushed", normalized)
-        self.assertIn("no deployment or reconfiguration was run", normalized)
+        self.assertIn("four target images were built and inspected", normalized)
+        self.assertIn("mock UI was started and inspected", normalized)
+        self.assertIn("97 plugin tests", normalized)
+        self.assertIn("57 focused Kolla tests", normalized)
+        self.assertIn("no deployment or reconfiguration was run",
+                      normalized.lower())
+        for unproven in (
+                "deployed Horizon/Mistral/Masakari behavior",
+                "Keystone assignments",
+                "real service endpoints",
+                "etcd ownership",
+                "VM migration/stop/start",
+                "Ironic/BMC power",
+                "Masakari evacuation"):
+            self.assertIn(unproven, normalized)
 
     def test_checksum_manifest_exactly_covers_all_patches(self):
         install = _read("INSTALL.md")
         lines = [line for line in _read("SHA256SUMS").splitlines() if line]
-        expected = [
+        expected = sorted([
             "patches/{}/{}".format(project, filename)
-            for project in sorted(PATCHES)
+            for project in PATCHES
             for filename in PATCHES[project]
-        ]
+        ])
         actual = sorted(
             path.relative_to(ROOT).as_posix()
             for path in (ROOT / "patches").rglob("*.patch")
         )
 
         self.assertEqual(expected, actual)
-        self.assertIn('test "$POWEROPS_PATCH_COUNT" -eq 26', install)
-        self.assertEqual(26, len(lines))
+        self.assertEqual(EXPECTED_PATCH_COUNTS, {
+            project: len(filenames)
+            for project, filenames in PATCHES.items()
+        })
+        self.assertIn('test "$POWEROPS_PATCH_COUNT" -eq 36', install)
+        self.assertEqual(36, len(lines))
         self.assertEqual(expected, [line.split("  ", 1)[1] for line in lines])
 
         for line in lines:
             digest, relative = line.split("  ", 1)
             actual = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
             self.assertEqual(actual, digest, relative)
+
+    def test_horizon_delivery_artifacts_and_operations_guide_exist(self):
+        required = (
+            "docs/superpowers/specs/"
+            "2026-09-02-horizon-powerops-clean-integration-design.md",
+            "docs/superpowers/plans/"
+            "2026-09-02-horizon-powerops-clean-integration.md",
+            "docs/evidence/"
+            "2026-09-02-horizon-powerops-backend-readiness.md",
+            "powerops-dashboard/setup.cfg",
+            "powerops-dashboard/poweropsdashboard/enabled/_50_powerops.py",
+            "POWEROPS_HORIZON_OPERATIONS.md",
+        )
+        for relative in required:
+            self.assertTrue((ROOT / relative).is_file(), relative)
+
+        setup = _read("powerops-dashboard/setup.cfg")
+        setup_py = _read("powerops-dashboard/setup.py")
+        manifest = _read("powerops-dashboard/MANIFEST.in")
+        self.assertIn("name = powerops-dashboard", setup)
+        self.assertIn("packages =\n    poweropsdashboard", setup)
+        self.assertIn(
+            "os.environ.setdefault('PBR_VERSION', '0.0.1')", setup_py)
+        self.assertIn("include requirements.txt", manifest)
+
+    def test_horizon_operations_guide_has_searchable_role_and_flow_contract(self):
+        text = _read("POWEROPS_HORIZON_OPERATIONS.md")
+        headings = (
+            "Назначение и границы",
+            "Роли admin и powerops_operator",
+            "Настройка project/user allowlist",
+            "Установка и включение Horizon-плагина",
+            "Проверка Masakari WSGI и API",
+            "Плановое выключение",
+            "Плановая перезагрузка",
+            "Включение и возврат в эксплуатацию",
+            "Политики require_empty, live_migrate и stop",
+            "Hard-off только для admin",
+            "Состояния Mistral execution",
+            "Ошибки 403, 409, 422, 503 и неопределённый timeout",
+            "Диагностика Nova, Masakari, Ironic и etcd lock",
+            "Разделение планового Mistral и аварийного Masakari",
+        )
+        for heading in headings:
+            self.assertRegex(text, r"(?m)^##+ {}$".format(re.escape(heading)))
+
+        for token in (
+                "POWEROPS_PROJECT_NAME=powerops-operators",
+                "POWEROPS_USER_NAME=svc-powerops",
+                "openstack role create --or-show powerops_operator",
+                '--project "$POWEROPS_PROJECT_NAME"',
+                '--user "$POWEROPS_USER_NAME"',
+                "openstack role assignment list",
+                "admin работает в любом проекте",
+                "обходит оба allowlist",
+                "списки применяются только к powerops_operator",
+                "Mistral service credentials",
+                "не требуют человеческой роли powerops_operator"):
+            self.assertIn(token, text)
 
     def test_plans_and_design_capture_final_owner_scope_contract(self):
         combined = "\n".join(

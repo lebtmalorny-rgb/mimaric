@@ -2,12 +2,16 @@
 
 ## Краткий вывод
 
-Комплект содержит 26 Git-патчей: 10 для vanilla Masakari `stable/2025.1`, 10
-для vanilla Mistral `stable/2025.1` и 6 для выбранного форка Kolla-Ansible
-Epoxy 2025.1. Применяйте серии именно в порядке Masakari → Mistral →
-Kolla-Ansible и собирайте четыре отдельных runtime-образа: Masakari Engine,
-Mistral API, Mistral Engine и Mistral Executor. Mistral Event Engine может
-остаться vanilla.
+Комплект содержит 36 Git-патчей: 10 для Masakari, 1 для mistral-lib, 16 для
+Mistral, 1 для Kolla и 8 для Kolla-Ansible Epoxy 2025.1. Применяйте серии
+именно в порядке Masakari → mistral-lib → Mistral → Kolla → Kolla-Ansible.
+Чистый Horizon `stable/2025.1` не патчится: `powerops-dashboard` поставляется
+как отдельный пакет.
+
+Локальный Kolla recipe собирает Horizon, Mistral API, Mistral Engine и
+Mistral Executor с тегом `2025.1-powerops`. Для полного backend deployment
+дополнительно нужен отдельно собранный патченный Masakari Engine из этой же
+поставки. Mistral Event Engine может остаться vanilla.
 
 Установка исходников и образов сама по себе не разрешает live-операции.
 `kolla-ansible prechecks` — обязательная проверка, а последующий `deploy` либо
@@ -22,7 +26,8 @@ Mistral API, Mistral Engine и Mistral Executor. Mistral Event Engine может
 в [патч Kolla 0005](patches/kolla-ansible/0005-docs-add-Russian-PowerOps-operations-guide.patch).
 Повседневный контроль, диагностика и runtime-приёмка описаны в
 [`OPERATIONS.md`](OPERATIONS.md). Доказательства поставки — в
-[`DELIVERY.md`](DELIVERY.md).
+[`DELIVERY.md`](DELIVERY.md). Эксплуатация через Horizon описана отдельно в
+[`POWEROPS_HORIZON_OPERATIONS.md`](POWEROPS_HORIZON_OPERATIONS.md).
 
 ## Проверка комплекта
 
@@ -32,32 +37,36 @@ Mistral API, Mistral Engine и Mistral Executor. Mistral Event Engine может
 ```bash
 export POWEROPS_BUNDLE=/path/to/powerops-patches
 export MASAKARI_SRC=/path/to/masakari
+export MISTRAL_LIB_SRC=/path/to/mistral-lib
 export MISTRAL_SRC=/path/to/mistral
+export KOLLA_BUILD_SRC=/path/to/kolla
 export KOLLA_SRC=/path/to/kolla-ansible-enroll-ironic-patch-3
 cd "$POWEROPS_BUNDLE"
 shasum -a 256 -c SHA256SUMS
 POWEROPS_PATCH_COUNT="$(find patches -type f -name '*.patch' | wc -l | tr -d ' ')"
-test "$POWEROPS_PATCH_COUNT" -eq 26
+test "$POWEROPS_PATCH_COUNT" -eq 36
 find patches -type f -name '*.patch' | sort
 ```
 
-Ожидаются 26 строк `OK` и ровно 26 patch-файлов. До применения сохраните
+Ожидаются 36 строк `OK` и ровно 36 patch-файлов. До применения сохраните
 вывод `git status --short`, `git branch --show-current`, `git rev-parse HEAD`
 для каждого исходного репозитория. Рабочие деревья должны быть чистыми.
 Не продолжайте при несовпадении SHA, baseline или количестве файлов.
 
 Проверенные исходные точки и результаты серий:
 
-| Проект | Baseline | Проверенный финальный commit | Финальное Git tree |
-|---|---|---|---|
-| Masakari | `0fd34dd6a6d90525dbf806f35577c5ee1d7e9444` | `9f3cb144958b8e60bba72adefb22edf51387c0ca` | `83bb2fd7a2d8c2f8d97e26c12fb66e8e06436bc5` |
-| Mistral | `3b2eab29e9dc71a5ba250d989155eb69a9bd8e48` | `3e4fe82455de7473809b0e0bc677fa3df3a3d1e2` | `8e3009eb1abf8033608d31d7e60cdb02ab8da1ed` |
-| Kolla-Ansible | архив SHA-256 `df27628ce641fefee30114ebeb3651490655aacb0930ad5bc30a298c88c3e08d`; локальный импорт `703b06c9fa5771c758f703b424d63fb04192567a` | `83ebf5ab09efe6f9c7baa729e5aa9a225d73ca4f` | `c1488cb1a5db61d102bd55a9e9a2fafb5c25426c` |
+| Проект | Baseline | Проверенный final tree |
+|---|---|---|
+| Horizon (для совместимости плагина) | `039850556d0516e52b94b28f95762f310d779f16` | `c50ffa875d2271700f8c2b24f8d7f71a6e01c395` |
+| Masakari | `0fd34dd6a6d90525dbf806f35577c5ee1d7e9444` | `83bb2fd7a2d8c2f8d97e26c12fb66e8e06436bc5` |
+| mistral-lib | `693174dd0aac1da22870b31e4a2481c4e749916a` | `cf20c15a39516272faf2ddfd69a74644fdc105c5` |
+| Mistral | `3b2eab29e9dc71a5ba250d989155eb69a9bd8e48` | `9f9dee83d0e7146ce3d2011bc2169f0834e94ae4` |
+| Kolla | `d14cef9bbafa0db561abfb0c0299d1d6bbbf8f0c` | `aba086df9f5a1e17f74eb5a67286fa00b805bb6b` |
+| Kolla-Ansible | `703b06c9fa5771c758f703b424d63fb04192567a` | `0870059ba6ea82621002286e679bb93fbf719733` |
 
-Commit импорта Kolla воспроизводимо описывает использованное дерево, но его
-ID зависит от метаданных локального Git-коммита. Для новой установки
-авторитетной проверкой baseline служит SHA-256 исходного ZIP, а не попытка
-получить тот же commit ID.
+Для Kolla-Ansible авторитетен точный локальный imported baseline commit и
+final tree. Commit, который создаётся повторным импортом стороннего архива,
+может отличаться из-за Git metadata и не заменяет этот baseline.
 
 ## Подготовка исходных репозиториев
 
@@ -73,6 +82,15 @@ test "$(git rev-parse HEAD)" = 0fd34dd6a6d90525dbf806f35577c5ee1d7e9444
 git switch -c integration/powerops-masakari-2025.1
 ```
 
+mistral-lib:
+
+```bash
+cd "$MISTRAL_LIB_SRC"
+test -z "$(git status --porcelain)"
+test "$(git rev-parse HEAD)" = 693174dd0aac1da22870b31e4a2481c4e749916a
+git switch -c integration/powerops-mistral-lib-2025.1
+```
+
 Mistral:
 
 ```bash
@@ -80,6 +98,15 @@ cd "$MISTRAL_SRC"
 test -z "$(git status --porcelain)"
 test "$(git rev-parse HEAD)" = 3b2eab29e9dc71a5ba250d989155eb69a9bd8e48
 git switch -c integration/powerops-mistral-2025.1
+```
+
+Kolla:
+
+```bash
+cd "$KOLLA_BUILD_SRC"
+test -z "$(git status --porcelain)"
+test "$(git rev-parse HEAD)" = d14cef9bbafa0db561abfb0c0299d1d6bbbf8f0c
+git switch -c integration/powerops-kolla-build-2025.1
 ```
 
 Для Kolla сначала проверьте ZIP и распакуйте его в новый каталог. Не
@@ -130,6 +157,24 @@ git diff --check 0fd34dd6a6d90525dbf806f35577c5ee1d7e9444..HEAD
 доподготовленное состояние командой `git am --abort`. Устраните причину в
 новой чистой ветке от точного baseline и повторите всю серию.
 
+## Установка патча mistral-lib
+
+Патч добавляет в доверенный action context `user_id`, защитную копию `roles`
+и server-created resume authorization, сохраняя legacy positional contract.
+Он должен быть установлен в Mistral API, Engine и Executor вместе с
+патченным Mistral.
+
+```bash
+cd "$MISTRAL_LIB_SRC"
+git am \
+  "$POWEROPS_BUNDLE/patches/mistral-lib/0001-feat-carry-PowerOps-identity-in-action-context.patch"
+git log --oneline --reverse 693174dd0aac1da22870b31e4a2481c4e749916a..HEAD
+git diff --check 693174dd0aac1da22870b31e4a2481c4e749916a..HEAD
+```
+
+При конфликте сохраните диагностику и выполните `git am --abort`; не
+переносите поля identity вручную в непроверенную версию библиотеки.
+
 ## Установка патчей Mistral
 
 Mistral 0010 — обязательная security-зависимость reconcile. При PUT
@@ -151,7 +196,13 @@ git am \
   "$POWEROPS_BUNDLE/patches/mistral/0007-feat-add-guarded-host-return-actions.patch" \
   "$POWEROPS_BUNDLE/patches/mistral/0008-feat-register-the-PowerOps-workbook-API.patch" \
   "$POWEROPS_BUNDLE/patches/mistral/0009-test-generalize-action-plugin-coverage.patch" \
-  "$POWEROPS_BUNDLE/patches/mistral/0010-fix-scope-workbook-updates-to-request-project.patch"
+  "$POWEROPS_BUNDLE/patches/mistral/0010-fix-scope-workbook-updates-to-request-project.patch" \
+  "$POWEROPS_BUNDLE/patches/mistral/0011-feat-propagate-trusted-PowerOps-action-identity.patch" \
+  "$POWEROPS_BUNDLE/patches/mistral/0012-feat-define-PowerOps-role-authorization.patch" \
+  "$POWEROPS_BUNDLE/patches/mistral/0013-feat-reject-unauthorized-PowerOps-starts.patch" \
+  "$POWEROPS_BUNDLE/patches/mistral/0014-feat-reauthorize-PowerOps-workflow-resume.patch" \
+  "$POWEROPS_BUNDLE/patches/mistral/0015-feat-enforce-PowerOps-roles-and-hard-off-policy.patch" \
+  "$POWEROPS_BUNDLE/patches/mistral/0016-feat-expose-read-only-PowerOps-host-inventory.patch"
 git log --oneline --reverse 3b2eab29e9dc71a5ba250d989155eb69a9bd8e48..HEAD
 git diff --check 3b2eab29e9dc71a5ba250d989155eb69a9bd8e48..HEAD
 ```
@@ -159,9 +210,22 @@ git diff --check 3b2eab29e9dc71a5ba250d989155eb69a9bd8e48..HEAD
 При конфликте используйте тот же безопасный цикл: зафиксировать диагностику,
 `git am --abort`, проверить baseline и повторить в новой integration-ветке.
 
+## Установка патча Kolla
+
+Патч добавляет opt-in local sources для standalone Horizon-плагина и
+mistral-lib и активирует enabled-файл только при `ENABLE_POWEROPS=yes`.
+
+```bash
+cd "$KOLLA_BUILD_SRC"
+git am \
+  "$POWEROPS_BUNDLE/patches/kolla/0001-feat-package-PowerOps-Horizon-and-Mistral-components.patch"
+git log --oneline --reverse d14cef9bbafa0db561abfb0c0299d1d6bbbf8f0c..HEAD
+git diff --check d14cef9bbafa0db561abfb0c0299d1d6bbbf8f0c..HEAD
+```
+
 ## Установка патчей Kolla-Ansible
 
-Шесть патчей рассчитаны на точное дерево проверенного ZIP. Первый патч удаляет
+Восемь патчей рассчитаны на точный imported baseline. Первый патч удаляет
 runtime/backup/reject-артефакты и восстанавливает `no_log: true`. Четвёртый
 патч зависит от уже включённого в Mistral патча 0010.
 
@@ -173,10 +237,12 @@ git am \
   "$POWEROPS_BUNDLE/patches/kolla-ansible/0003-feat-render-etcd-backed-PowerOps-configuration.patch" \
   "$POWEROPS_BUNDLE/patches/kolla-ansible/0004-feat-reconcile-PowerOps-actions-and-workbook.patch" \
   "$POWEROPS_BUNDLE/patches/kolla-ansible/0005-docs-add-Russian-PowerOps-operations-guide.patch" \
-  "$POWEROPS_BUNDLE/patches/kolla-ansible/0006-fix-load-Masakari-through-idempotent-WSGI-wrapper.patch"
+  "$POWEROPS_BUNDLE/patches/kolla-ansible/0006-fix-load-Masakari-through-idempotent-WSGI-wrapper.patch" \
+  "$POWEROPS_BUNDLE/patches/kolla-ansible/0007-feat-configure-Horizon-PowerOps-RBAC-and-image.patch" \
+  "$POWEROPS_BUNDLE/patches/kolla-ansible/0008-feat-validate-Horizon-PowerOps-runtime-contract.patch"
 test ! -e ansible.log
-git log --oneline -6
-git diff --check HEAD~6..HEAD
+git log --oneline -8
+git diff --check HEAD~8..HEAD
 ```
 
 Шестой патч доставляет в `masakari_api` файл
@@ -193,23 +259,45 @@ point `masakari.wsgi.api.application`. Он устраняет запуск lega
 
 ## Требования к сборке образов
 
-Этот bundle не содержит pipeline сборки, публикации и подписи контейнерных
-образов и не предписывает команду конкретного image builder. Интегрируйте
-патченные исходные ветки в существующий доверенный image pipeline вашей
-организации с теми же constraints, базовыми образами, SBOM, сканированием,
-подписью и immutable-тегами, что используются для Epoxy 2025.1.
+Bundle содержит secret-free local recipe `build/kolla-build.conf`. После
+применения Kolla patch он выбирает standalone plugin, local `mistral-base` и
+local mistral-lib. Команда локальной сборки (отдельный change gate) должна
+выполняться из `$KOLLA_BUILD_SRC` с `--locals-base`, указывающим на корень
+bundle:
 
-Нужно получить ровно четыре патченных runtime-образа:
+```bash
+kolla-build \
+  --config-file "$POWEROPS_BUNDLE/build/kolla-build.conf" \
+  --locals-base "$POWEROPS_BUNDLE" \
+  '^(horizon|mistral-api|mistral-engine|mistral-executor)$'
+```
 
-1. Masakari Engine из финального Masakari-дерева;
-2. Mistral API из финального Mistral-дерева;
-3. Mistral Engine из финального Mistral-дерева;
-4. Mistral Executor из финального Mistral-дерева.
+Она должна получить ровно четыре новых локальных образа:
+
+1. `powerops-local/horizon:2025.1-powerops` с `powerops-dashboard`;
+2. `powerops-local/mistral-api:2025.1-powerops`;
+3. `powerops-local/mistral-engine:2025.1-powerops`;
+4. `powerops-local/mistral-executor:2025.1-powerops`.
+
+Для локального патченного fork Kolla читает точную строку
+`mistral-lib===3.3.1` из активного upper-constraints 2025.1, исключает её из
+обычной установки plugin requirements и устанавливает local source с
+`PBR_VERSION=3.3.1+powerops.1`. Если точная constraint не найдена, сборка
+останавливается fail-closed. После сборки обязательно выполните `pip check` и
+загрузку всех шести `powerops.*` entry points отдельно в `mistral_api`,
+`mistral_engine` и `mistral_executor`.
+
+Отдельно для полного PowerOps deployment по-прежнему требуется патченный
+Masakari Engine из финального Masakari-дерева; этот local recipe его не
+собирает. Перенесите оба набора исходников в доверенный image pipeline вашей
+организации с принятыми constraints, SBOM, scanning, подписью и immutable
+tags.
 
 Masakari API и Mistral Event Engine не исполняют добавленный код и могут
 остаться vanilla. Pipeline должен подтвердить, что Masakari Engine содержит
-entry point `ironic_fence` группы `masakari.task_flow.tasks`, а каждый из
-Mistral API/Engine/Executor содержит пять `powerops.*` entry points группы
+entry point `ironic_fence` группы `masakari.task_flow.tasks`, Horizon — пакет
+`powerops-dashboard`, а каждый из Mistral API/Engine/Executor содержит шесть
+`powerops.*` entry points группы
 `mistral.actions`. Проверка выполняется чтением `importlib.metadata` внутри
 собранного артефакта; она не должна обращаться к OpenStack API, etcd или BMC.
 
@@ -228,8 +316,10 @@ Mistral API/Engine/Executor содержит пять `powerops.*` entry points 
 enable_ironic: "yes"
 enable_masakari: "yes"
 enable_mistral: "yes"
+enable_horizon: "yes"
 enable_etcd: "yes"
 enable_powerops: "yes"
+openstack_region_name: RegionOne
 
 powerops_coordination_url: >-
   etcd3+{{ internal_protocol }}://{{ kolla_internal_fqdn }}:{{ etcd_client_port }}?api_version=v3{% if openstack_cacert %}&ca_cert={{ openstack_cacert }}{% endif %}
@@ -242,6 +332,8 @@ powerops_mistral_engine_image: "registry.example.invalid/openstack/mistral-engin
 powerops_mistral_engine_tag: "epoxy-powerops-immutable"
 powerops_mistral_executor_image: "registry.example.invalid/openstack/mistral-executor"
 powerops_mistral_executor_tag: "epoxy-powerops-immutable"
+powerops_horizon_image: "powerops-local/horizon"
+powerops_horizon_tag: "2025.1-powerops"
 
 powerops_allowed_project_names:
   - powerops-operators
@@ -271,8 +363,10 @@ kolla_admin_openrc_cacert: "/etc/kolla/controller-ca.pem"
 | `enable_ironic` | Включает Ironic, который PowerOps использует только как источник соответствия compute host → BMC и как backend физического питания. Узлы остаются `manageable` с `network_interface=noop`; этот сценарий не включает provisioning, cleaning или `nova-compute-ironic`. |
 | `enable_masakari` | Включает Masakari. В PowerOps он обрабатывает аварийный отказ хоста: отключает `nova-compute`, выполняет fencing через Ironic и только после стабильного `power off` последовательно эвакуирует ВМ. |
 | `enable_mistral` | Включает Mistral для плановых `status`, `power off`, `reboot` и двухфазного возврата хоста. Аварийный fencing Masakari от Mistral не зависит. |
+| `enable_horizon` | Включает Horizon. PowerOps-плагин активируется только когда одновременно включены Horizon, Mistral и PowerOps. |
 | `enable_etcd` | Включает etcd, используемый через tooz как общий backend распределённых блокировок Masakari и Mistral. |
 | `enable_powerops` | Активирует PowerOps-конфигурацию, выбор четырёх патченных образов, изменённый Masakari recovery flow и Mistral reconcile/validation. Значение `yes` само по себе не запускает workflow, power action, migration или evacuation. По умолчанию PowerOps выключен. |
+| `openstack_region_name` | Единственный регион этой инсталляции PowerOps. Horizon показывает его и блокирует вызов, если выбранный пользователем регион не совпадает. |
 
 ### Координация, fencing и последовательность операций
 
@@ -314,6 +408,8 @@ kolla_admin_openrc_cacert: "/etc/kolla/controller-ca.pem"
 | `powerops_mistral_engine_tag` | Immutable tag патченного Mistral Engine. |
 | `powerops_mistral_executor_image` | Repository патченного Mistral Executor, в котором должны быть установлены те же `powerops.*` action entry points. |
 | `powerops_mistral_executor_tag` | Immutable tag патченного Mistral Executor. Mistral Event Engine этим параметром намеренно не заменяется. |
+| `powerops_horizon_image` | Repository Horizon image с установленным standalone `powerops-dashboard`. |
+| `powerops_horizon_tag` | Immutable tag Horizon PowerOps image; локальный recipe использует `2025.1-powerops`. |
 
 Пары repository/tag обязательны и выбираются только при
 `enable_powerops: "yes"`. Предпочтительны digest либо immutable tag, чтобы
@@ -326,16 +422,23 @@ kolla_admin_openrc_cacert: "/etc/kolla/controller-ca.pem"
 | `powerops_allowed_project_names` | Allowlist точных `project_name` из Keystone-scoped контекста вызвавшего Mistral execution. `powerops-operators` в примере — имя проекта Keystone, а не роль или группа. |
 | `powerops_allowed_user_names` | Allowlist точных `user_name` из того же контекста. `svc-powerops` в примере — имя пользователя Keystone. |
 
-Action разрешается, только если имя проекта входит в первый список **и** имя
-пользователя входит во второй — оба условия одновременно. Например,
-`svc-powerops` в проекте `powerops-operators` допускается, а тот же пользователь
-в другом проекте либо другой пользователь в разрешённом проекте отклоняется с
-`PowerOpsUnauthorized` до cloud-мутаций.
+Для `powerops_operator` action разрешается, только если имя проекта входит в
+первый список **и** имя пользователя входит во второй — оба условия
+одновременно. Например, `svc-powerops` в проекте `powerops-operators`
+допускается, а тот же пользователь в другом проекте либо другой пользователь
+в разрешённом проекте отклоняется с `PowerOpsUnauthorized` до cloud-мутаций.
+
+Точная роль `admin` проверяется первой: admin разрешён в любом проекте и
+обходит оба allowlist. Следовательно, списки относятся только к
+powerops_operator. Если у пользователя есть обе роли, применяется admin-ветка.
 
 Эти параметры не создают Keystone-проект, пользователя или роли и не заменяют
 Keystone RBAC/Mistral policy. Сущности и минимальные роли создаются отдельно.
 Allowlist — дополнительный прикладной gate перед тем, как action воспользуется
 сервисными credentials Mistral для обращения к Ironic, Nova и Masakari.
+Самим service credentials Mistral не требуется человеческая роль
+powerops_operator: человеческая авторизация доставляется отдельно в
+доверенном action context.
 
 Сопоставление выполняется по точному имени и регистрозависимо;
 пустой список запрещает все вызовы. Kolla precheck не позволяет включить
@@ -352,7 +455,7 @@ service user.
 | Параметр | Назначение |
 |---|---|
 | `powerops_reconcile_workbook` | При `yes` Kolla после запуска Mistral читает точный публичный workbook `power_ops`: создаёт его при отсутствии либо обновляет единственную принадлежащую token project запись при изменении. Чужая или неоднозначная запись блокирует reconcile. Workflow execution при этом не создаётся. |
-| `powerops_validate_registration` | При `yes` Kolla после populate/reconcile read-only проверяет наличие точных пяти actions и четырёх workflows. Проверка валидирует каталог, но не проверяет реальный etcd lock, BMC или Nova operation. |
+| `powerops_validate_registration` | При `yes` Kolla после populate/reconcile read-only проверяет наличие точных шести actions и пяти workflows. Проверка валидирует каталог, но не проверяет реальный etcd lock, BMC или Nova operation. |
 | `kolla_admin_openrc_cacert` | Путь к CA-файлу на Ansible control node для делегированных на `localhost` Keystone/Mistral API-вызовов reconcile и validation. Это не container path и не тот же контракт, что `openstack_cacert`. Файл должен быть обычным и читаемым. |
 
 Если внутренние API используют TLS, `kolla_admin_openrc_cacert` проверяется
@@ -433,11 +536,13 @@ openstack compute service list --service nova-compute
 openstack segment host list SEGMENT_UUID
 ```
 
-Ожидаются пять actions:
-`powerops.host_power_status`, `powerops.planned_power_off`,
+Ожидаются шесть actions:
+`powerops.host_inventory`, `powerops.host_power_status`,
+`powerops.planned_power_off`,
 `powerops.planned_reboot`, `powerops.power_on_for_inspection`,
-`powerops.return_to_service`; и четыре workflows:
-`power_ops.host_power_status`, `power_ops.planned_power_off`,
+`powerops.return_to_service`; и пять workflows:
+`power_ops.host_inventory`, `power_ops.host_power_status`,
+`power_ops.planned_power_off`,
 `power_ops.planned_reboot`, `power_ops.power_on_and_return`.
 
 Сначала по list проверьте единственность имени и возьмите точный `NODE_UUID`,
@@ -518,8 +623,12 @@ source branches, immutable image tags и сохранённый `globals.yml`, �
 ## Граница статической и live-проверки
 
 Поставка проверена локально: патчи применяются к заявленным baseline, тесты и
-lint проходят в указанной границе, исходные контракты трёх репозиториев
-согласованы, hashes зафиксированы. Образы не собирались и не публиковались;
+source/delivery checks проходят в указанной границе, контракты компонентов
+согласованы, hashes зафиксированы. Собраны и read-only проинспектированы четыре
+локальных образа; `pip check` прошёл в каждом, а шесть `powerops.*` entry points
+загружены отдельно во всех трёх Mistral-репликах. Mock UI проверен на шести
+маршрутах, пакет собран как wheel и sdist. Образы не публиковались.
+
 `deploy`/`reconfigure` не выполнялись; реальные Keystone/Mistral API,
 etcd lease/heartbeat, Ironic/Redfish/BMC, Nova migration/evacuation и
 последовательный VM start/stop не проверялись. Эти проверки остаются отдельной

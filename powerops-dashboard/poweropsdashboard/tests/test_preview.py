@@ -18,6 +18,11 @@ def _user():
         username='ops-user',
         project_id='project-id',
         services_region='RegionOne',
+        authorized_tenants=[],
+        available_services_regions=['RegionOne'],
+        user_domain_name='Default',
+        system_scoped=False,
+        is_system_user=False,
         is_authenticated=True,
         has_perms=lambda permissions: True,
     )
@@ -39,8 +44,13 @@ class PreviewSettingsTests(SimpleTestCase):
 
     def test_preview_is_debug_local_mock_only(self):
         self.assertIs(True, preview_settings.DEBUG)
+        self.assertIs(False, preview_settings.SESSION_REFRESH)
         self.assertEqual(
             ['127.0.0.1', 'localhost'], preview_settings.ALLOWED_HOSTS)
+        self.assertEqual(
+            [('http://localhost/identity/v3', 'RegionOne')],
+            preview_settings.AVAILABLE_REGIONS,
+        )
         self.assertIs(True, preview_settings.POWEROPS_MOCK_MODE)
         self.assertEqual('RegionOne', preview_settings.POWEROPS_REGION_NAME)
         self.assertEqual(
@@ -146,7 +156,7 @@ class PreviewPageTests(SimpleTestCase):
         ]
 
         with mock.patch(
-                'django.contrib.auth.middleware.auth.get_user',
+                'openstack_auth.utils.get_user',
                 return_value=_user()):
             responses = [self.client.get(url) for url in urls]
 
@@ -167,7 +177,7 @@ class PreviewPageTests(SimpleTestCase):
             mock_data.RETURN_EXECUTION_UUID)
 
         with mock.patch(
-                'django.contrib.auth.middleware.auth.get_user',
+                'openstack_auth.utils.get_user',
                 return_value=_user()):
             planned_token = _token(self.client.get(planned_url))
             planned = self.client.post(planned_url, {

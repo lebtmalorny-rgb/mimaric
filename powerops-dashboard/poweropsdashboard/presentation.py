@@ -422,7 +422,8 @@ def parse_tasks(tasks):
 
 
 def _execution_target(execution, workflow_name):
-    if workflow_name == constants.HOST_INVENTORY:
+    if workflow_name in {
+            constants.HOST_INVENTORY, constants.HOST_POWER_STATUS}:
         return None
     workflow_input = _mapping(_resource_value(execution, 'input'))
     _scan_json(workflow_input)

@@ -50,6 +50,11 @@ def _user():
         username='ops-user',
         project_id='project-id',
         services_region='RegionOne',
+        authorized_tenants=[],
+        available_services_regions=['RegionOne'],
+        user_domain_name='Default',
+        system_scoped=False,
+        is_system_user=False,
         token=SimpleNamespace(id='current-user-token'),
         is_authenticated=True,
         has_perms=lambda permissions: True,
@@ -126,7 +131,7 @@ class ExecutionViewTests(SimpleTestCase):
 
         for _index in range(2):
             with mock.patch(
-                    'django.contrib.auth.middleware.auth.get_user',
+                    'openstack_auth.utils.get_user',
                     return_value=_user()):
                 response = self.client.get(
                     '/powerops/executions/{}/'.format(EXECUTION_UUID))
@@ -154,7 +159,7 @@ class ExecutionViewTests(SimpleTestCase):
             state_info='Traceback password=must-not-render',
         )
         get_client.return_value.list_tasks.return_value = [_task()]
-        with mock.patch('django.contrib.auth.middleware.auth.get_user',
+        with mock.patch('openstack_auth.utils.get_user',
                         return_value=_user()):
             response = self.client.get(
                 '/powerops/executions/{}/'.format(EXECUTION_UUID))

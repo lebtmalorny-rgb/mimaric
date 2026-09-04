@@ -70,6 +70,11 @@ def _user():
         username='ops-user',
         project_id='project-id',
         services_region='RegionOne',
+        authorized_tenants=[],
+        available_services_regions=['RegionOne'],
+        user_domain_name='Default',
+        system_scoped=False,
+        is_system_user=False,
         token=SimpleNamespace(id='current-user-token'),
         is_authenticated=True,
         has_perms=lambda permissions: True,
@@ -371,7 +376,7 @@ class InventoryViewTests(SimpleTestCase):
                 authorize.return_value = authorization
                 adapter.list_executions.reset_mock()
                 with mock.patch(
-                        'django.contrib.auth.middleware.auth.get_user',
+                        'openstack_auth.utils.get_user',
                         return_value=user):
                     response = self.client.get('/powerops/')
                 self.assertEqual(200, response.status_code)
@@ -386,7 +391,7 @@ class InventoryViewTests(SimpleTestCase):
             self, authorize, get_client):
         get_client.return_value.list_executions.return_value = [
             _execution({'result': [_row(operable=False)]})]
-        with mock.patch('django.contrib.auth.middleware.auth.get_user',
+        with mock.patch('openstack_auth.utils.get_user',
                         return_value=_user()):
             response = self.client.get('/powerops/')
         content = response.content.decode('utf-8')
@@ -413,7 +418,7 @@ class InventoryViewTests(SimpleTestCase):
         }
         get_client.return_value = adapter
 
-        with mock.patch('django.contrib.auth.middleware.auth.get_user',
+        with mock.patch('openstack_auth.utils.get_user',
                         return_value=_user()):
             response = self.client.get('/powerops/refresh/')
 

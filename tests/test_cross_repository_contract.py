@@ -14,6 +14,9 @@ import unittest
 
 
 ACTION_TARGETS = {
+    "powerops.host_inventory": (
+        "mistral.actions.powerops.inventory:HostInventoryAction"
+    ),
     "powerops.host_power_status": (
         "mistral.actions.powerops.return_host:HostPowerStatusAction"
     ),
@@ -32,6 +35,7 @@ ACTION_TARGETS = {
 }
 
 WORKFLOW_NAMES = {
+    "host_inventory",
     "host_power_status",
     "planned_power_off",
     "planned_reboot",
@@ -345,7 +349,14 @@ class CrossRepositoryContractTest(unittest.TestCase):
     def setUpClass(cls):
         cls.masakari = _required_tree("POWEROPS_MASAKARI_TREE")
         cls.mistral = _required_tree("POWEROPS_MISTRAL_TREE")
-        cls.kolla = _required_tree("POWEROPS_KOLLA_TREE")
+        # The original backend-only suite called the Kolla-Ansible input
+        # POWEROPS_KOLLA_TREE. Task 12 adds a real Kolla source tree, so use
+        # the unambiguous name when both are supplied while retaining the
+        # legacy environment contract for older standalone invocations.
+        if os.environ.get("POWEROPS_KOLLA_ANSIBLE_TREE"):
+            cls.kolla = _required_tree("POWEROPS_KOLLA_ANSIBLE_TREE")
+        else:
+            cls.kolla = _required_tree("POWEROPS_KOLLA_TREE")
 
     def test_masakari_fence_entrypoint_and_recovery_order(self):
         entries = _entry_points(
@@ -412,14 +423,14 @@ class CrossRepositoryContractTest(unittest.TestCase):
         self.assertEqual(
             ACTION_TARGETS,
             actual_actions,
-            "Mistral must register all five composite PowerOps actions",
+            "Mistral must register all six composite PowerOps actions",
         )
 
         workbook = _read(self.mistral, "etc/mistral/power_ops.yaml")
         self.assertEqual(
             WORKFLOW_NAMES,
             set(_mapping_child_keys(workbook, "workflows", 0)),
-            "the operator workbook must expose exactly four workflows",
+            "the operator workbook must expose exactly five workflows",
         )
         custom_references = {
             match.group(1)
@@ -667,41 +678,31 @@ class CrossRepositoryContractTest(unittest.TestCase):
 
     def test_privileged_actions_require_both_exact_allowlists(self):
         _, module = _python_module(
-            self.mistral, "mistral/actions/powerops/base.py"
+            self.mistral, "mistral/services/powerops.py"
         )
-        method = _class_method(module, "PowerOpsAction", "_authorize")
-        checks = [
-            node for node in ast.walk(method)
+        method = _function(module, "authorize")
+        role_decision = next(
+            node for node in method.body
             if isinstance(node, ast.If)
-        ]
+            and ast.unparse(node.test) == "ADMIN_ROLE in roles"
+        )
         self.assertEqual(
-            1,
-            len(checks),
-            "PowerOps authorization must have one fail-closed decision",
+            "branch = ADMIN_BRANCH",
+            ast.unparse(role_decision.body[0]),
+            "admin must be selected before any allowlist check",
         )
-        condition = checks[0].test
-        self.assertIsInstance(
-            condition,
-            ast.BoolOp,
-            "project and user checks must share one authorization decision",
-        )
-        self.assertIsInstance(
-            condition.op,
-            ast.Or,
-            "either missing exact membership must deny the caller",
-        )
-        self.assertEqual(2, len(condition.values))
-
-        expected = {
-            "security.project_name not in "
-            "CONF.powerops.allowed_project_names",
-            "security.user_name not in CONF.powerops.allowed_user_names",
-        }
-        actual = {ast.unparse(value) for value in condition.values}
-        self.assertEqual(
-            expected,
-            actual,
-            "empty or non-matching project/user allowlists must deny all",
+        self.assertEqual(1, len(role_decision.orelse))
+        operator_decision = role_decision.orelse[0]
+        self.assertIsInstance(operator_decision, ast.If)
+        condition = ast.unparse(operator_decision.test)
+        for expected in (
+                "OPERATOR_ROLE in roles",
+                "CONF.powerops.allowed_project_names",
+                "CONF.powerops.allowed_user_names"):
+            self.assertIn(expected, condition)
+        self.assertNotIn(
+            "allowed_", ast.unparse(role_decision.test),
+            "admin must bypass both project and user allowlists",
         )
 
         template = _read(

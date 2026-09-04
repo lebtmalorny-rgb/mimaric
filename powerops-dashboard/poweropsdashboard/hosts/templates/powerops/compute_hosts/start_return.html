@@ -18,7 +18,7 @@
   {% endif %}
   {% if verification_required %}
     <p class="alert alert-danger">
-      {% trans "The submission result is uncertain. Do not retry. Verify executions and host state first." %}
+      {% trans "Verification required: the submission result is uncertain. Do not retry. Verify executions and host state first." %}
     </p>
     <p>
       <a href="{% url 'horizon:powerops:compute_hosts:index' %}">
