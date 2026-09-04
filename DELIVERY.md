@@ -69,7 +69,7 @@ The final local gate completed on 2026-09-04 with these results:
 
 - 14 delivery-artifact tests passed;
 - 30 cross-repository and Horizon contract tests passed;
-- 97 plugin tests passed under the isolated Horizon 2025.1 environment;
+- 99 plugin tests passed under the isolated Horizon 2025.1 environment;
 - Django system check reported no issues;
 - plugin `tox -e pep8` passed;
 - 57 focused Kolla tests passed for build and PowerOps behavior;
@@ -100,8 +100,8 @@ wheel and sdist are version `0.0.1`; both publish the required dependencies,
 and the wheel contains all five templates plus its JavaScript and CSS assets.
 Recorded SHA-256 values are:
 
-- wheel: `991db0117185d0160b7e0dd185a0573e470244a898a051c489c07420ad84f454`;
-- sdist: `12f895d31e1655fe5e02f829bb23a208b9867c915810768430c04e39376f2249`.
+- wheel: `810a80aac5d9a9538e72aae8245645afd26276e27169fc91bd7b3fb081c2f225`;
+- sdist: `386874373079c9001dee20e36d68d7305451626bd6f894c2544f175cc4273997`.
 
 The mock UI was started and inspected at all six routes: host inventory,
 execution details for `RUNNING` and uncertain `ERROR`, planned operation,
@@ -122,6 +122,11 @@ Read-only checks independently loaded the Horizon plugin and every one of the
 six `powerops.*` action entry points in each Mistral replica. Each target image
 passed `pip check`; all three Mistral images contained the patched
 `mistral-lib` version `3.3.1+powerops.1`.
+
+The image IDs above predate the follow-up mock stylesheet fix, which changes
+only `poweropsdashboard.test.preview_settings` and its regression tests. The
+deployed Horizon settings and production PowerOps request path are unchanged;
+the production images were therefore not rebuilt for this preview-only fix.
 
 The Kolla-Ansible workbook is byte-identical to the reviewed Mistral workbook.
 The mandatory WSGI patch 0006 remains byte-identical at SHA-256

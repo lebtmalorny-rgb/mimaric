@@ -2,6 +2,7 @@ import re
 from types import SimpleNamespace
 from unittest import mock
 
+from django.contrib.staticfiles import finders
 from django.test import override_settings
 from django.test import SimpleTestCase
 
@@ -41,6 +42,17 @@ def _token(response):
 
 
 class PreviewSettingsTests(SimpleTestCase):
+
+    def test_preview_compiles_horizon_theme_scss(self):
+        self.assertIn(
+            ('text/scss', 'horizon.utils.scss_filter.ScssFilter'),
+            getattr(preview_settings, 'COMPRESS_PRECOMPILERS', ()),
+        )
+
+    @override_settings(STATICFILES_DIRS=preview_settings.STATICFILES_DIRS)
+    def test_preview_exposes_horizon_theme_static_files(self):
+        self.assertIsNotNone(
+            finders.find('themes/default/_variables.scss'))
 
     def test_preview_is_debug_local_mock_only(self):
         self.assertIs(True, preview_settings.DEBUG)

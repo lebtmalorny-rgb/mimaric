@@ -123,7 +123,7 @@ The fresh local verification completed with:
 | --- | --- |
 | Delivery artifact suite | 14 passed |
 | Cross-repository and Horizon contracts | 30 passed |
-| Standalone plugin suite | 97 passed |
+| Standalone plugin suite | 99 passed |
 | Django system check | 0 issues |
 | Plugin `tox -e pep8` | passed |
 | Focused Kolla PowerOps/build suite | 57 passed |
@@ -139,13 +139,19 @@ and CSS assets.
 
 | Artifact | SHA-256 |
 | --- | --- |
-| `powerops_dashboard-0.0.1-py3-none-any.whl` | `991db0117185d0160b7e0dd185a0573e470244a898a051c489c07420ad84f454` |
-| `powerops_dashboard-0.0.1.tar.gz` | `12f895d31e1655fe5e02f829bb23a208b9867c915810768430c04e39376f2249` |
+| `powerops_dashboard-0.0.1-py3-none-any.whl` | `810a80aac5d9a9538e72aae8245645afd26276e27169fc91bd7b3fb081c2f225` |
+| `powerops_dashboard-0.0.1.tar.gz` | `386874373079c9001dee20e36d68d7305451626bd6f894c2544f175cc4273997` |
 
 The isolated mock server returned HTTP 200 for host inventory, RUNNING
 execution details, uncertain ERROR details, planned power-off, return start,
 and return resume. The uncertain outcome included `Verification required:`;
 the single-region configuration hid the region selector.
+
+A follow-up visual check found that the original preview inherited Horizon's
+unit-test settings without its SCSS precompiler and theme static directories.
+Two regression tests were added, the preview-only settings were corrected, and
+a fresh 1440x900 headless render confirmed normal Horizon navigation, logo,
+typography, and table styling.
 
 ## Local image evidence
 
@@ -162,6 +168,10 @@ Read-only inspection imported the Horizon plugin and independently loaded all
 six `powerops.*` action entry points in `mistral-api`, `mistral-engine`, and
 `mistral-executor`. Every image passed `pip check`; each Mistral image reported
 the patched fork as `mistral-lib=3.3.1+powerops.1`. No image was pushed.
+
+These image IDs predate the follow-up change limited to mock preview settings
+and their regression tests. No deployed setting or production request path was
+changed, so the production images were not rebuilt for that preview-only fix.
 
 ## Proof boundary
 

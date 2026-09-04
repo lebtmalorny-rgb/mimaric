@@ -438,7 +438,7 @@ class DeliveryArtifactsTest(unittest.TestCase):
         normalized = " ".join(text.split())
         self.assertIn("four target images were built and inspected", normalized)
         self.assertIn("mock UI was started and inspected", normalized)
-        self.assertIn("97 plugin tests", normalized)
+        self.assertIn("99 plugin tests", normalized)
         self.assertIn("57 focused Kolla tests", normalized)
         self.assertIn("no deployment or reconfiguration was run",
                       normalized.lower())
