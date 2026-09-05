@@ -1,0 +1,162 @@
+From 3dec4eae7a40f3fd6b587db4a52967bb0c9bbec0 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Sat, 5 Sep 2026 13:48:52 +0300
+Subject: [PATCH 3/5] fix: enforce shared PowerOps authorization in actions
+
+---
+ mistral/actions/powerops/base.py              |  16 +--
+ .../actions/powerops/test_authorization.py    | 108 ++++++++++++++++++
+ 2 files changed, 114 insertions(+), 10 deletions(-)
+ create mode 100644 mistral/tests/unit/actions/powerops/test_authorization.py
+
+diff --git a/mistral/actions/powerops/base.py b/mistral/actions/powerops/base.py
+index 8ba1dc3..29a0bb4 100644
+--- a/mistral/actions/powerops/base.py
++++ b/mistral/actions/powerops/base.py
+@@ -18,6 +18,7 @@ from oslo_log import log as logging
+ from mistral.actions.powerops import clients
+ from mistral.actions.powerops import coordination
+ from mistral.actions.powerops import exceptions
++from mistral.services import powerops
+ from mistral_lib import actions
+ 
+ 
+@@ -29,16 +30,11 @@ class PowerOpsAction(actions.Action):
+     """Shared authorization, coordination and fail-safe action template."""
+ 
+     def _authorize(self, context):
+-        security = context.security
+-
+-        if (
+-                security.project_name
+-                not in CONF.powerops.allowed_project_names
+-                or security.user_name
+-                not in CONF.powerops.allowed_user_names):
+-            raise exceptions.PowerOpsUnauthorized(
+-                'caller is not authorized for PowerOps'
+-            )
++        powerops.authorize(
++            context.security,
++            allow_hard_off=getattr(self, 'allow_hard_off', False),
++            error_cls=exceptions.PowerOpsUnauthorized,
++        )
+ 
+     def _validate_inputs(self):
+         try:
+diff --git a/mistral/tests/unit/actions/powerops/test_authorization.py b/mistral/tests/unit/actions/powerops/test_authorization.py
+new file mode 100644
+index 0000000..586e694
+--- /dev/null
++++ b/mistral/tests/unit/actions/powerops/test_authorization.py
+@@ -0,0 +1,108 @@
++# Copyright 2026 OpenStack Foundation
++#
++# Licensed under the Apache License, Version 2.0 (the "License"); you may
++# not use this file except in compliance with the License. You may obtain
++# a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++# License for the specific language governing permissions and limitations
++# under the License.
++
++from unittest import mock
++
++from mistral.actions.powerops import base as action_base
++from mistral.actions.powerops import exceptions
++from mistral.actions.powerops import planned
++from mistral.actions.powerops import return_host
++from mistral.tests.unit.actions.powerops import fakes
++from mistral.tests.unit import base
++
++
++class ActionAuthorizationTest(base.BaseTest):
++    def setUp(self):
++        super(ActionAuthorizationTest, self).setUp()
++        self.override_config('enabled', True, 'powerops')
++        self.override_config(
++            'allowed_project_names', ['operations'], 'powerops'
++        )
++        self.override_config(
++            'allowed_user_names', ['powerops-operator'], 'powerops'
++        )
++
++    @staticmethod
++    def _actions():
++        return (
++            planned.PlannedPowerOffAction('compute-01', 'segment-1'),
++            planned.PlannedRebootAction('compute-01', 'segment-1'),
++            return_host.HostPowerStatusAction('compute-01', 'segment-1'),
++            return_host.PowerOnForInspectionAction('compute-01', 'segment-1'),
++            return_host.ReturnToServiceAction(
++                'compute-01', 'segment-1', [], stale_domains_checked=True
++            ),
++        )
++
++    @mock.patch.object(action_base.coordination, 'OperationCoordinator')
++    @mock.patch.object(action_base.clients, 'connection_from_conf')
++    def test_direct_actions_reject_untrusted_roles_before_cloud_access(
++            self, connection_from_conf, coordinator_cls):
++        coordinator_cls.side_effect = AssertionError(
++            'unauthorized action reached coordination'
++        )
++        connection_from_conf.side_effect = AssertionError(
++            'unauthorized action reached OpenStack'
++        )
++        for roles in ([], None, ['member'], 'admin', [1], ['Admin']):
++            context = fakes.action_context('direct-action')
++            context.security.roles = roles
++
++            for action in self._actions():
++                with self.subTest(action=type(action).__name__, roles=roles):
++                    self.assertRaises(
++                        exceptions.PowerOpsUnauthorized, action.run, context
++                    )
++
++        connection_from_conf.assert_not_called()
++        coordinator_cls.assert_not_called()
++
++    def test_admin_is_not_restricted_by_operator_allowlists(self):
++        context = fakes.action_context(
++            'admin-action', project_name='admin', user_name='admin',
++            roles=['admin'],
++        )
++        self.override_config('allowed_project_names', [], 'powerops')
++        self.override_config('allowed_user_names', [], 'powerops')
++
++        for action in self._actions():
++            action._authorize(context)
++
++    def test_allowlisted_operator_is_authorized_for_soft_actions(self):
++        for action in self._actions():
++            action._authorize(fakes.action_context('operator-action'))
++
++    @mock.patch.object(action_base.coordination, 'OperationCoordinator')
++    @mock.patch.object(action_base.clients, 'connection_from_conf')
++    def test_direct_hard_off_requires_admin_role(
++            self, connection_from_conf, coordinator_cls):
++        coordinator_cls.side_effect = AssertionError(
++            'operator hard-off reached coordination'
++        )
++        for action_class in (
++                planned.PlannedPowerOffAction, planned.PlannedRebootAction):
++            action = action_class(
++                'compute-01', 'segment-1', allow_hard_off=True
++            )
++            self.assertRaises(
++                exceptions.PowerOpsUnauthorized, action.run,
++                fakes.action_context('operator-hard-off'),
++            )
++            action._authorize(fakes.action_context(
++                'admin-hard-off', project_name='admin', user_name='admin',
++                roles=['admin'],
++            ))
++
++        connection_from_conf.assert_not_called()
++        coordinator_cls.assert_not_called()
+-- 
+2.49.0
+

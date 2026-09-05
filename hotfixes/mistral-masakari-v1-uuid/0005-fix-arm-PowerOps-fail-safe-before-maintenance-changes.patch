@@ -1,0 +1,248 @@
+From 7be711a1df54655fed9cfdaca66516023536558a Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Sat, 5 Sep 2026 13:58:45 +0300
+Subject: [PATCH 5/5] fix: arm PowerOps fail-safe before maintenance changes
+
+---
+ mistral/actions/powerops/base.py              |   4 +-
+ mistral/actions/powerops/planned.py           |   6 +-
+ mistral/actions/powerops/return_host.py       |   5 +-
+ .../powerops/test_transition_safety.py        | 148 ++++++++++++++++++
+ 4 files changed, 157 insertions(+), 6 deletions(-)
+ create mode 100644 mistral/tests/unit/actions/powerops/test_transition_safety.py
+
+diff --git a/mistral/actions/powerops/base.py b/mistral/actions/powerops/base.py
+index 29a0bb4..dfcb63b 100644
+--- a/mistral/actions/powerops/base.py
++++ b/mistral/actions/powerops/base.py
+@@ -66,7 +66,7 @@ class PowerOpsAction(actions.Action):
+                         clients.connection_from_conf(),
+                         health_check=coordinator.assert_healthy,
+                     )
+-                    self._nova_disabled = False
++                    self._fail_safe_required = False
+ 
+                     try:
+                         result = operation(cloud)
+@@ -78,7 +78,7 @@ class PowerOpsAction(actions.Action):
+                     except Exception as exc:
+                         fail_safe_errors = []
+ 
+-                        if self._nova_disabled:
++                        if self._fail_safe_required:
+                             fail_safe_errors = self._fail_safe(cloud)
+ 
+                         try:
+diff --git a/mistral/actions/powerops/planned.py b/mistral/actions/powerops/planned.py
+index 0e47e23..8430fb9 100644
+--- a/mistral/actions/powerops/planned.py
++++ b/mistral/actions/powerops/planned.py
+@@ -56,10 +56,11 @@ class PlannedPowerOffAction(_PlannedPowerAction):
+     def run(self, context):
+         def operation(cloud):
+             cloud.resolve_host_set(self.segment_uuid, self.host)
++            # A failed maintenance call may already have changed the host.
++            self._fail_safe_required = True
+             cloud.set_masakari_maintenance(
+                 self.segment_uuid, self.host, True
+             )
+-            self._nova_disabled = True
+             cloud.disable_nova(
+                 self.host, CONF.powerops.nova_disable_reason
+             )
+@@ -101,10 +102,11 @@ class PlannedRebootAction(_PlannedPowerAction):
+     def run(self, context):
+         def operation(cloud):
+             cloud.resolve_host_set(self.segment_uuid, self.host)
++            # A failed maintenance call may already have changed the host.
++            self._fail_safe_required = True
+             cloud.set_masakari_maintenance(
+                 self.segment_uuid, self.host, True
+             )
+-            self._nova_disabled = True
+             cloud.disable_nova(
+                 self.host, CONF.powerops.nova_disable_reason
+             )
+diff --git a/mistral/actions/powerops/return_host.py b/mistral/actions/powerops/return_host.py
+index 66af3c2..31b4ac3 100644
+--- a/mistral/actions/powerops/return_host.py
++++ b/mistral/actions/powerops/return_host.py
+@@ -77,10 +77,11 @@ class PowerOnForInspectionAction(base.PowerOpsAction):
+     def run(self, context):
+         def operation(cloud):
+             cloud.resolve_host_set(self.segment_uuid, self.host)
++            # A failed maintenance call may already have changed the host.
++            self._fail_safe_required = True
+             cloud.set_masakari_maintenance(
+                 self.segment_uuid, self.host, True
+             )
+-            self._nova_disabled = True
+             cloud.disable_nova(
+                 self.host, CONF.powerops.nova_disable_reason
+             )
+@@ -131,7 +132,7 @@ class ReturnToServiceAction(base.PowerOpsAction):
+     def run(self, context):
+         def operation(cloud):
+             cloud.resolve_host_set(self.segment_uuid, self.host)
+-            self._nova_disabled = True
++            self._fail_safe_required = True
+             cloud.require_stable_power_on(self.host)
+             cloud.wait_nova_service(
+                 self.host, enabled=False, up=True
+diff --git a/mistral/tests/unit/actions/powerops/test_transition_safety.py b/mistral/tests/unit/actions/powerops/test_transition_safety.py
+new file mode 100644
+index 0000000..086ea80
+--- /dev/null
++++ b/mistral/tests/unit/actions/powerops/test_transition_safety.py
+@@ -0,0 +1,148 @@
++# Copyright 2026 OpenStack Foundation
++#
++# Licensed under the Apache License, Version 2.0 (the "License"); you may
++# not use this file except in compliance with the License. You may obtain
++# a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++# License for the specific language governing permissions and limitations
++# under the License.
++
++from unittest import mock
++
++from mistral.actions.powerops import base as action_base
++from mistral.actions.powerops import clients
++from mistral.actions.powerops import exceptions
++from mistral.actions.powerops import planned
++from mistral.actions.powerops import return_host
++from mistral.tests.unit.actions.powerops import fakes
++from mistral.tests.unit import base
++
++
++class TransitionSafetyTest(base.BaseTest):
++    action_classes = (
++        planned.PlannedPowerOffAction,
++        planned.PlannedRebootAction,
++        return_host.PowerOnForInspectionAction,
++    )
++
++    def setUp(self):
++        super(TransitionSafetyTest, self).setUp()
++        self.override_config('enabled', True, 'powerops')
++        self.override_config(
++            'allowed_project_names', ['operations'], 'powerops'
++        )
++        self.override_config(
++            'allowed_user_names', ['powerops-operator'], 'powerops'
++        )
++
++    def _failed_transition(self, action_class, failure_mode,
++                           lose_health=False):
++        events = []
++        node = fakes.node('node-1', 'compute-01')
++        service = fakes.service('service-1', 'compute-01', status='enabled')
++        host = fakes.masakari_host('host-1', 'compute-01', False)
++        data = fakes.cloud(
++            ironic_nodes=[node], nova_services=[service],
++            masakari_hosts=[host], events=events,
++        )
++        original_error = RuntimeError('maintenance response lost')
++        original_get = data.ha_adapter.get.side_effect
++        original_put = data.ha_adapter.put.side_effect
++        healthy = True
++
++        def fail():
++            nonlocal healthy
++            healthy = not lose_health
++            raise original_error
++
++        def get(path):
++            if host.on_maintenance and failure_mode == 'readback':
++                fail()
++            return original_get(path)
++
++        def put(*args, **kwargs):
++            if failure_mode == 'put-before-apply':
++                fail()
++            result = original_put(*args, **kwargs)
++            if failure_mode == 'put-after-apply':
++                fail()
++            return result
++
++        def assert_healthy():
++            if not healthy:
++                raise RuntimeError('coordination lost')
++
++        data.ha_adapter.get.side_effect = get
++        data.ha_adapter.put.side_effect = put
++        coordinator = fakes.recording_coordinator(events)
++        coordinator.assert_healthy = assert_healthy
++        cloud = clients.CloudClients(
++            data.connection, ha_adapter=data.ha_adapter, sleep=lambda _: None,
++            health_check=assert_healthy,
++        )
++        if failure_mode == 'preflight':
++            node.name = 'other-host'
++
++        with mock.patch.object(
++                action_base.coordination, 'OperationCoordinator',
++                return_value=coordinator), mock.patch.object(
++                clients, 'connection_from_conf',
++                return_value=data.connection), mock.patch.object(
++                clients, 'CloudClients', return_value=cloud):
++            action = action_class('compute-01', 'segment-1')
++            raised = self.assertRaises(
++                exceptions.HostResolutionError
++                if failure_mode == 'preflight' else RuntimeError,
++                action.run, fakes.action_context('failed-transition'),
++            )
++
++        data.connection.baremetal.set_node_power_state.assert_not_called()
++        data.connection.compute.enable_service.assert_not_called()
++        self.assertEqual('power on', node.power_state)
++        if failure_mode == 'preflight':
++            data.ha_adapter.put.assert_not_called()
++        else:
++            self.assertIs(original_error, raised)
++            self.assertEqual(
++                failure_mode != 'put-before-apply', host.on_maintenance
++            )
++
++        if lose_health or failure_mode == 'preflight':
++            self.assertEqual('enabled', service.status)
++            data.connection.compute.disable_service.assert_not_called()
++        else:
++            self.assertEqual('disabled', service.status)
++            disable_index = next(
++                index for index, event in enumerate(events)
++                if isinstance(event, tuple) and event[0] == 'disable'
++            )
++            self.assertLess(events.index('host-lock-enter'), disable_index)
++            self.assertLess(disable_index, events.index('host-lock-exit'))
++
++    def test_maintenance_readback_failure_disables_nova_inside_lock(self):
++        for action_class in self.action_classes:
++            with self.subTest(action=action_class.__name__):
++                self._failed_transition(action_class, 'readback')
++
++    def test_uncertain_maintenance_put_disables_nova_inside_lock(self):
++        for action_class in self.action_classes:
++            for mode in ('put-before-apply', 'put-after-apply'):
++                with self.subTest(action=action_class.__name__, mode=mode):
++                    self._failed_transition(action_class, mode)
++
++    def test_maintenance_failure_does_not_bypass_coordination_loss(self):
++        for action_class in self.action_classes:
++            with self.subTest(action=action_class.__name__):
++                self._failed_transition(
++                    action_class, 'readback', lose_health=True
++                )
++
++    def test_preflight_failure_does_not_trigger_mutations(self):
++        for action_class in self.action_classes:
++            with self.subTest(action=action_class.__name__):
++                self._failed_transition(action_class, 'preflight')
+-- 
+2.49.0
+

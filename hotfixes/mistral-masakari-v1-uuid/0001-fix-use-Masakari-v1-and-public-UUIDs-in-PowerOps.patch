@@ -1,0 +1,323 @@
+From e5c5bcf412b618ea2dfdc74b21bd34139827fb27 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Sat, 5 Sep 2026 12:42:51 +0300
+Subject: [PATCH] fix: use Masakari v1 and public UUIDs in PowerOps
+
+Negotiate API v1 for unversioned Keystone catalog endpoints and use the REST uuid rather than the unrelated numeric database id. Keep canonical identifier validation and fail closed when uuid is absent.
+
+Add real keystoneauth HTTP-boundary regression coverage for discovery, segment and host identifiers, and maintenance writes with state read-back. Update action fakes to expose both REST identifiers.
+---
+ mistral/actions/powerops/clients.py           |  20 +-
+ mistral/tests/unit/actions/powerops/fakes.py  |  15 +-
+ .../unit/actions/powerops/test_clients.py     |   9 +-
+ .../actions/powerops/test_masakari_http.py    | 193 ++++++++++++++++++
+ 4 files changed, 215 insertions(+), 22 deletions(-)
+ create mode 100644 mistral/tests/unit/actions/powerops/test_masakari_http.py
+
+diff --git a/mistral/actions/powerops/clients.py b/mistral/actions/powerops/clients.py
+index d3d9d27..3192a71 100644
+--- a/mistral/actions/powerops/clients.py
++++ b/mistral/actions/powerops/clients.py
+@@ -159,6 +159,7 @@ class CloudClients:
+             self.ha_adapter = ks_adapter.Adapter(
+                 session=connection.session,
+                 service_type='ha',
++                version='1',
+                 interface=CONF.powerops.interface,
+                 region_name=CONF.powerops.region_name,
+             )
+@@ -279,20 +280,11 @@ class CloudClients:
+ 
+     @classmethod
+     def _masakari_identifier(cls, item, description):
+-        identifiers = []
+-
+-        for field in ('uuid', 'id'):
+-            if field in item:
+-                value = item[field]
+-                cls._validate_resource_id(value, description)
+-                identifiers.append(value)
+-
+-        if not identifiers or len(set(identifiers)) != 1:
+-            raise exceptions.HostResolutionError(
+-                '{} is missing or ambiguous'.format(description)
+-            )
+-
+-        return identifiers[0]
++        # REST resources expose a numeric database id alongside their UUID.
++        # Only the UUID identifies a resource in Masakari API paths.
++        value = item.get('uuid')
++        cls._validate_resource_id(value, description)
++        return value
+ 
+     @classmethod
+     def _masakari_resource(cls, item):
+diff --git a/mistral/tests/unit/actions/powerops/fakes.py b/mistral/tests/unit/actions/powerops/fakes.py
+index d72510b..32425f9 100644
+--- a/mistral/tests/unit/actions/powerops/fakes.py
++++ b/mistral/tests/unit/actions/powerops/fakes.py
+@@ -143,12 +143,19 @@ def cloud(ironic_nodes=None, instances=None, nova_services=None,
+     ha_adapter.session = connection.session
+     segment_response = mock.Mock()
+     segment_response.json.return_value = {
+-        "segment": {"uuid": "segment-1"}
++        "segment": {"uuid": "segment-1", "id": 4}
+     }
+     hosts_response = mock.Mock()
+-    hosts_response.json.return_value = {
+-        "hosts": [vars(item) for item in hosts]
+-    }
++
++    def hosts_body():
++        return {
++            "hosts": [
++                dict(vars(item), uuid=item.id, id=index)
++                for index, item in enumerate(hosts, start=1)
++            ]
++        }
++
++    hosts_response.json.side_effect = hosts_body
+ 
+     def ha_get(path):
+         if path.endswith("/hosts"):
+diff --git a/mistral/tests/unit/actions/powerops/test_clients.py b/mistral/tests/unit/actions/powerops/test_clients.py
+index 71b4a66..917207f 100644
+--- a/mistral/tests/unit/actions/powerops/test_clients.py
++++ b/mistral/tests/unit/actions/powerops/test_clients.py
+@@ -154,6 +154,7 @@ class CloudClientsTest(base.BaseTest):
+         adapter.assert_called_once_with(
+             session=cloud.connection.session,
+             service_type="ha",
++            version="1",
+             interface="internal",
+             region_name="RegionOne",
+         )
+@@ -340,9 +341,9 @@ class CloudClientsTest(base.BaseTest):
+             cloud,
+             {"segment": {"uuid": "segment-1"}},
+             {"hosts": [
+-                {"id": "h1", "name": "compute-01",
++                {"uuid": "h1", "name": "compute-01",
+                  "on_maintenance": False},
+-                {"id": "h2", "name": " compute-02",
++                {"uuid": "h2", "name": " compute-02",
+                  "on_maintenance": False},
+             ]},
+         )
+@@ -361,7 +362,7 @@ class CloudClientsTest(base.BaseTest):
+                 cloud,
+                 {"segment": {"uuid": "segment-1"}},
+                 {"hosts": [{
+-                    "id": host_id,
++                    "uuid": host_id,
+                     "name": "compute-01",
+                     "on_maintenance": False,
+                 }]},
+@@ -391,7 +392,7 @@ class CloudClientsTest(base.BaseTest):
+                 cloud,
+                 {"segment": {"uuid": "segment-1"}},
+                 {"hosts": [{
+-                    "id": "h1",
++                    "uuid": "h1",
+                     "name": "compute-01",
+                     "on_maintenance": value,
+                 }]},
+diff --git a/mistral/tests/unit/actions/powerops/test_masakari_http.py b/mistral/tests/unit/actions/powerops/test_masakari_http.py
+new file mode 100644
+index 0000000..a9e4fc1
+--- /dev/null
++++ b/mistral/tests/unit/actions/powerops/test_masakari_http.py
+@@ -0,0 +1,193 @@
++# Copyright 2026 OpenStack Foundation
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#    http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++import copy
++from types import SimpleNamespace
++
++from keystoneauth1 import fixture as ks_fixture
++from keystoneauth1.identity import v3
++from keystoneauth1 import session as ks_session
++import requests_mock
++
++from mistral.actions.powerops import clients
++from mistral.actions.powerops import exceptions
++from mistral.tests.unit import base
++
++
++class MasakariHTTPTest(base.BaseTest):
++    """Keep discovery, HTTP serialization and response validation real."""
++
++    endpoint = 'http://masakari.example:15868'
++    segment_uuid = '5fd9f925-0379-40db-a7f8-786a0b655b2a'
++    host_uuid = '083a8474-22c0-407f-b89b-c569134c3bfd'
++    host_name = 'compute-01.example'
++
++    def setUp(self):
++        super().setUp()
++        self.override_config('interface', 'internal', 'powerops')
++        self.override_config('region_name', 'RegionOne', 'powerops')
++        self.override_config('stable_observations', 2, 'powerops')
++        self.http = requests_mock.Mocker()
++        self.http.start()
++        self.addCleanup(self.http.stop)
++
++        # Masakari REST responses expose a database id AND a public UUID.
++        # Shape based on Masakari stable/2025.1 doc/api_samples, with paired
++        # segment/host identifiers and a synthetic compute host name.
++        self.segment = {
++            'uuid': self.segment_uuid, 'id': 4, 'name': 'segment-01',
++            'deleted': False, 'created_at': '2017-04-21T08:59:53.991030',
++            'description': None, 'recovery_method': 'auto',
++            'updated_at': None, 'service_type': 'COMPUTE',
++            'deleted_at': None, 'enabled': True,
++        }
++        self.host = {
++            'uuid': self.host_uuid, 'id': 1, 'name': self.host_name,
++            'reserved': False, 'deleted': False, 'on_maintenance': False,
++            'created_at': '2017-04-21T10:09:20.000000',
++            'control_attributes': 'SSH', 'updated_at': None,
++            'deleted_at': None, 'type': 'COMPUTE',
++            'failover_segment': copy.deepcopy(self.segment),
++            'failover_segment_id': self.segment_uuid,
++        }
++        self.segment_path = '/segments/' + self.segment_uuid
++        self.hosts_url = self.endpoint + '/v1' + self.segment_path + '/hosts'
++        version = {
++            'id': 'v1.0', 'status': 'CURRENT', 'version': '1.3',
++            'min_version': '1.0', 'updated': '2016-07-01T11:33:21Z',
++            'links': [{'rel': 'self', 'href': self.endpoint + '/v1/'}],
++        }
++        self.http.get(self.endpoint + '/', json={'versions': [version]})
++        self.http.get(self.endpoint + '/v1', json={'version': version})
++        # The unversioned Masakari root returns HTTP 300, not a segment.
++        self.http.get(
++            self.endpoint + self.segment_path,
++            status_code=300,
++            json={'choices': [{
++                'id': 'v1.0', 'status': 'CURRENT',
++                'links': [{'rel': 'self', 'href': (
++                    self.endpoint + '/v1' + self.segment_path
++                )}],
++                'media-types': [{
++                    'base': 'application/json',
++                    'type': ('application/vnd.openstack.masakari+json;'
++                             'version=1'),
++                }],
++            }]},
++        )
++        self.http.get(
++            self.endpoint + '/v1' + self.segment_path,
++            json=lambda request, context: {'segment': self.segment},
++        )
++        self.http.get(
++            self.hosts_url,
++            json=lambda request, context: {'hosts': [self.host]},
++        )
++
++    def _cloud(self, catalog_suffix=''):
++        token = ks_fixture.V3Token()
++        service = token.add_service('ha', 'masakari')
++        service.add_endpoint(
++            'internal', self.endpoint + catalog_suffix, region='RegionOne'
++        )
++        self.http.post(
++            'http://identity.example/v3/auth/tokens', json=token,
++            headers={'X-Subject-Token': 'local-test-token'},
++        )
++        auth = v3.Password(
++            auth_url='http://identity.example/v3',
++            username='mistral', password='local-test-password',
++            project_name='service', user_domain_name='Default',
++            project_domain_name='Default',
++        )
++        return clients.CloudClients(
++            SimpleNamespace(session=ks_session.Session(auth=auth)),
++            sleep=lambda _seconds: None,
++        )
++
++    def test_discovers_v1_from_unversioned_catalog(self):
++        response = self._cloud().ha_adapter.get(self.segment_path)
++
++        self.assertEqual(200, response.status_code)
++        self.assertEqual(self.segment_uuid, response.json()['segment']['uuid'])
++        self.assertEqual(
++            self.endpoint + '/v1' + self.segment_path, response.url
++        )
++
++    def test_versioned_catalog_does_not_duplicate_v1(self):
++        response = self._cloud('/v1').ha_adapter.get(self.segment_path)
++
++        self.assertEqual(200, response.status_code)
++        self.assertEqual(
++            self.endpoint + '/v1' + self.segment_path, response.url
++        )
++
++    def test_segment_database_id_is_not_the_public_uuid(self):
++        self.host.pop('id')
++        result = self._cloud('/v1').masakari_host(
++            self.segment_uuid, self.host_name
++        )
++
++        self.assertEqual(self.host_uuid, result.id)
++
++    def test_host_database_id_is_not_the_public_uuid(self):
++        self.segment.pop('id')
++        result = self._cloud('/v1').masakari_host(
++            self.segment_uuid, self.host_name
++        )
++
++        self.assertEqual(self.host_uuid, result.id)
++        self.assertIs(False, result.on_maintenance)
++
++    def test_maintenance_put_uses_uuid_and_confirms_each_state(self):
++        cloud = self._cloud()
++        updates = []
++
++        def update_host(request, context):
++            body = request.json()
++            updates.append(body)
++            self.host['on_maintenance'] = body['host']['on_maintenance']
++            return {'host': self.host}
++
++        self.http.put(self.hosts_url + '/' + self.host_uuid, json=update_host)
++
++        for expected in (True, False):
++            result = cloud.set_masakari_maintenance(
++                self.segment_uuid, self.host_name, expected
++            )
++            self.assertIs(expected, result.on_maintenance)
++            self.assertEqual(self.host_uuid, result.id)
++            self.assertEqual(self.hosts_url, self.http.last_request.url)
++            self.assertEqual('GET', self.http.last_request.method)
++
++        self.assertEqual([
++            {'host': {'on_maintenance': True}},
++            {'host': {'on_maintenance': False}},
++        ], updates)
++
++    def test_identifier_requires_uuid_even_when_id_is_present(self):
++        for value in (None, '', 1, '../host', 'host/child'):
++            for description in ('Masakari segment UUID', 'Masakari host UUID'):
++                with self.subTest(value=value, description=description):
++                    self.assertRaises(
++                        exceptions.HostResolutionError,
++                        clients.CloudClients._masakari_identifier,
++                        {'uuid': value, 'id': self.host_uuid}, description,
++                    )
++
++        self.assertRaises(
++            exceptions.HostResolutionError,
++            clients.CloudClients._masakari_identifier,
++            {'id': self.host_uuid}, 'Masakari host UUID',
++        )

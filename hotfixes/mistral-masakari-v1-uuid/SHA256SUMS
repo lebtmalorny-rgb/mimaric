@@ -1,0 +1,5 @@
+a394d1355dd6f04c2550341a53ff64b87676bbf0dae4c243ac280ba60b1533a3  0001-fix-use-Masakari-v1-and-public-UUIDs-in-PowerOps.patch
+e6746b768d6caae26d68ee1188f803b8bb797fc9fe483a10cdd859af708949d6  0002-fix-give-PowerOps-errors-nonempty-default-messages.patch
+3a18237035a0bc9ec1834c14d6f3a586824873034dc9dfa92560a10b7a19bdab  0003-fix-enforce-shared-PowerOps-authorization-in-actions.patch
+12c9a7106f97588931a96c789da563c0cf665bba6d5b347cfa1efe5385a738d5  0004-fix-bind-PowerOps-restart-manifests-to-the-target-host.patch
+09b7695bb26d8cdd902d01f15a54859ce308fab67095a397575a85f0bf754136  0005-fix-arm-PowerOps-fail-safe-before-maintenance-changes.patch

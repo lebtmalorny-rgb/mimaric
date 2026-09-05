@@ -1,0 +1,175 @@
+From ca39c2eeb35b9008a45109b315d7b06c8fe3c620 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Sat, 5 Sep 2026 13:01:59 +0300
+Subject: [PATCH] fix: give PowerOps errors nonempty default messages
+
+Preserve explicit exception details and args while providing safe diagnostic text for bare PowerOps exceptions, including PowerOpsDisabled. Test actual DefaultExecutor error formatting without changing global executor behavior.
+---
+ mistral/actions/powerops/exceptions.py        | 29 +++++++
+ .../unit/actions/powerops/test_exceptions.py  | 81 +++++++++++++++++++
+ 2 files changed, 110 insertions(+)
+ create mode 100644 mistral/tests/unit/actions/powerops/test_exceptions.py
+
+diff --git a/mistral/actions/powerops/exceptions.py b/mistral/actions/powerops/exceptions.py
+index e7b0c0f..c136cda 100644
+--- a/mistral/actions/powerops/exceptions.py
++++ b/mistral/actions/powerops/exceptions.py
+@@ -16,42 +16,71 @@
+ class PowerOpsError(Exception):
+     """Base error for planned PowerOps actions."""
+ 
++    default_message = 'PowerOps operation failed'
++
++    def __str__(self):
++        # Mistral embeds str(error) in the action result. Preserve supplied
++        # details and exception args, but never format an empty PowerOps error.
++        return super().__str__() or self.default_message
++
+ 
+ class PowerOpsConfigurationError(PowerOpsError):
+     """PowerOps service authentication is not configured safely."""
+ 
++    default_message = 'PowerOps configuration is incomplete or unsafe'
++
+ 
+ class PowerOpsTimeout(PowerOpsError):
+     """A bounded PowerOps operation did not finish in time."""
+ 
++    default_message = 'PowerOps operation timed out'
++
+ 
+ class PowerOpsCallTimeout(PowerOpsTimeout):
+     """An individual yielding SDK or adapter call hit its deadline."""
+ 
++    default_message = 'PowerOps API call timed out'
++
+ 
+ class HostResolutionError(PowerOpsError):
+     """A host did not resolve to one exact compatible resource."""
+ 
++    default_message = 'Host must resolve to one exact compatible resource'
++
+ 
+ class PowerStateError(PowerOpsError):
+     """An Ironic power state is unsafe or inconsistent."""
+ 
++    default_message = 'Ironic power state is unsafe or inconsistent'
++
+ 
+ class InstancePolicyError(PowerOpsError):
+     """An instance policy is invalid or cannot be applied safely."""
+ 
++    default_message = 'Instance policy is invalid or cannot be applied safely'
++
+ 
+ class InstanceManifestError(PowerOpsError):
+     """An explicit instance restart manifest is unsafe."""
+ 
++    default_message = 'Instance restart manifest is unsafe'
++
+ 
+ class PowerOpsUnauthorized(PowerOpsError):
+     """The Mistral caller is not authorized for PowerOps."""
+ 
++    default_message = 'Caller is not authorized for PowerOps'
++
+ 
+ class PowerOpsDisabled(PowerOpsError):
+     """PowerOps actions are disabled."""
+ 
++    default_message = (
++        'PowerOps actions are disabled ([powerops] enabled=false)'
++    )
++
+ 
+ class OperatorGateRequired(PowerOpsError):
+     """The operator inspection gate has not been acknowledged."""
++
++    default_message = 'Operator inspection gate has not been acknowledged'
+diff --git a/mistral/tests/unit/actions/powerops/test_exceptions.py b/mistral/tests/unit/actions/powerops/test_exceptions.py
+new file mode 100644
+index 0000000..84fda28
+--- /dev/null
++++ b/mistral/tests/unit/actions/powerops/test_exceptions.py
+@@ -0,0 +1,81 @@
++# Copyright 2026 OpenStack Foundation
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#    http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++import pickle
++from unittest import mock
++
++from mistral.actions.powerops import exceptions
++from mistral.actions.powerops import return_host
++from mistral import context
++from mistral.executors import default_executor
++from mistral.tests.unit import base
++
++
++ERROR_TYPES = (
++    exceptions.PowerOpsError,
++    exceptions.PowerOpsConfigurationError,
++    exceptions.PowerOpsTimeout,
++    exceptions.PowerOpsCallTimeout,
++    exceptions.HostResolutionError,
++    exceptions.PowerStateError,
++    exceptions.InstancePolicyError,
++    exceptions.InstanceManifestError,
++    exceptions.PowerOpsUnauthorized,
++    exceptions.PowerOpsDisabled,
++    exceptions.OperatorGateRequired,
++)
++
++
++class PowerOpsExceptionTest(base.BaseTest):
++    def test_errors_without_arguments_have_diagnostic_text(self):
++        for error_type in ERROR_TYPES:
++            with self.subTest(error_type=error_type):
++                self.assertTrue(str(error_type()).strip())
++
++    def test_explicit_empty_message_uses_diagnostic_text(self):
++        for error_type in ERROR_TYPES:
++            with self.subTest(error_type=error_type):
++                self.assertTrue(str(error_type('')).strip())
++
++    def test_explicit_message_and_exception_args_are_preserved(self):
++        for error_type in ERROR_TYPES:
++            with self.subTest(error_type=error_type):
++                error = error_type('specific safe failure detail')
++                self.assertEqual('specific safe failure detail', str(error))
++                self.assertEqual(('specific safe failure detail',), error.args)
++                self.assertEqual((), error_type().args)
++
++    def test_default_message_survives_exception_serialization(self):
++        error = pickle.loads(pickle.dumps(exceptions.PowerOpsDisabled()))
++
++        self.assertIsInstance(error, exceptions.PowerOpsDisabled)
++        self.assertIn('enabled=false', str(error))
++
++    @mock.patch.object(default_executor.rpc, 'get_engine_client')
++    def test_disabled_status_reaches_executor_result_with_message(self, rpc):
++        self.override_config('enabled', False, 'powerops')
++        previous = context.ctx() if context.has_ctx() else None
++        self.addCleanup(context.set_ctx, previous)
++        context.set_ctx(base.get_context())
++        action = return_host.HostPowerStatusAction('compute-01', 'segment-1')
++        executor = default_executor.DefaultExecutor()
++
++        result = executor._do_run_action(
++            action, None, {}, redelivered=False, safe_rerun=False, timeout=None
++        )
++
++        self.assertTrue(result.is_error())
++        self.assertIn('PowerOps actions are disabled', result.error)
++        self.assertIn('[powerops] enabled=false', result.error)
++        self.assertNotIn("msg=''", result.error)
