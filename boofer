@@ -12,3 +12,21 @@
         "http://10.101.25.42:8989/v2/$resource"
   done
   )
+
+  (
+  set +x
+  powerops_diag_token=$(timeout 20s openstack token issue -f value -c id) || exit 1
+  [ -n "$powerops_diag_token" ] || exit 1
+
+  for api_ip in 10.101.25.150 10.101.25.151 10.101.25.152
+  do
+    for resource in 'actions/std.noop' 'workbooks?limit=1' 'actions/powerops.host_power_status'
+    do
+      printf '%s %s\n' "$api_ip" "$resource"
+      printf 'X-Auth-Token: %s\n' "$powerops_diag_token" |
+        curl -q -sS -m 20 -H @- -o /dev/null \
+          -w 'HTTP=%{http_code} total=%{time_total}s\n' \
+          "http://$api_ip:8989/v2/$resource"
+    done
+  done
+  )
