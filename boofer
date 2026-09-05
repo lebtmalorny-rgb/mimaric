@@ -1,32 +1,31 @@
-  (
-  set +x
-  powerops_diag_token=$(timeout 20s openstack token issue -f value -c id) || exit 1
-  [ -n "$powerops_diag_token" ] || exit 1
+1. На ultra1-6 (.150) и ultra1-8 (.152) проверь загрузку action:
 
-  for resource in 'workbooks?limit=1' 'actions/std.noop' 'actions/powerops.host_power_status'
-  do
-    printf '%s\n' "$resource"
-    printf 'X-Auth-Token: %s\n' "$powerops_diag_token" |
-      curl -q -sS -m 20 -H @- -o /dev/null \
-        -w 'HTTP=%{http_code} total=%{time_total}s\n' \
-        "http://10.101.25.42:8989/v2/$resource"
-  done
-  )
+  sudo podman exec -i mistral_api python - <<'PY'
+  from importlib import metadata
 
-  (
-  set +x
-  powerops_diag_token=$(timeout 20s openstack token issue -f value -c id) || exit 1
-  [ -n "$powerops_diag_token" ] || exit 1
+  entries = list(metadata.entry_points(
+      group='mistral.actions', name='powerops.host_power_status'
+  ))
+  print('ENTRY_POINTS:', [(ep.name, ep.value) for ep in entries])
+  for ep in entries:
+      cls = ep.load()
+      print('LOAD_OK:', cls.__module__, cls.__name__)
+  PY
 
-  for api_ip in 10.101.25.150 10.101.25.151 10.101.25.152
-  do
-    for resource in 'actions/std.noop' 'workbooks?limit=1' 'actions/powerops.host_power_status'
-    do
-      printf '%s %s\n' "$api_ip" "$resource"
-      printf 'X-Auth-Token: %s\n' "$powerops_diag_token" |
-        curl -q -sS -m 20 -H @- -o /dev/null \
-          -w 'HTTP=%{http_code} total=%{time_total}s\n' \
-          "http://$api_ip:8989/v2/$resource"
-    done
-  done
-  )
+  Интерпретация:
+
+  - ENTRY_POINTS: [] — в установленном пакете нет регистрации этого action.
+  - Traceback — регистрация есть, но импорт ломается; ошибка укажет причину.
+  - LOAD_OK — дальше проверяем фильтры action provider и состояние уже работающего API-процесса.
+
+  2. На всех трёх контроллерах сравни реально запущенные образы — имя и ID, не только тег в globals. Поля Podman inspect:
+
+  sudo podman inspect -f 'image={{.ImageName}} id={{.Image}} status={{.State.Status}}' mistral_api
+
+  3. На ultra1-7 (.151) нужны логи:
+
+  sudo podman logs --tail 60 mistral_api
+  sudo podman exec mistral_api tail -n 100 /var/log/kolla/mistral/mistral-server.log
+
+  Пришли результаты с указанием хоста; пароли и токены, если встретятся в логах, скрой. Пока ничего не перезапускаем и populate повторно не запускаем: сначала выясним, почему action
+  отсутствует в API.
