@@ -1,0 +1,167 @@
+{
+  "date": "2026-09-05",
+  "scope": "Local source, packaging, mocked-HTTP and local-Ansible verification. No cloud or production container acceptance.",
+  "patches": {
+    "mistral_commit": "b5487c46bc17d438253b5c78b2fef4f4d6aee24d",
+    "kolla_ansible_commit": "5325c8abd781968f5478f2a7cfff7c002c647324"
+  },
+  "clean_archive_replay": {
+    "patch_apply": "pass",
+    "changed_files_match": {
+      "mistral": 12,
+      "kolla_ansible": 6
+    }
+  },
+  "tests": {
+    "powerops": 147,
+    "kolla_powerops": 43,
+    "context_and_local_executor": 3,
+    "image_checker_orchestration": 3,
+    "sdk_http_included_in_powerops": 11
+  },
+  "installed_wheel": {
+    "editable": false,
+    "source_checkout_on_import_path": false,
+    "runtime_hashes": 13,
+    "pip_check": "pass",
+    "entry_points": 5,
+    "executor_auth_check": "pass"
+  },
+  "representative_versions": {
+    "python": "3.11.15",
+    "mistral-lib": "3.5.0",
+    "openstacksdk": "4.20.0",
+    "keystoneauth1": "5.17.0",
+    "oslo.context": "6.5.0",
+    "ansible-core": "2.18.6"
+  },
+  "independent_review": {
+    "important_findings_closed": [
+      "Reject target-cloud request contexts",
+      "Check full replica set only after last successful serial batch"
+    ],
+    "sdk_delta": "No remaining findings"
+  },
+  "local_ansible": [
+    {
+      "scenario": "healthy-serial0",
+      "result": "ok",
+      "rc": 0,
+      "checks": 9,
+      "populations": 1,
+      "assertions": {
+        "return_code": true,
+        "population_count": true,
+        "all_nine_replicas": true,
+        "exactly_nine_checks": true,
+        "selected_deploys_before_checks": true,
+        "checks_before_population": true
+      }
+    },
+    {
+      "scenario": "healthy-serial1",
+      "result": "ok",
+      "rc": 0,
+      "checks": 9,
+      "populations": 1,
+      "assertions": {
+        "return_code": true,
+        "population_count": true,
+        "all_nine_replicas": true,
+        "exactly_nine_checks": true,
+        "selected_deploys_before_checks": true,
+        "checks_before_population": true
+      }
+    },
+    {
+      "scenario": "third-check-fails-serial0",
+      "result": "ok",
+      "rc": 2,
+      "checks": 9,
+      "populations": 0,
+      "assertions": {
+        "return_code": true,
+        "population_count": true,
+        "all_nine_replicas": true,
+        "exactly_nine_checks": true,
+        "selected_deploys_before_checks": true
+      }
+    },
+    {
+      "scenario": "third-check-fails-serial1",
+      "result": "ok",
+      "rc": 2,
+      "checks": 9,
+      "populations": 0,
+      "assertions": {
+        "return_code": true,
+        "population_count": true,
+        "all_nine_replicas": true,
+        "exactly_nine_checks": true,
+        "selected_deploys_before_checks": true
+      }
+    },
+    {
+      "scenario": "limit-one-still-checks-nine",
+      "result": "ok",
+      "rc": 0,
+      "checks": 9,
+      "populations": 1,
+      "assertions": {
+        "return_code": true,
+        "population_count": true,
+        "all_nine_replicas": true,
+        "exactly_nine_checks": true,
+        "selected_deploys_before_checks": true,
+        "checks_before_population": true
+      }
+    },
+    {
+      "scenario": "limit-one-third-check-fails",
+      "result": "ok",
+      "rc": 2,
+      "checks": 9,
+      "populations": 0,
+      "assertions": {
+        "return_code": true,
+        "population_count": true,
+        "all_nine_replicas": true,
+        "exactly_nine_checks": true,
+        "selected_deploys_before_checks": true
+      }
+    },
+    {
+      "scenario": "last-selected-deploy-fails-serial0",
+      "result": "ok",
+      "rc": 2,
+      "checks": 0,
+      "populations": 0,
+      "assertions": {
+        "return_code": true,
+        "population_count": true,
+        "no_check_after_partial_deploy": true,
+        "guard_failed": true
+      }
+    },
+    {
+      "scenario": "last-selected-deploy-fails-serial1",
+      "result": "ok",
+      "rc": 2,
+      "checks": 0,
+      "populations": 0,
+      "assertions": {
+        "return_code": true,
+        "population_count": true,
+        "no_check_after_partial_deploy": true
+      }
+    }
+  ],
+  "unverified": [
+    "SberLinux RPM image builds and the user's three concrete images",
+    "Live Keystone service credentials and resource visibility",
+    "Live API timeout on 10.101.25.151",
+    "Live etcd ownership/heartbeat, BMC and VM transitions",
+    "Full Mistral engine YAML pause/resume acceptance"
+  ],
+  "builder_note": "Use patched Git source before pip installation. Recipe uses RPM mistral-lib and --no-deps; late --patches-path is not the source git patch application method. Recipe itself not changed."
+}

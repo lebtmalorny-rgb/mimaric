@@ -1,0 +1,828 @@
+From 5325c8abd781968f5478f2a7cfff7c002c647324 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Sat, 5 Sep 2026 21:32:26 +0300
+Subject: [PATCH] fix: verify every PowerOps replica before catalogue
+ reconciliation
+
+---
+ ansible/roles/mistral/tasks/deploy.yml        |  15 +-
+ ansible/roles/mistral/tasks/powerops.yml      | 534 ++++++++++--------
+ .../roles/mistral/templates/mistral.conf.j2   |   2 +-
+ .../unit/test_powerops_0509_preflight.py      |  83 +++
+ .../tests/unit/test_powerops_registration.py  |  41 +-
+ .../tests/unit/test_powerops_templates.py     |   8 +-
+ 6 files changed, 411 insertions(+), 272 deletions(-)
+ create mode 100644 kolla_ansible/tests/unit/test_powerops_0509_preflight.py
+
+diff --git a/ansible/roles/mistral/tasks/deploy.yml b/ansible/roles/mistral/tasks/deploy.yml
+index dfa432c..72ae19c 100644
+--- a/ansible/roles/mistral/tasks/deploy.yml
++++ b/ansible/roles/mistral/tasks/deploy.yml
+@@ -13,5 +13,18 @@
+ - name: Flush handlers
+   meta: flush_handlers
+ 
+-- import_tasks: powerops.yml
++- name: Verify selected Mistral hosts completed deploy
++  ansible.builtin.assert:
++    that:
++      - ansible_play_hosts_all | difference(ansible_play_hosts) | length == 0
++    fail_msg: >-
++      Some selected Mistral hosts failed or became unreachable.
++      PowerOps catalogue reconciliation must not proceed on a partial deploy.
++  run_once: true
++  any_errors_fatal: true
+   when: enable_powerops | bool
++
++- import_tasks: powerops.yml
++  when:
++    - enable_powerops | bool
++    - ansible_play_hosts_all[-1] in ansible_play_batch
+diff --git a/ansible/roles/mistral/tasks/powerops.yml b/ansible/roles/mistral/tasks/powerops.yml
+index 29137dd..9d3a8da 100644
+--- a/ansible/roles/mistral/tasks/powerops.yml
++++ b/ansible/roles/mistral/tasks/powerops.yml
+@@ -2,20 +2,25 @@
+ - name: Verify PowerOps Mistral action entry points
+   become: true
+   ansible.builtin.command: >-
+-    {{ kolla_container_engine }} exec {{ item.container }} python -c
+-    "import importlib.metadata as m; required={'powerops.host_power_status','powerops.planned_power_off','powerops.planned_reboot','powerops.power_on_for_inspection','powerops.return_to_service'}; found={e.name for e in m.entry_points(group='mistral.actions')}; assert required <= found, required - found"
++    {{ kolla_container_engine }} exec {{ item.0.container }}
++    python -m mistral.cmd.powerops_check
+   changed_when: false
+-  loop:
+-    - container: mistral_api
+-      group: mistral-api
+-    - container: mistral_engine
+-      group: mistral-engine
+-    - container: mistral_executor
+-      group: mistral-executor
++  async: 60
++  poll: 5
++  any_errors_fatal: true
++  vars:
++    powerops_runtime_targets:
++      - container: mistral_api
++        hosts: "{{ groups['mistral-api'] }}"
++      - container: mistral_engine
++        hosts: "{{ groups['mistral-engine'] }}"
++      - container: mistral_executor
++        hosts: "{{ groups['mistral-executor'] }}"
++  loop: "{{ powerops_runtime_targets | subelements('hosts') }}"
+   loop_control:
+-    label: "{{ item.container }}"
++    label: "{{ item.1 }} / {{ item.0.container }}"
+   run_once: true
+-  delegate_to: "{{ groups[item.group][0] }}"
++  delegate_to: "{{ item.1 }}"
+ 
+ - name: Populate Mistral action definitions
+   become: true
+@@ -56,254 +61,281 @@
+       powerops_validate_registration | bool
+     - kolla_admin_openrc_cacert | length > 0
+ 
+-- name: Authenticate PowerOps workbook reconciliation
+-  ansible.builtin.uri:
+-    url: >-
+-      {{ openstack_mistral_auth.auth_url |
+-         regex_replace('/v3/?$', '') |
+-         regex_replace('/+$', '') }}/v3/auth/tokens
+-    method: POST
+-    body_format: json
+-    body:
+-      auth:
+-        identity:
+-          methods:
+-            - password
+-          password:
+-            user:
+-              name: "{{ openstack_mistral_auth.username }}"
+-              password: "{{ openstack_mistral_auth.password }}"
+-              domain:
+-                name: "{{ openstack_mistral_auth.user_domain_name }}"
+-        scope:
+-          project:
+-            name: "{{ openstack_mistral_auth.project_name }}"
+-            domain:
+-              name: "{{ openstack_mistral_auth.domain_name }}"
+-    status_code: 201
+-    return_content: true
+-    validate_certs: true
+-    ca_path: >-
+-      {{ kolla_admin_openrc_cacert
+-         if kolla_admin_openrc_cacert else omit }}
+-  register: powerops_keystone_auth
+-  no_log: true
+-  run_once: true
+-  delegate_to: localhost
+-  when: >-
+-    powerops_reconcile_workbook | bool or
+-    powerops_validate_registration | bool
++- name: Reconcile and validate PowerOps catalogue
++  any_errors_fatal: true
++  block:
++    - name: Authenticate PowerOps workbook reconciliation
++      ansible.builtin.uri:
++        timeout: 20
++        follow_redirects: none
++        url: >-
++          {{ openstack_mistral_auth.auth_url |
++             regex_replace('/v3/?$', '') |
++             regex_replace('/+$', '') }}/v3/auth/tokens
++        method: POST
++        body_format: json
++        body:
++          auth:
++            identity:
++              methods:
++                - password
++              password:
++                user:
++                  name: "{{ openstack_mistral_auth.username }}"
++                  password: "{{ openstack_mistral_auth.password }}"
++                  domain:
++                    name: "{{ openstack_mistral_auth.user_domain_name }}"
++            scope:
++              project:
++                name: "{{ openstack_mistral_auth.project_name }}"
++                domain:
++                  name: "{{ openstack_mistral_auth.domain_name }}"
++        status_code: 201
++        return_content: true
++        validate_certs: true
++        ca_path: >-
++          {{ kolla_admin_openrc_cacert
++             if kolla_admin_openrc_cacert else omit }}
++      register: powerops_keystone_auth
++      no_log: true
++      run_once: true
++      delegate_to: localhost
++      when: >-
++        powerops_reconcile_workbook | bool or
++        powerops_validate_registration | bool
+ 
+-- name: Store protected PowerOps token
+-  ansible.builtin.set_fact:
+-    powerops_keystone_token: >-
+-      {{ powerops_keystone_auth.x_subject_token }}
+-    powerops_keystone_project_id: >-
+-      {{ powerops_keystone_auth.json.token.project.id }}
+-  no_log: true
+-  run_once: true
+-  delegate_to: localhost
+-  when: >-
+-    powerops_reconcile_workbook | bool or
+-    powerops_validate_registration | bool
++    - name: Store protected PowerOps token
++      ansible.builtin.set_fact:
++        powerops_keystone_token: >-
++          {{ powerops_keystone_auth.x_subject_token }}
++        powerops_keystone_project_id: >-
++          {{ powerops_keystone_auth.json.token.project.id }}
++      no_log: true
++      run_once: true
++      delegate_to: localhost
++      when: >-
++        powerops_reconcile_workbook | bool or
++        powerops_validate_registration | bool
+ 
+-- name: Load PowerOps workbook definition
+-  ansible.builtin.set_fact:
+-    powerops_workbook_definition: >-
+-      {{ lookup('ansible.builtin.file',
+-                role_path ~ '/files/power_ops.yaml', rstrip=False) }}
+-  run_once: true
+-  delegate_to: localhost
+-  when: powerops_reconcile_workbook | bool
++    - name: Load PowerOps workbook definition
++      ansible.builtin.set_fact:
++        powerops_workbook_definition: >-
++          {{ lookup('ansible.builtin.file',
++                    role_path ~ '/files/power_ops.yaml', rstrip=False) }}
++      run_once: true
++      delegate_to: localhost
++      when: powerops_reconcile_workbook | bool
+ 
+-- name: List matching PowerOps workbooks
+-  ansible.builtin.uri:
+-    url: >-
+-      {{ mistral_internal_endpoint }}/workbooks?name=power_ops&namespace=
+-    method: GET
+-    headers:
+-      X-Auth-Token: "{{ powerops_keystone_token }}"
+-    status_code: 200
+-    return_content: true
+-    validate_certs: true
+-    ca_path: >-
+-      {{ kolla_admin_openrc_cacert
+-         if kolla_admin_openrc_cacert else omit }}
+-  register: powerops_workbook_list
+-  until: powerops_workbook_list is success
+-  retries: 12
+-  delay: 5
+-  no_log: true
+-  run_once: true
+-  delegate_to: localhost
+-  when: powerops_reconcile_workbook | bool
++    - name: List matching PowerOps workbooks
++      ansible.builtin.uri:
++        timeout: 20
++        follow_redirects: none
++        url: >-
++          {{ mistral_internal_endpoint }}/workbooks?name=power_ops&namespace=
++        method: GET
++        headers:
++          X-Auth-Token: "{{ powerops_keystone_token }}"
++        status_code: 200
++        return_content: true
++        validate_certs: true
++        ca_path: >-
++          {{ kolla_admin_openrc_cacert
++             if kolla_admin_openrc_cacert else omit }}
++      register: powerops_workbook_list
++      until: powerops_workbook_list is success
++      retries: 12
++      delay: 5
++      no_log: true
++      run_once: true
++      delegate_to: localhost
++      when: powerops_reconcile_workbook | bool
+ 
+-- name: Store matching PowerOps workbooks
+-  ansible.builtin.set_fact:
+-    powerops_matching_workbooks: >-
+-      {{ powerops_workbook_list.json.workbooks | default([]) |
+-         selectattr('name', 'equalto', 'power_ops') |
+-         selectattr('namespace', 'equalto', '') | list }}
+-  no_log: true
+-  run_once: true
+-  delegate_to: localhost
+-  when: powerops_reconcile_workbook | bool
++    - name: Store matching PowerOps workbooks
++      ansible.builtin.set_fact:
++        powerops_matching_workbooks: >-
++          {{ powerops_workbook_list.json.workbooks | default([]) |
++             selectattr('name', 'equalto', 'power_ops') |
++             selectattr('namespace', 'equalto', '') | list }}
++      no_log: true
++      run_once: true
++      delegate_to: localhost
++      when: powerops_reconcile_workbook | bool
+ 
+-- name: Validate PowerOps workbook ownership
+-  ansible.builtin.assert:
+-    that:
+-      - powerops_matching_workbooks | length <= 1
+-      - >-
+-        powerops_matching_workbooks | length == 0 or
+-        powerops_matching_workbooks[0].project_id ==
+-        powerops_keystone_project_id
+-    fail_msg: >-
+-      Refusing to reconcile an ambiguous or foreign public power_ops workbook
+-  no_log: true
+-  run_once: true
+-  delegate_to: localhost
+-  when: powerops_reconcile_workbook | bool
++    - name: Validate PowerOps workbook ownership
++      ansible.builtin.assert:
++        that:
++          - powerops_matching_workbooks | length <= 1
++          - >-
++            powerops_matching_workbooks | length == 0 or
++            powerops_matching_workbooks[0].project_id ==
++            powerops_keystone_project_id
++        fail_msg: >-
++          Refusing to reconcile an ambiguous or foreign public power_ops workbook
++      no_log: true
++      run_once: true
++      delegate_to: localhost
++      when: powerops_reconcile_workbook | bool
+ 
+-- name: Create PowerOps workbook
+-  ansible.builtin.uri:
+-    url: "{{ mistral_internal_endpoint }}/workbooks?scope=public"
+-    method: POST
+-    headers:
+-      X-Auth-Token: "{{ powerops_keystone_token }}"
+-      Content-Type: text/plain
+-    body: "{{ powerops_workbook_definition }}"
+-    body_format: raw
+-    status_code: 201
+-    validate_certs: true
+-    ca_path: >-
+-      {{ kolla_admin_openrc_cacert
+-         if kolla_admin_openrc_cacert else omit }}
+-  no_log: true
+-  run_once: true
+-  delegate_to: localhost
+-  when:
+-    - powerops_reconcile_workbook | bool
+-    - powerops_matching_workbooks | length == 0
++    - name: Create PowerOps workbook
++      ansible.builtin.uri:
++        timeout: 20
++        follow_redirects: none
++        url: "{{ mistral_internal_endpoint }}/workbooks?scope=public"
++        method: POST
++        headers:
++          X-Auth-Token: "{{ powerops_keystone_token }}"
++          Content-Type: text/plain
++        body: "{{ powerops_workbook_definition }}"
++        body_format: raw
++        status_code: 201
++        validate_certs: true
++        ca_path: >-
++          {{ kolla_admin_openrc_cacert
++             if kolla_admin_openrc_cacert else omit }}
++      no_log: true
++      run_once: true
++      delegate_to: localhost
++      when:
++        - powerops_reconcile_workbook | bool
++        - powerops_matching_workbooks | length == 0
+ 
+-# SECURITY CONTRACT: the companion Mistral owner-scoped update patch
+-# must constrain PUT lookup to the token project before this update is safe.
+-# The preceding ownership assertion does not close the TOCTOU window.
+-- name: Update changed PowerOps workbook
+-  ansible.builtin.uri:
+-    url: "{{ mistral_internal_endpoint }}/workbooks?scope=public"
+-    method: PUT
+-    headers:
+-      X-Auth-Token: "{{ powerops_keystone_token }}"
+-      Content-Type: text/plain
+-    body: "{{ powerops_workbook_definition }}"
+-    body_format: raw
+-    status_code: 200
+-    validate_certs: true
+-    ca_path: >-
+-      {{ kolla_admin_openrc_cacert
+-         if kolla_admin_openrc_cacert else omit }}
+-  no_log: true
+-  run_once: true
+-  delegate_to: localhost
+-  when:
+-    - powerops_reconcile_workbook | bool
+-    - powerops_matching_workbooks | length == 1
+-    - >-
+-      powerops_matching_workbooks[0].project_id ==
+-      powerops_keystone_project_id
+-    - >-
+-      powerops_matching_workbooks[0].definition |
+-      default('') != powerops_workbook_definition or
+-      powerops_matching_workbooks[0].scope |
+-      default('') != 'public'
++    # SECURITY CONTRACT: the companion Mistral owner-scoped update patch
++    # must constrain PUT lookup to the token project before this update is safe.
++    # The preceding ownership assertion does not close the TOCTOU window.
++    - name: Update changed PowerOps workbook
++      ansible.builtin.uri:
++        timeout: 20
++        follow_redirects: none
++        url: "{{ mistral_internal_endpoint }}/workbooks?scope=public"
++        method: PUT
++        headers:
++          X-Auth-Token: "{{ powerops_keystone_token }}"
++          Content-Type: text/plain
++        body: "{{ powerops_workbook_definition }}"
++        body_format: raw
++        status_code: 200
++        validate_certs: true
++        ca_path: >-
++          {{ kolla_admin_openrc_cacert
++             if kolla_admin_openrc_cacert else omit }}
++      no_log: true
++      run_once: true
++      delegate_to: localhost
++      when:
++        - powerops_reconcile_workbook | bool
++        - powerops_matching_workbooks | length == 1
++        - >-
++          powerops_matching_workbooks[0].project_id ==
++          powerops_keystone_project_id
++        - >-
++          powerops_matching_workbooks[0].definition |
++          default('') != powerops_workbook_definition or
++          powerops_matching_workbooks[0].scope |
++          default('') != 'public'
+ 
+-- name: Read registered PowerOps actions
+-  ansible.builtin.uri:
+-    url: "{{ mistral_internal_endpoint }}/actions/{{ item }}"
+-    method: GET
+-    headers:
+-      X-Auth-Token: "{{ powerops_keystone_token }}"
+-    status_code: 200
+-    return_content: true
+-    validate_certs: true
+-    ca_path: >-
+-      {{ kolla_admin_openrc_cacert
+-         if kolla_admin_openrc_cacert else omit }}
+-  loop:
+-    - powerops.host_power_status
+-    - powerops.planned_power_off
+-    - powerops.planned_reboot
+-    - powerops.power_on_for_inspection
+-    - powerops.return_to_service
+-  loop_control:
+-    label: "{{ item }}"
+-  register: powerops_action_reads
+-  until: powerops_action_reads is success
+-  retries: 12
+-  delay: 5
+-  no_log: true
+-  run_once: true
+-  delegate_to: localhost
+-  when: powerops_validate_registration | bool
++    - name: Read registered PowerOps actions
++      ansible.builtin.uri:
++        timeout: 20
++        follow_redirects: none
++        url: "{{ mistral_internal_endpoint }}/actions/{{ item }}"
++        method: GET
++        headers:
++          X-Auth-Token: "{{ powerops_keystone_token }}"
++        status_code: 200
++        return_content: true
++        validate_certs: true
++        ca_path: >-
++          {{ kolla_admin_openrc_cacert
++             if kolla_admin_openrc_cacert else omit }}
++      loop:
++        - powerops.host_power_status
++        - powerops.planned_power_off
++        - powerops.planned_reboot
++        - powerops.power_on_for_inspection
++        - powerops.return_to_service
++      loop_control:
++        label: "{{ item }}"
++      register: powerops_action_reads
++      until: powerops_action_reads is success
++      retries: 12
++      delay: 5
++      no_log: true
++      run_once: true
++      delegate_to: localhost
++      when: powerops_validate_registration | bool
+ 
+-- name: Read registered PowerOps workflows
+-  ansible.builtin.uri:
+-    url: >-
+-      {{ mistral_internal_endpoint }}/workflows?name={{ item }}&namespace=
+-    method: GET
+-    headers:
+-      X-Auth-Token: "{{ powerops_keystone_token }}"
+-    status_code: 200
+-    return_content: true
+-    validate_certs: true
+-    ca_path: >-
+-      {{ kolla_admin_openrc_cacert
+-         if kolla_admin_openrc_cacert else omit }}
+-  loop:
+-    - power_ops.host_power_status
+-    - power_ops.planned_power_off
+-    - power_ops.planned_reboot
+-    - power_ops.power_on_and_return
+-  loop_control:
+-    label: "{{ item }}"
+-  register: powerops_workflow_reads
+-  until: powerops_workflow_reads is success
+-  retries: 12
+-  delay: 5
+-  no_log: true
+-  run_once: true
+-  delegate_to: localhost
+-  when: powerops_validate_registration | bool
++    - name: Read registered PowerOps workflows
++      ansible.builtin.uri:
++        timeout: 20
++        follow_redirects: none
++        url: >-
++          {{ mistral_internal_endpoint }}/workflows?name={{ item }}&namespace=
++        method: GET
++        headers:
++          X-Auth-Token: "{{ powerops_keystone_token }}"
++        status_code: 200
++        return_content: true
++        validate_certs: true
++        ca_path: >-
++          {{ kolla_admin_openrc_cacert
++             if kolla_admin_openrc_cacert else omit }}
++      loop:
++        - power_ops.host_power_status
++        - power_ops.planned_power_off
++        - power_ops.planned_reboot
++        - power_ops.power_on_and_return
++      loop_control:
++        label: "{{ item }}"
++      register: powerops_workflow_reads
++      until: powerops_workflow_reads is success
++      retries: 12
++      delay: 5
++      no_log: true
++      run_once: true
++      delegate_to: localhost
++      when: powerops_validate_registration | bool
+ 
+-- name: Validate registered PowerOps actions
+-  ansible.builtin.assert:
+-    that:
+-      - >-
+-        (powerops_action_reads.results | default([]) |
+-         map(attribute='json.name') | list | unique | sort) ==
+-        ['powerops.host_power_status', 'powerops.planned_power_off',
+-         'powerops.planned_reboot', 'powerops.power_on_for_inspection',
+-         'powerops.return_to_service']
+-  no_log: true
+-  run_once: true
+-  delegate_to: localhost
+-  when: powerops_validate_registration | bool
++    - name: Validate registered PowerOps actions
++      ansible.builtin.assert:
++        that:
++          - >-
++            (powerops_action_reads.results | default([]) |
++             map(attribute='json.name') | list | unique | sort) ==
++            ['powerops.host_power_status', 'powerops.planned_power_off',
++             'powerops.planned_reboot', 'powerops.power_on_for_inspection',
++             'powerops.return_to_service']
++      no_log: true
++      run_once: true
++      delegate_to: localhost
++      when: powerops_validate_registration | bool
+ 
+-- name: Validate each registered PowerOps workflow
+-  ansible.builtin.assert:
+-    that:
+-      - item.json.workflows | default([]) | length == 1
+-      - >-
+-        (item.json.workflows | default([]) |
+-         map(attribute='name') | list) == [item.item]
+-      - >-
+-        (item.json.workflows | default([]) |
+-         map(attribute='project_id') | list) ==
+-        [powerops_keystone_project_id]
+-  loop: "{{ powerops_workflow_reads.results | default([]) }}"
+-  loop_control:
+-    label: "{{ item.item | default('missing workflow') }}"
+-  no_log: true
+-  run_once: true
+-  delegate_to: localhost
+-  when: powerops_validate_registration | bool
++    - name: Validate each registered PowerOps workflow
++      ansible.builtin.assert:
++        that:
++          - item.json.workflows | default([]) | length == 1
++          - >-
++            (item.json.workflows | default([]) |
++             map(attribute='name') | list) == [item.item]
++          - >-
++            (item.json.workflows | default([]) |
++             map(attribute='project_id') | list) ==
++            [powerops_keystone_project_id]
++      loop: "{{ powerops_workflow_reads.results | default([]) }}"
++      loop_control:
++        label: "{{ item.item | default('missing workflow') }}"
++      no_log: true
++      run_once: true
++      delegate_to: localhost
++      when: powerops_validate_registration | bool
++  rescue:
++    - name: Report safe PowerOps catalogue failure
++      ansible.builtin.fail:
++        msg: >-
++          PowerOps catalogue check failed in {{ ansible_failed_task.name }}.
++          HTTP statuses: {{ ansible_failed_result.results |
++          default([ansible_failed_result]) | map(attribute='status', default=-1) |
++          map('int') | list }}. -1 means no HTTP response or a local validation
++          failure. Token and response bodies are hidden. Check mistral-server
++          and HAProxy logs on each API replica; do not repeat power workflows.
++      run_once: true
++      delegate_to: localhost
+diff --git a/ansible/roles/mistral/templates/mistral.conf.j2 b/ansible/roles/mistral/templates/mistral.conf.j2
+index 8f8d7dc..030b870 100644
+--- a/ansible/roles/mistral/templates/mistral.conf.j2
++++ b/ansible/roles/mistral/templates/mistral.conf.j2
+@@ -106,7 +106,7 @@ connection_string = {{ osprofiler_backend_connection_string }}
+ {% endif %}
+ 
+ [coordination]
+-backend_url = {% if enable_powerops | bool %}{{ powerops_coordination_url }}{% else %}{{ redis_connection_string }}{% endif %}
++backend_url = {{ powerops_coordination_url if (enable_powerops | bool) else redis_connection_string }}
+ {% if enable_powerops | bool and service_name in ['mistral-api', 'mistral-engine', 'mistral-executor'] %}
+ 
+ [powerops]
+diff --git a/kolla_ansible/tests/unit/test_powerops_0509_preflight.py b/kolla_ansible/tests/unit/test_powerops_0509_preflight.py
+new file mode 100644
+index 0000000..796fabb
+--- /dev/null
++++ b/kolla_ansible/tests/unit/test_powerops_0509_preflight.py
+@@ -0,0 +1,83 @@
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++# http://www.apache.org/licenses/LICENSE-2.0
++
++import unittest
++
++from kolla_ansible.tests.unit.test_powerops_registration import (
++    MISTRAL_DEPLOY, MISTRAL_POWEROPS, _assertion_outcome, _load_yaml, _named,
++    _task_runs, _template,
++)
++
++
++class RepairPreflightTest(unittest.TestCase):
++    def test_each_replica_runs_offline_contract_check_before_population(self):
++        tasks = _load_yaml(MISTRAL_POWEROPS)
++        check = _named(tasks, 'Verify PowerOps Mistral action entry points')
++        self.assertTrue(check['run_once'])
++        self.assertEqual('{{ item.1 }}', check['delegate_to'])
++        self.assertTrue(check['any_errors_fatal'])
++        self.assertEqual(60, check['async'])
++        self.assertIn('mistral.cmd.powerops_check',
++                      check['ansible.builtin.command'])
++        groups = {name: ['controller-1', 'controller-2', 'controller-3']
++                  for name in ('mistral-api', 'mistral-engine',
++                               'mistral-executor')}
++        items = _template(check['loop'], dict(groups=groups, **check['vars']))
++        checked = [(host, item['container']) for item, host in items]
++        self.assertEqual(9, len(set(checked)))
++        self.assertLess(tasks.index(check), tasks.index(_named(
++            tasks, 'Populate Mistral action definitions')))
++
++    def test_catalogue_waits_for_last_serial_batch_including_limit(self):
++        phase = next(task for task in _load_yaml(MISTRAL_DEPLOY)
++                     if task.get('import_tasks') == 'powerops.yml')
++        for selected in (['c1', 'c2', 'c3'], ['c2']):
++            for host in selected:
++                self.assertEqual(host == selected[-1], _task_runs(phase, {
++                    'enable_powerops': True,
++                    'ansible_play_hosts_all': selected,
++                    'ansible_play_batch': [host],
++                }))
++
++    def test_missing_selected_hosts_fail_closed_before_catalogue_gate(self):
++        tasks = _load_yaml(MISTRAL_DEPLOY)
++        guard = _named(tasks, 'Verify selected Mistral hosts completed deploy')
++        phase = next(task for task in tasks
++                     if task.get('import_tasks') == 'powerops.yml')
++        self.assertLess(tasks.index(guard), tasks.index(phase))
++        self.assertTrue(guard['any_errors_fatal'])
++        for active, expected in ((['c1', 'c2', 'c3'], 'passed'),
++                                 (['c1', 'c2'], 'failed')):
++            self.assertEqual(expected, _assertion_outcome(guard, {
++                'ansible_play_hosts_all': ['c1', 'c2', 'c3'],
++                'ansible_play_hosts': active,
++            }))
++
++    def test_http_requests_are_bounded_and_token_not_forwarded_on_redirect(self):
++        for task in _load_yaml(MISTRAL_POWEROPS):
++            if 'ansible.builtin.uri' in task:
++                uri = task['ansible.builtin.uri']
++                with self.subTest(task=task['name']):
++                    self.assertEqual(20, uri['timeout'])
++                    self.assertEqual('none', uri['follow_redirects'])
++                    self.assertTrue(task['no_log'])
++
++    def test_failure_message_exposes_only_task_name_and_numeric_status(self):
++        task = _named(_load_yaml(MISTRAL_POWEROPS),
++                      'Report safe PowerOps catalogue failure')
++        expression = task['ansible.builtin.fail']['msg']
++        for statuses in ([200, 404], [-1], [503]):
++            rendered = _template(expression, {
++                'ansible_failed_task': {'name': 'Read registered actions'},
++                'ansible_failed_result': {
++                    'results': [dict(status=status, content='SECRET',
++                                     invocation={'token': 'SECRET'})
++                                for status in statuses],
++                    'msg': 'SECRET', 'url': 'https://SECRET',
++                },
++            })
++            self.assertNotIn('SECRET', rendered)
++            for status in statuses:
++                self.assertIn(str(status), rendered)
+diff --git a/kolla_ansible/tests/unit/test_powerops_registration.py b/kolla_ansible/tests/unit/test_powerops_registration.py
+index 1c2e649..7550563 100644
+--- a/kolla_ansible/tests/unit/test_powerops_registration.py
++++ b/kolla_ansible/tests/unit/test_powerops_registration.py
+@@ -45,7 +45,16 @@ WORKFLOW_NAMES = [
+ 
+ 
+ def _load_yaml(path):
+-    return yaml.safe_load(path.read_text(encoding="utf-8"))
++    def flatten(tasks):
++        result = []
++        for task in tasks:
++            if 'block' in task:
++                result.extend(flatten(task['block']))
++                result.extend(flatten(task.get('rescue', [])))
++            else:
++                result.append(task)
++        return result
++    return flatten(yaml.safe_load(path.read_text(encoding="utf-8")))
+ 
+ 
+ def _named(tasks, name):
+@@ -118,7 +127,10 @@ class PowerOpsRegistrationTest(unittest.TestCase):
+                 self.assertEqual(1, len(imports))
+                 import_index, task = imports[0]
+                 self.assertGreater(import_index, flush_index)
+-                self.assertEqual("enable_powerops | bool", task.get("when"))
++                conditions = task.get('when')
++                if not isinstance(conditions, list):
++                    conditions = [conditions]
++                self.assertIn('enable_powerops | bool', conditions)
+ 
+     def test_entrypoint_checks_and_population_are_mandatory_and_exact(self):
+         mistral = _load_yaml(MISTRAL_POWEROPS)
+@@ -128,23 +140,21 @@ class PowerOpsRegistrationTest(unittest.TestCase):
+         )
+         populate = _named(mistral, "Populate Mistral action definitions")
+         self.assertLess(mistral.index(check), mistral.index(populate))
+-        self.assertNotIn("when", check)
++        self.assertNotIn('when', check)
+         self.assertNotIn("when", populate)
+-        self.assertIs(check.get("run_once"), True)
++        self.assertTrue(check.get("run_once"))
+         self.assertIs(populate.get("run_once"), True)
+-        self.assertEqual(
+-            "{{ groups[item.group][0] }}",
+-            check.get("delegate_to"),
+-        )
++        self.assertEqual('{{ item.1 }}', check['delegate_to'])
+         expected_targets = [
+-            {"container": "mistral_api", "group": "mistral-api"},
+-            {"container": "mistral_engine", "group": "mistral-engine"},
++            {"container": "mistral_api", "hosts": "{{ groups['mistral-api'] }}"},
++            {"container": "mistral_engine", "hosts": "{{ groups['mistral-engine'] }}"},
+             {
+                 "container": "mistral_executor",
+-                "group": "mistral-executor",
++                "hosts": "{{ groups['mistral-executor'] }}",
+             },
+         ]
+-        self.assertEqual(expected_targets, check.get("loop"))
++        self.assertEqual(expected_targets,
++                         check['vars']['powerops_runtime_targets'])
+         self.assertNotIn("mistral-event-engine", yaml.safe_dump(check))
+         self.assertEqual(
+             "{{ groups['mistral-api'][0] }}",
+@@ -159,10 +169,8 @@ class PowerOpsRegistrationTest(unittest.TestCase):
+             _normalise(populate["ansible.builtin.command"]),
+         )
+         command = _normalise(check["ansible.builtin.command"])
+-        self.assertIn("exec {{ item.container }} python -c", command)
+-        self.assertIn("m.entry_points(group='mistral.actions')", command)
+-        for name in ACTION_NAMES:
+-            self.assertIn(repr(name), command)
++        self.assertIn("exec {{ item.0.container }} python -m "
++                      "mistral.cmd.powerops_check", command)
+ 
+         masakari = _load_yaml(MASAKARI_POWEROPS)
+         self.assertEqual(1, len(masakari))
+@@ -673,6 +681,7 @@ class PowerOpsRegistrationTest(unittest.TestCase):
+ 
+     def test_registration_never_executes_workflows_or_cloud_mutations(self):
+         allowed_modules = {
++            "ansible.builtin.fail",
+             "ansible.builtin.assert",
+             "ansible.builtin.command",
+             "ansible.builtin.set_fact",
+diff --git a/kolla_ansible/tests/unit/test_powerops_templates.py b/kolla_ansible/tests/unit/test_powerops_templates.py
+index a3d190c..1450405 100644
+--- a/kolla_ansible/tests/unit/test_powerops_templates.py
++++ b/kolla_ansible/tests/unit/test_powerops_templates.py
+@@ -85,6 +85,7 @@ def _environment():
+         loader=jinja2.FileSystemLoader(str(ROOT)),
+         undefined=jinja2.StrictUndefined,
+         keep_trailing_newline=True,
++        trim_blocks=True,
+     )
+     environment.filters.update({
+         "bool": _ansible_bool,
+@@ -387,7 +388,7 @@ class MistralPowerOpsTemplateTest(unittest.TestCase):
+                     )
+                     self.assertNotIn("[powerops]", rendered)
+ 
+-    def test_disabled_coordination_keeps_original_local_whitespace(self):
++    def test_disabled_coordination_keeps_distinct_ini_lines(self):
+         marker = "rabbit_transient_quorum_queue = true"
+         expected_tail = "\n".join((
+             marker,
+@@ -412,9 +413,10 @@ class MistralPowerOpsTemplateTest(unittest.TestCase):
+             with self.subTest(service=service_name):
+                 rendered, _config = self._render(service_name, False, "")
+                 self.assertEqual(
+-                    expected_tail,
+-                    rendered[rendered.index(marker):],
++                    expected_tail.split(),
++                    rendered[rendered.index(marker):].split(),
+                 )
++                self.assertIn('backend_url = ' + REDIS_URL + '\n', rendered)
+ 
+     def test_enabled_matrix_uses_etcd_for_every_service(self):
+         services = (
+-- 
+2.49.0

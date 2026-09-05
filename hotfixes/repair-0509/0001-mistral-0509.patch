@@ -1,0 +1,922 @@
+From b5487c46bc17d438253b5c78b2fef4f4d6aee24d Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Sat, 5 Sep 2026 21:32:26 +0300
+Subject: [PATCH] fix: repair PowerOps runtime and SDK contracts on 0509
+
+---
+ mistral/actions/powerops/base.py              |   8 +-
+ mistral/actions/powerops/clients.py           |   7 +-
+ mistral/cmd/powerops_check.py                 | 145 ++++++++
+ mistral/services/powerops.py                  |  45 +++
+ mistral/tests/unit/actions/powerops/fakes.py  |  17 +-
+ .../actions/powerops/test_authorization.py    |   7 +-
+ .../unit/actions/powerops/test_clients.py     |   2 +-
+ .../unit/actions/powerops/test_planned.py     |   6 +-
+ .../unit/actions/powerops/test_return_host.py |   4 +
+ .../actions/powerops/test_runtime_context.py  | 128 +++++++
+ .../unit/actions/powerops/test_sdk_http.py    | 337 ++++++++++++++++++
+ .../powerops/test_transition_safety.py        |   4 +
+ 12 files changed, 700 insertions(+), 10 deletions(-)
+ create mode 100644 mistral/cmd/powerops_check.py
+ create mode 100644 mistral/services/powerops.py
+ create mode 100644 mistral/tests/unit/actions/powerops/test_runtime_context.py
+ create mode 100644 mistral/tests/unit/actions/powerops/test_sdk_http.py
+
+diff --git a/mistral/actions/powerops/base.py b/mistral/actions/powerops/base.py
+index dfcb63b..5290f3f 100644
+--- a/mistral/actions/powerops/base.py
++++ b/mistral/actions/powerops/base.py
+@@ -18,6 +18,7 @@ from oslo_log import log as logging
+ from mistral.actions.powerops import clients
+ from mistral.actions.powerops import coordination
+ from mistral.actions.powerops import exceptions
++from mistral import context as mistral_context
+ from mistral.services import powerops
+ from mistral_lib import actions
+ 
+@@ -30,8 +31,13 @@ class PowerOpsAction(actions.Action):
+     """Shared authorization, coordination and fail-safe action template."""
+ 
+     def _authorize(self, context):
++        # The 0509 executor binds the authenticated RPC context in the action
++        # thread. Do not extend mistral-lib's serialized SecurityContext or
++        # trust role-like attributes supplied on the action context.
++        request = (mistral_context.ctx()
++                   if mistral_context.has_ctx() else None)
+         powerops.authorize(
+-            context.security,
++            request,
+             allow_hard_off=getattr(self, 'allow_hard_off', False),
+             error_cls=exceptions.PowerOpsUnauthorized,
+         )
+diff --git a/mistral/actions/powerops/clients.py b/mistral/actions/powerops/clients.py
+index d9ff1e3..80a7203 100644
+--- a/mistral/actions/powerops/clients.py
++++ b/mistral/actions/powerops/clients.py
+@@ -764,7 +764,8 @@ class CloudClients:
+         if service.status == 'enabled':
+             self._mutation(
+                 lambda: self.connection.compute.disable_service(
+-                    service, disabled_reason=reason
++                    service, host=service.host, binary=service.binary,
++                    disabled_reason=reason
+                 ),
+                 deadline,
+                 'timed out disabling the Nova compute service',
+@@ -783,7 +784,9 @@ class CloudClients:
+ 
+         if service.status == 'disabled':
+             self._mutation(
+-                lambda: self.connection.compute.enable_service(service),
++                lambda: self.connection.compute.enable_service(
++                    service, host=service.host, binary=service.binary
++                ),
+                 deadline,
+                 'timed out enabling the Nova compute service',
+             )
+diff --git a/mistral/cmd/powerops_check.py b/mistral/cmd/powerops_check.py
+new file mode 100644
+index 0000000..c3ce6a3
+--- /dev/null
++++ b/mistral/cmd/powerops_check.py
+@@ -0,0 +1,145 @@
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++# http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++"""Offline image contract check: python -m mistral.cmd.powerops_check.
++
++No config file, token, database, message bus or cloud connection is used.
++Run in a disposable process/container (preferably with --network=none).
++This is not a replacement for the scenario suite or live acceptance.
++"""
++
++import importlib.metadata as metadata
++import json
++import sys
++from unittest import mock
++
++
++REQUIRED = (
++    'powerops.host_power_status', 'powerops.planned_power_off',
++    'powerops.planned_reboot', 'powerops.power_on_for_inspection',
++    'powerops.return_to_service',
++)
++
++
++def check():
++    from mistral_lib.actions import context as lib_context
++    from oslo_config import cfg
++
++    from mistral.actions.powerops import base
++    from mistral.actions.powerops import exceptions
++    from mistral import config  # noqa: F401  Register options, do not parse.
++    from mistral import context
++    from mistral.executors import default_executor
++
++    entries = metadata.entry_points(group='mistral.actions')
++    loaded = {}
++    for name in REQUIRED:
++        matches = [entry for entry in entries if entry.name == name]
++        if len(matches) != 1:
++            raise RuntimeError('Missing or duplicate action entry point')
++        cls = matches[0].load()
++        if not issubclass(cls, base.PowerOpsAction):
++            raise RuntimeError('Unexpected PowerOps action class')
++        loaded[name] = cls
++
++    class AuthorizationProbe(base.PowerOpsAction):
++        def run(self, action_context):
++            self._authorize(action_context)
++            return 'authorized'
++
++    previous = context.ctx() if context.has_ctx() else None
++    with mock.patch.object(base, 'CONF', cfg.CONF):
++        # Patch only the local authorization configuration, not the caller
++        # or executor logic; never load deployment secrets for this check.
++        from mistral.services import powerops
++        conf = mock.Mock()
++        conf.powerops.allowed_project_names = ['check-project']
++        conf.powerops.allowed_user_names = ['check-user']
++        try:
++            with mock.patch.object(powerops, 'cfg') as config_module:
++                config_module.CONF = conf
++                for roles, hard_off, allowed in (
++                        (['admin'], False, True),
++                        (['admin'], True, True),
++                        (['powerops_operator'], False, True),
++                        (['powerops_operator'], True, False),
++                        (['member'], False, False),
++                        ([], False, False),
++                        ('admin', False, False),
++                        ([1], False, False)):
++                    request = context.MistralContext(
++                        roles=roles, project_name='check-project',
++                        user_name='check-user',
++                    )
++                    codec = context.RpcContextSerializer()
++                    context.set_ctx(codec.deserialize_context(
++                        codec.serialize_context(request)))
++                    action_context = context.create_action_context({})
++                    serializer = lib_context.ActionContextSerializer()
++                    serializer.deserialize_from_dict(
++                        serializer.serialize_to_dict(action_context))
++                    for name, cls in loaded.items():
++                        args = {'host': 'check-host',
++                                'segment_uuid': 'check-segment'}
++                        if name == 'powerops.return_to_service':
++                            args['stopped_instance_ids'] = []
++                        action = cls(**args)
++                        action.allow_hard_off = hard_off
++                        try:
++                            action._authorize(action_context)
++                        except exceptions.PowerOpsUnauthorized:
++                            if allowed:
++                                raise
++                        else:
++                            if not allowed:
++                                raise RuntimeError('Authorization accepted '
++                                                   'an unprivileged caller')
++                    # Exercise the actual 0509 executor thread, not just
++                    # create_action_context(). No RPC client is constructed.
++                    if allowed:
++                        probe = AuthorizationProbe()
++                        probe.allow_hard_off = hard_off
++                        with mock.patch.object(default_executor.rpc,
++                                               'get_engine_client'):
++                            executor = default_executor.DefaultExecutor()
++                        result = executor._do_run_action(
++                            probe, None, {}, False, True, 5)
++                        if result.is_error() or result.data != 'authorized':
++                            raise RuntimeError('Executor context contract '
++                                               'failed')
++        finally:
++            context.set_ctx(previous)
++
++    return {
++        'result': 'ok',
++        'actions': sorted(loaded),
++        'versions': {name: metadata.version(name) for name in (
++            'mistral', 'mistral-lib', 'openstacksdk', 'keystoneauth1',
++            'oslo.context', 'oslo.messaging', 'tooz', 'etcd3gw')},
++        'python': sys.version.split()[0],
++    }
++
++
++def main():
++    try:
++        result = check()
++    except Exception as exc:
++        # Exception messages may contain deployment data; keep stdout safe
++        # for Ansible. Detailed imports can be investigated separately.
++        print(json.dumps({'result': 'failed',
++                          'error_type': type(exc).__name__}))
++        return 1
++    print(json.dumps(result, sort_keys=True))
++    return 0
++
++
++if __name__ == '__main__':
++    sys.exit(main())
+diff --git a/mistral/services/powerops.py b/mistral/services/powerops.py
+new file mode 100644
+index 0000000..b3245e5
+--- /dev/null
++++ b/mistral/services/powerops.py
+@@ -0,0 +1,45 @@
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++# http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++"""PowerOps authorization using the authenticated Mistral request context.
++
++Never infer privileges from action inputs, service credentials, ``is_admin``
++alone, or missing roles. DefaultExecutor restores this request context in its
++action thread. The stock mistral-lib SecurityContext does not transport roles.
++"""
++
++from oslo_config import cfg
++
++from mistral.actions.powerops import exceptions
++
++
++def authorize(request, allow_hard_off=False,
++              error_cls=exceptions.PowerOpsUnauthorized):
++    if getattr(request, 'is_target', False):
++        raise error_cls('PowerOps does not accept target-cloud contexts')
++
++    roles = getattr(request, 'roles', None)
++    if not isinstance(roles, (list, tuple)) or not all(
++            isinstance(role, str) and role for role in roles):
++        raise error_cls('PowerOps requires authenticated role names')
++
++    if 'admin' in roles:
++        return
++
++    if allow_hard_off:
++        raise error_cls('PowerOps hard power-off requires the admin role')
++
++    if ('powerops_operator' not in roles
++            or getattr(request, 'project_name', None)
++            not in cfg.CONF.powerops.allowed_project_names
++            or getattr(request, 'user_name', None)
++            not in cfg.CONF.powerops.allowed_user_names):
++        raise error_cls('PowerOps requires admin or an allowlisted operator')
+diff --git a/mistral/tests/unit/actions/powerops/fakes.py b/mistral/tests/unit/actions/powerops/fakes.py
+index 857bc42..0db2378 100644
+--- a/mistral/tests/unit/actions/powerops/fakes.py
++++ b/mistral/tests/unit/actions/powerops/fakes.py
+@@ -16,6 +16,8 @@ from contextlib import contextmanager
+ from types import SimpleNamespace
+ from unittest import mock
+ 
++from mistral import context as request_context
++
+ 
+ def node(node_id, name, power_state="power on",
+          target_power_state=None, last_error=None,
+@@ -51,7 +53,16 @@ def masakari_host(host_id, name, on_maintenance=True):
+ 
+ 
+ def action_context(execution_id, project_name="operations",
+-                   user_name="powerops-operator"):
++                   user_name="powerops-operator",
++                   roles=('powerops_operator',)):
++    """Bind a matching authenticated caller for a direct action invocation.
++
++    Tests using this fixture must restore the previous thread context in
++    cleanup, just as the executor/RPC test fixtures do.
++    """
++    request_context.set_ctx(request_context.MistralContext(
++        project_name=project_name, user_name=user_name, roles=roles,
++    ))
+     return SimpleNamespace(
+         security=SimpleNamespace(
+             project_name=project_name, user_name=user_name
+@@ -115,11 +126,11 @@ def cloud(ironic_nodes=None, instances=None, nova_services=None,
+         item.compute_host = "compute-02"
+         item.status = "ACTIVE"
+ 
+-    def disable_service(item, disabled_reason=None):
++    def disable_service(item, host=None, binary=None, disabled_reason=None):
+         events.append(("disable", item.id, disabled_reason))
+         item.status = "disabled"
+ 
+-    def enable_service(item):
++    def enable_service(item, host=None, binary=None):
+         events.append(("enable", item.id))
+         item.status = "enabled"
+ 
+diff --git a/mistral/tests/unit/actions/powerops/test_authorization.py b/mistral/tests/unit/actions/powerops/test_authorization.py
+index 586e694..f23ec27 100644
+--- a/mistral/tests/unit/actions/powerops/test_authorization.py
++++ b/mistral/tests/unit/actions/powerops/test_authorization.py
+@@ -18,6 +18,7 @@ from mistral.actions.powerops import base as action_base
+ from mistral.actions.powerops import exceptions
+ from mistral.actions.powerops import planned
+ from mistral.actions.powerops import return_host
++from mistral import context as request_context
+ from mistral.tests.unit.actions.powerops import fakes
+ from mistral.tests.unit import base
+ 
+@@ -25,6 +26,9 @@ from mistral.tests.unit import base
+ class ActionAuthorizationTest(base.BaseTest):
+     def setUp(self):
+         super(ActionAuthorizationTest, self).setUp()
++        previous = (request_context.ctx()
++                    if request_context.has_ctx() else None)
++        self.addCleanup(request_context.set_ctx, previous)
+         self.override_config('enabled', True, 'powerops')
+         self.override_config(
+             'allowed_project_names', ['operations'], 'powerops'
+@@ -56,8 +60,7 @@ class ActionAuthorizationTest(base.BaseTest):
+             'unauthorized action reached OpenStack'
+         )
+         for roles in ([], None, ['member'], 'admin', [1], ['Admin']):
+-            context = fakes.action_context('direct-action')
+-            context.security.roles = roles
++            context = fakes.action_context('direct-action', roles=roles)
+ 
+             for action in self._actions():
+                 with self.subTest(action=type(action).__name__, roles=roles):
+diff --git a/mistral/tests/unit/actions/powerops/test_clients.py b/mistral/tests/unit/actions/powerops/test_clients.py
+index 10a2cd5..8b62968 100644
+--- a/mistral/tests/unit/actions/powerops/test_clients.py
++++ b/mistral/tests/unit/actions/powerops/test_clients.py
+@@ -863,7 +863,7 @@ class CloudClientsTest(base.BaseTest):
+         self.assertIs(item, result)
+         self.assertEqual("disabled", item.status)
+         cloud.connection.compute.disable_service.assert_called_once_with(
+-            item, disabled_reason="planned"
++            item, host=item.host, binary=item.binary, disabled_reason="planned"
+         )
+         self.assertGreaterEqual(health.call_count, 4)
+ 
+diff --git a/mistral/tests/unit/actions/powerops/test_planned.py b/mistral/tests/unit/actions/powerops/test_planned.py
+index ebb2527..ed3c255 100644
+--- a/mistral/tests/unit/actions/powerops/test_planned.py
++++ b/mistral/tests/unit/actions/powerops/test_planned.py
+@@ -19,6 +19,7 @@ from mistral.actions.powerops import exceptions
+ from mistral.actions.powerops import planned
+ from mistral.tests.unit.actions.powerops import fakes
+ from mistral.tests.unit import base
++from mistral import context as request_context
+ 
+ 
+ class _CleanupFailureCoordinator:
+@@ -61,6 +62,9 @@ class _CleanupFailureCoordinator:
+ class PlannedPowerActionsTest(base.BaseTest):
+     def setUp(self):
+         super(PlannedPowerActionsTest, self).setUp()
++        previous = (request_context.ctx()
++                    if request_context.has_ctx() else None)
++        self.addCleanup(request_context.set_ctx, previous)
+ 
+         self.override_config('enabled', True, 'powerops')
+         self.override_config(
+@@ -203,7 +207,7 @@ class PlannedPowerActionsTest(base.BaseTest):
+                         fakes.action_context(
+                             'execution-invalid-{}-{}'.format(
+                                 action_class.__name__, field
+-                            )
++                            ), roles=['admin'],
+                         ),
+                     )
+ 
+diff --git a/mistral/tests/unit/actions/powerops/test_return_host.py b/mistral/tests/unit/actions/powerops/test_return_host.py
+index 9c1139a..ebecd37 100644
+--- a/mistral/tests/unit/actions/powerops/test_return_host.py
++++ b/mistral/tests/unit/actions/powerops/test_return_host.py
+@@ -19,6 +19,7 @@ from mistral.actions.powerops import exceptions
+ from mistral.actions.powerops import return_host
+ from mistral.tests.unit.actions.powerops import fakes
+ from mistral.tests.unit import base
++from mistral import context as request_context
+ 
+ 
+ class _CleanupFailureCoordinator:
+@@ -58,6 +59,9 @@ class _CleanupFailureCoordinator:
+ class ReturnHostActionsTest(base.BaseTest):
+     def setUp(self):
+         super(ReturnHostActionsTest, self).setUp()
++        previous = (request_context.ctx()
++                    if request_context.has_ctx() else None)
++        self.addCleanup(request_context.set_ctx, previous)
+ 
+         self.override_config('enabled', True, 'powerops')
+         self.override_config(
+diff --git a/mistral/tests/unit/actions/powerops/test_runtime_context.py b/mistral/tests/unit/actions/powerops/test_runtime_context.py
+new file mode 100644
+index 0000000..c08ce89
+--- /dev/null
++++ b/mistral/tests/unit/actions/powerops/test_runtime_context.py
+@@ -0,0 +1,128 @@
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++# http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++"""Exercise the 0509 executor with an unmodified mistral-lib context."""
++
++import importlib
++import unittest
++from unittest import mock
++
++from mistral_lib.actions import context as lib_context
++from oslo_config import cfg
++
++from mistral import config  # noqa: F401  Register PowerOps options.
++from mistral import context
++
++
++class RuntimeContextTest(unittest.TestCase):
++    def setUp(self):
++        self.previous = context.ctx() if context.has_ctx() else None
++        self.addCleanup(context.set_ctx, self.previous)
++        for name, value in (
++                ('enabled', True),
++                ('allowed_project_names', ['operations']),
++                ('allowed_user_names', ['operator'])):
++            cfg.CONF.set_override(name, value, group='powerops')
++            self.addCleanup(cfg.CONF.clear_override, name, group='powerops')
++
++    def _bind(self, roles, project='operations', user='operator'):
++        request = context.MistralContext(
++            roles=roles, project_name=project, user_name=user,
++            project_id='project-id', user_id='user-id',
++        )
++        # The executor receives an RPC-restored request context, not roles
++        # from the action input or an extended mistral-lib SecurityContext.
++        serializer = context.RpcContextSerializer(None)
++        context.set_ctx(serializer.deserialize_context(
++            serializer.serialize_context(request)))
++
++    def test_executor_authorizes_admin_and_operator_with_stock_library(self):
++        from mistral.actions.powerops import base
++        from mistral.executors import default_executor
++
++        class AuthorizationProbe(base.PowerOpsAction):
++            def run(self, action_context):
++                self._authorize(action_context)
++                return 'authorized'
++
++        for roles, project, user in (
++                (['admin'], 'admin', 'admin'),
++                (['powerops_operator'], 'operations', 'operator')):
++            with self.subTest(roles=roles):
++                self._bind(roles, project, user)
++                # Do not add attributes which stock deserialization rejects.
++                action_context = context.create_action_context({})
++                codec = lib_context.ActionContextSerializer()
++                codec.deserialize_from_dict(
++                    codec.serialize_to_dict(action_context))
++                with mock.patch.object(default_executor.rpc,
++                                       'get_engine_client'):
++                    executor = default_executor.DefaultExecutor()
++                result = executor._do_run_action(
++                    AuthorizationProbe(), None, {}, False, True, 5)
++                self.assertFalse(result.is_error(), result.error)
++                self.assertEqual('authorized', result.data)
++
++    def test_all_five_entry_point_classes_are_importable(self):
++        import configparser
++        from importlib.metadata import EntryPoint
++        from pathlib import Path
++
++        root = Path(__file__).resolve().parents[5]
++        parser = configparser.ConfigParser()
++        parser.read(root / 'setup.cfg')
++        entries = parser['entry_points']['mistral.actions'].splitlines()
++        loaded = []
++        for entry in entries:
++            if entry.strip().startswith('powerops.'):
++                name, value = entry.split('=', 1)
++                loaded.append(EntryPoint(name.strip(), value.strip(),
++                                         'mistral.actions').load())
++        self.assertEqual(5, len(loaded))
++
++    def test_no_ambient_context_never_trusts_action_supplied_roles(self):
++        base = importlib.import_module('mistral.actions.powerops.base')
++        errors = importlib.import_module('mistral.actions.powerops.exceptions')
++        self._bind(['admin'])
++        supplied = context.create_action_context({})
++        supplied.security.roles = ['admin']
++        context.set_ctx(None)
++        with self.assertRaises(errors.PowerOpsUnauthorized):
++            base.PowerOpsAction()._authorize(supplied)
++
++    def test_supplied_admin_roles_cannot_override_request_member(self):
++        base = importlib.import_module('mistral.actions.powerops.base')
++        errors = importlib.import_module('mistral.actions.powerops.exceptions')
++        self._bind(['member'])
++        supplied = context.create_action_context({})
++        supplied.security.roles = ['admin']
++        with self.assertRaises(errors.PowerOpsUnauthorized):
++            base.PowerOpsAction()._authorize(supplied)
++
++    def test_image_selfcheck_runs_without_cloud_or_config_file(self):
++        from mistral.actions.powerops import clients
++        from mistral.cmd import powerops_check
++        with mock.patch.object(clients, 'connection_from_conf',
++                               side_effect=AssertionError('cloud call')):
++            report = powerops_check.check()
++        self.assertEqual('ok', report['result'])
++        self.assertEqual(5, len(report['actions']))
++        self.assertIn('mistral-lib', report['versions'])
++
++    def test_target_headers_cannot_authorize_local_powerops(self):
++        from mistral.actions.powerops import base
++        from mistral.actions.powerops import exceptions
++        for roles in (['admin'], ['powerops_operator']):
++            self._bind(roles)
++            context.ctx().is_target = True
++            supplied = context.create_action_context({})
++            with self.assertRaises(exceptions.PowerOpsUnauthorized):
++                base.PowerOpsAction()._authorize(supplied)
+diff --git a/mistral/tests/unit/actions/powerops/test_sdk_http.py b/mistral/tests/unit/actions/powerops/test_sdk_http.py
+new file mode 100644
+index 0000000..4acfbc0
+--- /dev/null
++++ b/mistral/tests/unit/actions/powerops/test_sdk_http.py
+@@ -0,0 +1,337 @@
++# Copyright 2026 OpenStack Foundation
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#    http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++"""Offline audit of PowerOps calls through real openstacksdk proxies.
++
++Run with the Mistral test virtualenv. All HTTP is intercepted by requests-mock;
++this script never connects to OpenStack or issues real power operations.
++"""
++
++from unittest import mock
++
++from keystoneauth1 import fixture
++from keystoneauth1.identity import v3
++from keystoneauth1 import session
++from openstack import connection
++import requests_mock
++
++from mistral.actions.powerops import clients
++from mistral.actions.powerops import exceptions
++from mistral.actions.powerops import planned
++from mistral.actions.powerops import return_host
++from mistral import context
++from mistral.tests.unit.actions.powerops import fakes
++from mistral.tests.unit import base
++
++
++class SDKContractAudit(base.BaseTest):
++    host = 'compute-01.example'
++    other_host = 'compute-02.example'
++    service_id = '00000000-0000-0000-0000-000000000001'
++    server_id = '00000000-0000-0000-0000-000000000002'
++    node_id = '00000000-0000-0000-0000-000000000003'
++
++    def setUp(self):
++        super().setUp()
++        self.override_config('instance_interval', 0, 'powerops')
++        self.override_config('enabled', True, 'powerops')
++        self.override_config(
++            'allowed_project_names', ['operations'], 'powerops')
++        self.override_config(
++            'allowed_user_names', ['powerops-operator'], 'powerops')
++        previous = context.ctx() if context.has_ctx() else None
++        self.addCleanup(context.set_ctx, previous)
++        self.http = requests_mock.Mocker(real_http=False)
++        self.http.start()
++        self.addCleanup(self.http.stop)
++        token = fixture.V3Token()
++        for service_type, name, endpoint in (
++            ('compute', 'nova', 'http://nova.example/v2.1'),
++            ('ha', 'masakari', 'http://masakari.example/v1'),
++            ('baremetal', 'ironic', 'http://ironic.example/v1'),
++        ):
++            service = token.add_service(service_type, name)
++            service.add_endpoint('internal', endpoint, region='RegionOne')
++        self.http.post(
++            'http://identity.example/v3/auth/tokens', json=token,
++            headers={'X-Subject-Token': 'offline-test-token'},
++        )
++        for endpoint, version_id, minimum, maximum in (
++            ('http://nova.example/v2.1', 'v2.1', '2.1', '2.96'),
++            ('http://masakari.example/v1', 'v1.0', '1.0', '1.3'),
++            ('http://ironic.example/v1', 'v1', '1.1', '1.95'),
++        ):
++            version = {
++                'id': version_id, 'status': 'CURRENT',
++                'min_version': minimum, 'version': maximum,
++                'links': [{'rel': 'self', 'href': endpoint + '/'}],
++            }
++            self.http.get(endpoint, json={'version': version})
++
++        auth = v3.Password(
++            auth_url='http://identity.example/v3', username='mistral',
++            password='offline-test-password', project_name='service',
++            user_domain_name='Default', project_domain_name='Default',
++        )
++        self.cloud = clients.CloudClients(
++            connection.Connection(
++                session=session.Session(auth=auth),
++                region_name='RegionOne', interface='internal',
++            ),
++            sleep=lambda _seconds: None,
++        )
++        self.service = {
++            'id': self.service_id, 'binary': 'nova-compute', 'host': self.host,
++            'status': 'enabled', 'state': 'up', 'disabled_reason': None,
++        }
++        self.server = {
++            'id': self.server_id, 'status': 'ACTIVE',
++            'OS-EXT-SRV-ATTR:host': self.host,
++            'OS-EXT-SRV-ATTR:hypervisor_hostname': self.host,
++        }
++        self.node = {
++            'uuid': self.node_id, 'name': self.host, 'power_state': 'power on',
++            'target_power_state': None, 'last_error': None,
++            'provision_state': 'manageable', 'network_interface': 'noop',
++        }
++        self.events = []
++        self.http.get(
++            'http://nova.example/v2.1/os-services',
++            json=lambda request, context: {'services': [self.service]},
++        )
++        self.http.put(
++            'http://nova.example/v2.1/os-services/' + self.service_id,
++            json=self._update_service,
++        )
++        self.http.get(
++            'http://nova.example/v2.1/servers/detail',
++            json=self._servers,
++        )
++        self.http.get(
++            'http://nova.example/v2.1/servers/' + self.server_id,
++            json=lambda request, context: {'server': self.server},
++        )
++        self.http.post(
++            'http://nova.example/v2.1/servers/' + self.server_id + '/action',
++            json=self._server_action,
++        )
++        self.http.get(
++            'http://ironic.example/v1/nodes/detail',
++            json=lambda request, context: {'nodes': [self.node]},
++        )
++        self.http.get(
++            'http://ironic.example/v1/nodes/' + self.node_id,
++            json=lambda request, context: self.node,
++        )
++        self.http.put(
++            'http://ironic.example/v1/nodes/' + self.node_id + '/states/power',
++            json=self._power,
++        )
++
++        self.masakari = {'uuid': 'host-1', 'name': self.host,
++                         'on_maintenance': False}
++        self.http.get('http://masakari.example/v1/segments/segment-1',
++                      json={'segment': {'uuid': 'segment-1'}})
++        self.http.get(
++            'http://masakari.example/v1/segments/segment-1/hosts',
++            json=lambda request, context: {'hosts': [self.masakari]},
++        )
++
++        def maintenance(request, response_context):
++            self.masakari['on_maintenance'] = (
++                request.json()['host']['on_maintenance'])
++            return {'host': self.masakari}
++        self.http.put(
++            'http://masakari.example/v1/segments/segment-1/hosts/host-1',
++            json=maintenance,
++        )
++
++    def _update_service(self, request, context):
++        service_type, version = (
++            request.headers['OpenStack-API-Version'].split())
++        self.assertEqual('compute', service_type)
++        self.assertGreaterEqual(tuple(map(int, version.split('.'))), (2, 53))
++        self.events.append(request.json())
++        self.service.update(request.json())
++        return {'service': self.service}
++
++    def _servers(self, request, context):
++        self.assertEqual(['true'], request.qs['all_tenants'])
++        host = request.qs.get('host')
++        found = (not host or
++                 host == [self.server['OS-EXT-SRV-ATTR:host']])
++        return {'servers': [self.server] if found else []}
++
++    def _server_action(self, request, context):
++        body = request.json()
++        self.events.append(body)
++        if 'os-stop' in body:
++            self.server['status'] = 'SHUTOFF'
++        elif 'os-start' in body:
++            self.server['status'] = 'ACTIVE'
++        elif 'os-migrateLive' in body:
++            self.assertEqual('compute 2.30',
++                             request.headers['OpenStack-API-Version'])
++            self.server['OS-EXT-SRV-ATTR:host'] = self.other_host
++        else:
++            self.fail('Unexpected Nova action: ' + repr(body))
++        context.status_code = 202
++        return None
++
++    def _power(self, request, context):
++        body = request.json()
++        self.events.append(body)
++        if body['target'] == 'soft power off':
++            service_type, version = request.headers[
++                'OpenStack-API-Version'].split()
++            self.assertEqual('baremetal', service_type)
++            # 1.27 is the minimum, not an exact pin: SDK may negotiate higher.
++            self.assertGreaterEqual(tuple(map(int, version.split('.'))),
++                                    (1, 27))
++        self.node['power_state'] = (
++            'power on' if body['target'] == 'power on' else 'power off'
++        )
++        context.status_code = 202
++        return None
++
++    def test_nova_disable_and_enable(self):
++        self.cloud.disable_nova(self.host, 'PowerOps planned operation')
++        self.assertEqual('disabled', self.service['status'])
++        self.cloud.enable_nova(self.host)
++        self.assertEqual('enabled', self.service['status'])
++        self.assertEqual([
++            {'status': 'disabled',
++             'disabled_reason': 'PowerOps planned operation'},
++            {'status': 'enabled'},
++        ], self.events)
++
++    def test_stop_manifest_and_restart(self):
++        manifest = self.cloud.apply_instance_policy(self.host, 'stop')
++        self.assertEqual([self.server_id], manifest)
++        self.cloud.assert_host_safe_for_power_off(self.host, 'stop', manifest)
++        self.cloud.start_instances(self.host, manifest)
++        self.assertEqual('ACTIVE', self.server['status'])
++        self.assertEqual([{'os-stop': None}, {'os-start': None}], self.events)
++
++    def test_live_migration_and_source_empty_guard(self):
++        self.assertEqual([], self.cloud.apply_instance_policy(
++            self.host, 'live_migrate'))
++        self.cloud.assert_host_safe_for_power_off(
++            self.host, 'live_migrate', [])
++        self.assertEqual([{'os-migrateLive': {
++            'host': None, 'block_migration': 'auto',
++        }}], self.events)
++
++    def test_restart_rejects_foreign_host_without_sending_start(self):
++        self.server['OS-EXT-SRV-ATTR:host'] = self.other_host
++        self.server['status'] = 'SHUTOFF'
++        with self.assertRaises(exceptions.InstanceManifestError):
++            self.cloud.start_instances(self.host, [self.server_id])
++
++        self.assertEqual('SHUTOFF', self.server['status'])
++        self.assertFalse(any(
++            request.method == 'POST' and '/servers/' in request.url
++            for request in self.http.request_history
++        ))
++
++    def test_require_empty_rejects_populated_host(self):
++        with self.assertRaises(clients.exceptions.InstancePolicyError):
++            self.cloud.apply_instance_policy(self.host, 'require_empty')
++        self.assertEqual([], self.events)
++
++    def test_ironic_soft_off_and_power_on(self):
++        off = self.cloud.power_off(self.host, allow_hard_off=False)
++        self.assertEqual('power off', off.power_state)
++        on = self.cloud.power_on(self.host)
++        self.assertEqual('power on', on.power_state)
++        self.assertEqual([
++            {'target': 'soft power off'}, {'target': 'power on'},
++        ], self.events)
++
++    def test_legacy_nova_disable_enable_send_host_and_binary(self):
++        self.cloud.connection.compute.default_microversion = '2.1'
++        bodies = []
++
++        def mutate(request, response_context):
++            body = request.json()
++            self.assertEqual(self.host, body['host'])
++            self.assertEqual('nova-compute', body['binary'])
++            bodies.append(body)
++            self.service['status'] = (
++                'enabled' if request.url.endswith('/enable') else 'disabled')
++            return {'service': self.service}
++        for action in ('disable-log-reason', 'enable'):
++            self.http.put('http://nova.example/v2.1/os-services/' + action,
++                          json=mutate)
++        self.cloud.disable_nova(self.host, 'planned')
++        self.cloud.enable_nova(self.host)
++        self.assertEqual(2, len(bodies))
++
++    def _run_action(self, action):
++        cloud_type = clients.CloudClients
++
++        def cloud_factory(connection, **kwargs):
++            return cloud_type(connection, sleep=lambda _seconds: None,
++                              **kwargs)
++        with mock.patch.object(
++                planned.clients, 'connection_from_conf',
++                return_value=self.cloud.connection), mock.patch.object(
++                planned.clients, 'CloudClients',
++                side_effect=cloud_factory), mock.patch.object(
++                planned.coordination, 'OperationCoordinator',
++                return_value=fakes.recording_coordinator([])) as coordinator:
++            coordinator.return_value.assert_healthy = lambda: None
++            return action.run(fakes.action_context('http-scenario'))
++
++    def _planned_cycle(self, policy, populated):
++        if not populated:
++            self.server['OS-EXT-SRV-ATTR:host'] = self.other_host
++        result = self._run_action(planned.PlannedPowerOffAction(
++            self.host, 'segment-1', instance_policy=policy))
++        self.assertEqual('power off', self.node['power_state'])
++        self.assertEqual('disabled', self.service['status'])
++        self.assertTrue(self.masakari['on_maintenance'])
++        expected = [self.server_id] if populated and policy == 'stop' else []
++        self.assertEqual(expected, result['stopped_instance_ids'])
++        self._run_action(return_host.PowerOnForInspectionAction(
++            self.host, 'segment-1'))
++        # These are actions around the YAML operator gate. This local test
++        # explicitly authorizes inspection; it does not bypass or test resume.
++        self._run_action(return_host.ReturnToServiceAction(
++            self.host, 'segment-1', expected, stale_domains_checked=True))
++        self.assertEqual('power on', self.node['power_state'])
++        self.assertEqual('enabled', self.service['status'])
++        self.assertFalse(self.masakari['on_maintenance'])
++        if expected:
++            self.assertEqual('ACTIVE', self.server['status'])
++        if policy == 'live_migrate':
++            self.assertEqual(self.other_host,
++                             self.server['OS-EXT-SRV-ATTR:host'])
++
++    def test_planned_off_and_on_without_vms_http(self):
++        self._planned_cycle('require_empty', False)
++
++    def test_planned_stop_off_on_restart_manifest_http(self):
++        self._planned_cycle('stop', True)
++
++    def test_planned_live_migration_off_on_http(self):
++        self._planned_cycle('live_migrate', True)
++
++    def test_planned_reboot_with_vm_http(self):
++        result = self._run_action(planned.PlannedRebootAction(
++            self.host, 'segment-1', instance_policy='stop'))
++        self.assertEqual('power on', result['power_state'])
++        self.assertEqual('ACTIVE', self.server['status'])
++        self.assertEqual('enabled', self.service['status'])
++        self.assertFalse(self.masakari['on_maintenance'])
+diff --git a/mistral/tests/unit/actions/powerops/test_transition_safety.py b/mistral/tests/unit/actions/powerops/test_transition_safety.py
+index 086ea80..4ee7411 100644
+--- a/mistral/tests/unit/actions/powerops/test_transition_safety.py
++++ b/mistral/tests/unit/actions/powerops/test_transition_safety.py
+@@ -21,6 +21,7 @@ from mistral.actions.powerops import planned
+ from mistral.actions.powerops import return_host
+ from mistral.tests.unit.actions.powerops import fakes
+ from mistral.tests.unit import base
++from mistral import context as request_context
+ 
+ 
+ class TransitionSafetyTest(base.BaseTest):
+@@ -32,6 +33,9 @@ class TransitionSafetyTest(base.BaseTest):
+ 
+     def setUp(self):
+         super(TransitionSafetyTest, self).setUp()
++        previous = (request_context.ctx()
++                    if request_context.has_ctx() else None)
++        self.addCleanup(request_context.set_ctx, previous)
+         self.override_config('enabled', True, 'powerops')
+         self.override_config(
+             'allowed_project_names', ['operations'], 'powerops'
+-- 
+2.49.0
