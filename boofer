@@ -12,3 +12,8 @@
   print('Request-ID:', r.headers.get('X-Openstack-Request-Id'))
   print('BODY:', r.text[:4000])
   PY
+
+
+print('URL:', r.url)
+h = cloud.masakari_host('b045da78-bc53-435a-937e-f12d41a217b1', 'ultra1-2.ultra1.test.pvs.un.sbt')
+print('HOST:', h.id, h.name, 'maintenance:', h.on_maintenance)
