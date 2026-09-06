@@ -1,7 +1,21 @@
-  openstack workflow execution output show \
-    2b409134-ef06-4ecf-b0af-b39ba038f02
+  sudo podman exec -i mistral_executor python - <<'PY'
+  from mistral import config
+  from mistral.actions.powerops import clients
 
-sudo podman exec mistral_executor \
-    grep -n -F -B 5 -A 70 \
-    '8c375089-22b1-4032-bc63-1102699fd66c' \
-    /var/log/kolla/mistral/mistral-executor.log
+  config.parse_args(
+      args=[],
+      default_config_files=['/etc/mistral/mistral.conf']
+  )
+  cloud = clients.CloudClients(clients.connection_from_conf())
+  cloud.connection.session.timeout = 15
+
+  r = cloud.ha_adapter.get(
+      '/segments/b045da78-bc53-435a-937e-f12d41a217b1',
+      raise_exc=False,
+      timeout=15
+  )
+  print('URL:', r.url)
+  print('HTTP:', r.status_code)
+  print('Request-ID:', r.headers.get('X-Openstack-Request-Id'))
+  print('BODY:', r.text[:4000])
+  PY
