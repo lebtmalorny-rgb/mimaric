@@ -81,3 +81,76 @@ print('HOST:', h.id, h.name, 'maintenance:', h.on_maintenance)
 
   openstack segment host list \
     b045da78-bc53-435a-937e-f12d41a217b1
+
+
+• Для включения ultra1-2 после нашего выключения без ВМ используем power_ops.power_on_and_return, список ВМ — [].
+
+  ### 1. На ultra1-0: запустить включение
+
+  В shell с admin-openrc:
+
+  if powerops_on_id=$(openstack workflow execution create \
+      -f value -c ID \
+      power_ops.power_on_and_return \
+      '{"host":"ultra1-2.ultra1.test.pvs.un.sbt","segment_uuid":"b045da78-bc53-435a-937e-f12d41a217b1","stopped_instance_ids":[]}'); then
+      printf 'Execution: %s\n' "$powerops_on_id"
+  fi
+
+  Если получен UUID, проверяй:
+
+  openstack workflow execution show "$powerops_on_id"
+  openstack task execution list "$powerops_on_id"
+
+  Ждём PAUSED — это штатная остановка для проверки. Задача power_on_for_inspection должна быть SUCCESS, operator_inspection_gate — IDLE, а return_to_service ещё не запускаться.
+
+  ### 2. Проверить включившийся хост
+
+  На ultra1-0:
+
+  openstack compute service list \
+    --host ultra1-2.ultra1.test.pvs.un.sbt --service nova-compute
+
+  openstack segment host list \
+    b045da78-bc53-435a-937e-f12d41a217b1
+
+  openstack server list --all-projects \
+    --host ultra1-2.ultra1.test.pvs.un.sbt --long
+
+  Ожидаем Nova disabled/up, у ultra1-2 maintenance=True, список ВМ пустой.
+
+  После загрузки на самом ultra1-2:
+
+  hostname -f
+  date -u
+  sudo podman exec nova_libvirt virsh -c qemu:///system list --all
+
+  Для этого пустого хоста список доменов тоже должен быть пустым. Если есть домены или команда завершилась ошибкой — не продолжай и ничего не удаляй. Перед возвратом также проверь штатную
+  работоспособность сети и хранилищ.
+
+  ### 3. Только после проверки: вернуть в сервис
+
+  Вернись в ту же shell на ultra1-0, где сохранён $powerops_on_id.
+
+  Возобновляем именно этот execution через workflow execution update:
+
+  openstack workflow execution update \
+    --state RUNNING \
+    --env '{"stale_domains_checked":true}' \
+    "$powerops_on_id"
+
+  Этот флаг — твоё подтверждение выполненной проверки, не автоматическая проверка.
+
+  ### 4. Проверить завершение
+
+  openstack workflow execution show "$powerops_on_id"
+  openstack workflow execution output show "$powerops_on_id"
+
+  openstack compute service list \
+    --host ultra1-2.ultra1.test.pvs.un.sbt --service nova-compute
+
+  openstack segment host list \
+    b045da78-bc53-435a-937e-f12d41a217b1
+
+  Ожидаем SUCCESS, Nova enabled/up, у ultra1-2 maintenance=False.
+
+  При ERROR или 504 не повторяй запуск и не снимай maintenance вручную — пришли UUID и вывод.
