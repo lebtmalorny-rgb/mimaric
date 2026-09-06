@@ -1,2 +1,7 @@
   openstack workflow execution output show \
     2b409134-ef06-4ecf-b0af-b39ba038f02
+
+sudo podman exec mistral_executor \
+    grep -n -F -B 5 -A 70 \
+    '8c375089-22b1-4032-bc63-1102699fd66c' \
+    /var/log/kolla/mistral/mistral-executor.log
