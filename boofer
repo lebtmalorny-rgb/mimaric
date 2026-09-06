@@ -17,3 +17,19 @@
 print('URL:', r.url)
 h = cloud.masakari_host('b045da78-bc53-435a-937e-f12d41a217b1', 'ultra1-2.ultra1.test.pvs.un.sbt')
 print('HOST:', h.id, h.name, 'maintenance:', h.on_maintenance)
+
+
+  На ultra1-0, в обычной shell с загруженным OpenStack openrc, выполни:
+
+  if powerops_status_id=$(openstack workflow execution create \
+      -f value -c ID \
+      power_ops.host_power_status \
+      '{"host":"ultra1-2.ultra1.test.pvs.un.sbt","segment_uuid":"b045da78-bc53-435a-937e-f12d41a217b1"}'); then
+      printf 'Execution: %s\n' "$powerops_status_id"
+      openstack workflow execution show "$powerops_status_id"
+  fi
+
+  Затем в той же shell:
+
+  openstack workflow execution show "$powerops_status_id"
+  openstack workflow execution output show "$powerops_status_id"
