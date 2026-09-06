@@ -1,0 +1,101 @@
+{
+  "date": "2026-09-06",
+  "scope": "Local Masakari source repair and Kolla-Ansible supplement; no live cloud changes",
+  "bases": {
+    "masakari": "9f3cb144958b8e60bba72adefb22edf51387c0ca",
+    "kolla_ansible_with_mistral_0509_repair": "5325c8abd781968f5478f2a7cfff7c002c647324"
+  },
+  "source_commits": {
+    "masakari": "4fcbe3da46d4ec6a231be10a933fd57e8856663f",
+    "kolla_ansible": "792f2f0998697de4c9d4fad396d05de95208fd36"
+  },
+  "patch_replay": {
+    "result": "pass",
+    "method": "git archive of each exact base, git apply --check, git apply, compare complete git write-tree to source HEAD tree",
+    "masakari_tree": "7f96cb8959dfa15e07acaab2bca7c9d9901208b8",
+    "kolla_ansible_tree": "77786e6610c7258acda8fdb2dc5f2f92b5deaf78",
+    "masakari_profile_tests_after_replay": 131,
+    "kolla_profile_tests_after_replay": 44
+  },
+  "masakari_full_unit_suite": {
+    "result": "pass",
+    "total": 921,
+    "passed": 918,
+    "skipped": 3,
+    "failed": 0,
+    "errors": 0,
+    "skip_reasons": [
+      "SO_REUSEADDR behaves differently on OSX and BSD",
+      "MySQL test backend unavailable",
+      "PostgreSQL DBAPI/test backend unavailable"
+    ],
+    "command": "python -B -c 'import masakari.tests.unit; from masakari import objects; objects.register_all(); import unittest; unittest.main(module=None)' discover -v -s masakari/tests/unit -t .",
+    "log_sha256": "9639dba9b1b81cdf2d3efd4d9b7b8a002e1cc580e203a9d477eec326297c5edc",
+    "note": "Initial sandbox run had 13 local socket permission errors; complete final run allowed local WSGI sockets and passed"
+  },
+  "regression_evidence": {
+    "red_before_green": true,
+    "cases": [
+      "Missing/broken/duplicate fencing plugin rejects flow construction",
+      "Wrong plugin result type (empty Flow or unrelated Task) rejects construction",
+      "Misordered or incomplete PowerOps stages reject construction",
+      "Reserved-host preparation and evacuation cannot leave the retry stage",
+      "Real auto/rh TaskFlow executes disable, fence, prepare, evacuate in order",
+      "Both priority fallbacks reject broken fencing before task execution",
+      "Same Nova host with different hypervisor_hostname does not confirm evacuation",
+      "Missing/invalid destination or pending/absent task_state cannot report success",
+      "Reserved destination and final observation must match confirmation",
+      "stop_server/ownership error before timer construction is preserved",
+      "Checker validates deployed config without synthesizing missing fencing",
+      "Checker does not initialize RPC or TaskFlow persistence or connect sockets",
+      "Checker terminates its own hung process with SIGALRM"
+    ]
+  },
+  "wheel": {
+    "build": "pass",
+    "filename": "masakari-19.1.1.dev11-py3-none-any.whl",
+    "sha256": "3bae0033961b6e14e29c38ac7c7a423d9d001e51dfd2ff2192eecb94ed8123b1",
+    "installation": "Non-editable wheel in a new isolated venv; imports verified from site-packages, outside source cwd",
+    "profile_tests_passed": 131,
+    "profile_tests_log_sha256": "b2ba10520136e3b90d86f6df336a3135bcdd057634267791e493e4594a4a92e6",
+    "checker": "pass",
+    "all_runtime_hashes_match": true,
+    "report": "wheel-contract.json",
+    "dependency_check": "uv pip check: 132 packages compatible"
+  },
+  "kolla_ansible": {
+    "profile_tests_passed": 44,
+    "real_local_ansible_scenarios_passed": 8,
+    "scenario_report": "ansible-preflight-report.json",
+    "ansible_core": "2.18.6",
+    "method": "Actual gate/import/serial/limit/loop/delegation/async semantics; container and deployment commands replaced with local event markers"
+  },
+  "quality_gates": {
+    "changed_masakari_python_flake8": "pass",
+    "source_git_diff_check": "pass",
+    "image_verifier_orchestration_unit_tests": 3,
+    "independent_source_review": "no open must-fix findings after re-review",
+    "independent_kolla_and_helpers_review": "no open must-fix findings after checker timeout fix"
+  },
+  "environment": {
+    "platform": "macOS arm64",
+    "python": "3.11.15",
+    "dependencies": "test-environment.lock",
+    "note": "Frozen existing test environment, not replacement SberLinux RPM constraints. uv reported fixtures 4.2.4.post1 as yanked; dependency modernization was not in scope. Legacy pkg_resources/asyncore deprecation warnings remain."
+  },
+  "not_verified": [
+    "Match of local Masakari base to actual stand image/source revision",
+    "Kolla/SberLinux image build and runtime RPM dependencies",
+    "Actual Docker/Podman execution of verify_images.py against user's future image",
+    "Live Keystone/RBAC and Ironic visibility",
+    "Live etcd lease/ownership across services",
+    "BMC power change, real Nova evacuation and physical-node failure/recovery",
+    "MySQL/PostgreSQL unit backend acceptance"
+  ],
+  "not_changed": [
+    "Mistral 0509 repair bundle",
+    "Globals, roles or live container configuration",
+    "Live cloud, network and power state",
+    "GitHub branches or remote refs"
+  ]
+}

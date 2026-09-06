@@ -1,0 +1,873 @@
+From 4fcbe3da46d4ec6a231be10a933fd57e8856663f Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Sun, 6 Sep 2026 03:34:07 +0300
+Subject: [PATCH] fix: fail closed on PowerOps recovery contracts and
+ evacuation confirmation
+
+---
+ masakari/cmd/powerops_check.py                | 114 +++++++
+ masakari/engine/drivers/taskflow/base.py      |  68 +++-
+ .../engine/drivers/taskflow/host_failure.py   |  70 ++--
+ .../tests/unit/cmd/test_powerops_check.py     | 112 +++++++
+ .../drivers/taskflow/test_powerops_repair.py  | 300 ++++++++++++++++++
+ masakari/tests/unit/fakes.py                  |   4 +
+ 6 files changed, 645 insertions(+), 23 deletions(-)
+ create mode 100644 masakari/cmd/powerops_check.py
+ create mode 100644 masakari/tests/unit/cmd/test_powerops_check.py
+ create mode 100644 masakari/tests/unit/engine/drivers/taskflow/test_powerops_repair.py
+
+diff --git a/masakari/cmd/powerops_check.py b/masakari/cmd/powerops_check.py
+new file mode 100644
+index 0000000..e23dc2c
+--- /dev/null
++++ b/masakari/cmd/powerops_check.py
+@@ -0,0 +1,114 @@
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++# http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++"""Offline image/config gate; never executes recovery tasks or opens clients.
++
++python -m masakari.cmd.powerops_check [--config-file PATH]
++Without a config, use an explicit synthetic PowerOps flow. With a config,
++validate the deployed flow without filling missing fencing stages for it.
++"""
++
++import argparse
++import hashlib
++import importlib.metadata as metadata
++from pathlib import Path
++import signal
++import sys
++from unittest import mock
++
++from oslo_serialization import jsonutils
++
++
++CHECK_TIMEOUT_SECONDS = 50
++
++
++def check():
++    from masakari import conf
++    from masakari.engine.drivers.taskflow import base
++    from masakari.engine.drivers.taskflow import host_failure
++    from masakari import exception
++
++    if not conf.CONF.powerops.enabled:
++        raise exception.HostRecoveryFailureException(
++            message='PowerOps is not enabled in checked configuration')
++    # Even when a deployed config enables TaskFlow persistence, this check
++    # constructs only an in-memory engine. No DB/RPC/client setup is called.
++    with mock.patch.object(base, 'PERSISTENCE_BACKEND', None):
++        for build in (host_failure.get_auto_flow, host_failure.get_rh_flow):
++            kwargs = ({'update_host_method': None}
++                      if build is host_failure.get_rh_flow else {})
++            engine = build(None, None, {
++                'host_name': 'offline-source', 'notification_uuid': 'offline',
++                'reserved_host_list': ['offline-destination']}, **kwargs)
++            engine.compile()
++            engine.prepare()
++            engine.validate()
++
++    root = Path(__file__).resolve().parents[1]
++    paths = [root / 'engine/drivers/taskflow' / name for name in
++             ('base.py', 'driver.py', 'host_failure.py', 'powerops.py')]
++    paths.extend((root / 'powerops').glob('*.py'))
++    paths.append(Path(__file__).resolve())
++    return {
++        'result': 'ok', 'flows': ['auto', 'reserved_host'],
++        'sha256': {'masakari/' + str(path.relative_to(root)):
++                   hashlib.sha256(path.read_bytes()).hexdigest()
++                   for path in sorted(paths)},
++        'versions': {name: metadata.version(name) for name in
++                     ('masakari', 'openstacksdk', 'python-novaclient',
++                      'keystoneauth1', 'tooz', 'etcd3gw', 'taskflow',
++                      'stevedore')},
++        'python': sys.version.split()[0],
++    }
++
++
++def main(argv=None):
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--config-file')
++    args = parser.parse_args(argv)
++    # Killing a host-side podman/docker exec does not reliably kill its
++    # process inside a running engine container. Enforce a POSIX deadline
++    # in this disposable checker process, even for a hung native import.
++    previous_handler = signal.signal(signal.SIGALRM, signal.SIG_DFL)
++    signal.alarm(CHECK_TIMEOUT_SECONDS)
++    try:
++        from masakari import conf
++        # Do not call config.parse_args: it initializes RPC/SQLAlchemy.
++        conf.CONF([], project='masakari',
++                  default_config_files=[args.config_file]
++                  if args.config_file else [])
++        if not args.config_file:
++            conf.CONF.set_override('enabled', True, 'powerops')
++            for kind in ('auto', 'rh'):
++                tasks = {
++                    'pre': ['disable_compute_service_task', 'ironic_fence'],
++                    'main': ['prepare_HA_enabled_instances_task'],
++                    'post': ['evacuate_instances_task']}
++                if kind == 'rh':
++                    tasks['main'].extend(tasks['post'])
++                    tasks['post'] = []
++                conf.CONF.set_override('host_%s_failure_recovery_tasks' % kind,
++                                       tasks, 'taskflow_driver_recovery_flows')
++        result = check()
++    except Exception as exc:
++        # Avoid printing config values, credentials or arbitrary plugin errors.
++        print(jsonutils.dumps({'result': 'failed',
++                               'error_type': type(exc).__name__}))
++        return 1
++    finally:
++        signal.alarm(0)
++        signal.signal(signal.SIGALRM, previous_handler)
++    print(jsonutils.dumps(result, sort_keys=True))
++    return 0
++
++
++if __name__ == '__main__':
++    sys.exit(main())
+diff --git a/masakari/engine/drivers/taskflow/base.py b/masakari/engine/drivers/taskflow/base.py
+index 1602819..e863de5 100644
+--- a/masakari/engine/drivers/taskflow/base.py
++++ b/masakari/engine/drivers/taskflow/base.py
+@@ -108,16 +108,78 @@ class DynamicLogListener(logging_listener.DynamicLoggingListener):
+             log=logger, fail_formatter=SpecialFormatter(engine))
+ 
+ 
+-def get_recovery_flow(task_list, **kwargs):
++def validate_powerops_host_flow(task_dict, reserved_host=False):
++    """Reject unsafe host flows before constructing any executable engine.
++
++    The fence belongs in pre, outside the reserved-host retry loop. Extra
++    tasks remain supported, but every configured task must load successfully.
++    """
++    required = ['disable_compute_service_task', 'ironic_fence',
++                'prepare_HA_enabled_instances_task', 'evacuate_instances_task']
++    if (not isinstance(task_dict, dict) or
++            set(task_dict) != {'pre', 'main', 'post'} or
++            any(not isinstance(tasks, list) for tasks in task_dict.values())):
++        raise exception.HostRecoveryFailureException(
++            message='Invalid PowerOps host recovery stages')
++    names = [name for stage in ('pre', 'main', 'post')
++             for name in task_dict[stage]]
++    if (any(not isinstance(name, str) or not name for name in names) or
++            len(names) != len(set(names)) or
++            [name for name in names if name in required] != required or
++            any(name not in task_dict['pre'] for name in required[:2])):
++        raise exception.HostRecoveryFailureException(
++            message='PowerOps requires unique ordered disable, fence, prepare '
++                    'and evacuate tasks, with disable and fence in pre')
++    if reserved_host and any(name not in task_dict['main']
++                             for name in required[2:]):
++        raise exception.HostRecoveryFailureException(
++            message='PowerOps reserved-host prepare and evacuate tasks must '
++                    'remain in the main retry stage')
++
++
++def get_recovery_flow(task_list, strict=False, **kwargs):
+     """This is used create extension object from provided task_list.
+ 
+     This method returns the extension object of the each task provided
+     in a list using stevedore extension manager.
+     """
++    def fail_load(manager, entrypoint, error):
++        raise exception.HostRecoveryFailureException(
++            message='Cannot load recovery task %s (%s)' %
++                    (entrypoint.name, type(error).__name__)) from error
++
+     extensions = named.NamedExtensionManager(
+         'masakari.task_flow.tasks', names=task_list,
+-        name_order=True, invoke_on_load=True, invoke_kwds=kwargs)
+-    for extension in extensions.extensions:
++        name_order=not strict, invoke_on_load=True, invoke_kwds=kwargs,
++        on_load_failure_callback=fail_load if strict else None)
++    loaded = extensions.extensions
++    if strict:
++        # Stevedore's name_order mode hides duplicate installed entry points.
++        # Validate the full loaded set first, then restore configured order.
++        if (sorted(ext.name for ext in loaded) != sorted(task_list) or
++                len(task_list) != len(set(task_list))):
++            raise exception.HostRecoveryFailureException(
++                message='Missing or duplicate recovery task plugins')
++        by_name = {ext.name: ext for ext in loaded}
++        # Import after loading the plugins to avoid a module import cycle.
++        from masakari.engine.drivers.taskflow import host_failure
++        from masakari.engine.drivers.taskflow import powerops
++        required_types = {
++            'disable_compute_service_task':
++                host_failure.DisableComputeServiceTask,
++            'ironic_fence': powerops.IronicFenceTask,
++            'prepare_HA_enabled_instances_task':
++                host_failure.PrepareHAEnabledInstancesTask,
++            'evacuate_instances_task': host_failure.EvacuateInstancesTask,
++        }
++        for ext in loaded:
++            expected_type = required_types.get(ext.name, task.Task)
++            if not isinstance(ext.obj, expected_type):
++                raise exception.HostRecoveryFailureException(
++                    message='Recovery plugin %s constructed an unexpected '
++                            'task type' % ext.name)
++        loaded = [by_name[name] for name in task_list]
++    for extension in loaded:
+         yield extension.obj
+ 
+ 
+diff --git a/masakari/engine/drivers/taskflow/host_failure.py b/masakari/engine/drivers/taskflow/host_failure.py
+index 890bbb2..1cda18a 100644
+--- a/masakari/engine/drivers/taskflow/host_failure.py
++++ b/masakari/engine/drivers/taskflow/host_failure.py
+@@ -174,21 +174,23 @@ class EvacuateInstancesTask(base.MasakariTask):
+     def _get_state_and_host_of_instance(self, context, instance):
+         new_instance = self.novaclient.get_server(context, instance.id)
+         instance_host = getattr(new_instance,
+-                                "OS-EXT-SRV-ATTR:hypervisor_hostname")
++                                "OS-EXT-SRV-ATTR:host", None)
+         old_vm_state = getattr(instance, "OS-EXT-STS:vm_state")
+         new_vm_state = getattr(new_instance, "OS-EXT-STS:vm_state")
+ 
+-        return (old_vm_state, new_vm_state, instance_host)
++        task_state = getattr(new_instance, "OS-EXT-STS:task_state", 'unknown')
++        return (old_vm_state, new_vm_state, instance_host, task_state)
+ 
+     def _stop_after_evacuation(self, context, instance):
+         def _wait_for_stop_confirmation():
+             _assert_powerops_healthy(self.powerops_coordinator)
+-            old_vm_state, new_vm_state, instance_host = (
++            old_vm_state, new_vm_state, instance_host, task_state = (
+                 self._get_state_and_host_of_instance(context, instance))
+ 
+-            if new_vm_state == 'stopped':
++            if new_vm_state == 'stopped' and task_state is None:
+                 raise loopingcall.LoopingCallDone()
+ 
++        timer = None
+         try:
+             # confirm instance is stopped after recovery
+             _assert_powerops_healthy(self.powerops_coordinator)
+@@ -203,7 +205,8 @@ class EvacuateInstancesTask(base.MasakariTask):
+                        "timeout to stop.") % {'uuid': instance.id}
+                 LOG.warning(msg)
+         finally:
+-            timer.stop()
++            if timer is not None:
++                timer.stop()
+ 
+     def _evacuate_and_confirm(self, context, vmove,
+                               reserved_host=None):
+@@ -240,7 +243,7 @@ class EvacuateInstancesTask(base.MasakariTask):
+ 
+         def _wait_for_evacuation_confirmation():
+             _assert_powerops_healthy(self.powerops_coordinator)
+-            old_vm_state, new_vm_state, instance_host = (
++            old_vm_state, new_vm_state, instance_host, task_state = (
+                 self._get_state_and_host_of_instance(context, instance))
+ 
+             if (new_vm_state == 'error' and
+@@ -248,19 +251,25 @@ class EvacuateInstancesTask(base.MasakariTask):
+                 raise exception.InstanceEvacuateFailed(
+                     instance_uuid=instance.id)
+ 
+-            if instance_host != vmove.source_host:
+-                if ((old_vm_state == 'error' and
+-                    new_vm_state == 'active') or
+-                        old_vm_state == new_vm_state):
+-                    raise loopingcall.LoopingCallDone()
++            expected_state = ('active' if old_vm_state == 'error'
++                              else old_vm_state)
++            if (isinstance(instance_host, str) and instance_host.strip() and
++                    instance_host != vmove.source_host and
++                    (reserved_host is None or
++                     instance_host == reserved_host) and
++                    task_state is None and new_vm_state == expected_state):
++                raise loopingcall.LoopingCallDone(
++                    retvalue=(instance_host, new_vm_state))
+ 
+         def _wait_for_evacuation():
++            timer = None
+             try:
+                 # add a timeout to the periodic call.
+                 timer = loopingcall.FixedIntervalWithTimeoutLoopingCall(
+                     _wait_for_evacuation_confirmation)
+-                timer.start(interval=CONF.verify_interval,
+-                            timeout=CONF.wait_period_after_evacuation).wait()
++                return timer.start(
++                    interval=CONF.verify_interval,
++                    timeout=CONF.wait_period_after_evacuation).wait()
+             except loopingcall.LoopingCallTimeOut:
+                 with excutils.save_and_reraise_exception():
+                     msg = ("Timeout for instance '%(uuid)s' evacuation."
+@@ -269,7 +278,8 @@ class EvacuateInstancesTask(base.MasakariTask):
+             finally:
+                 # stop the periodic call, in case of exceptions or
+                 # Timeout.
+-                timer.stop()
++                if timer is not None:
++                    timer.stop()
+ 
+         try:
+             vm_state = getattr(instance, "OS-EXT-STS:vm_state")
+@@ -313,11 +323,12 @@ class EvacuateInstancesTask(base.MasakariTask):
+             self.novaclient.evacuate_instance(context, instance.id,
+                                               target=reserved_host)
+ 
+-            _wait_for_evacuation()
++            dest_host, expected_final_state = _wait_for_evacuation()
+ 
+             if vm_state != 'active':
+                 if stop_instance:
+                     self._stop_after_evacuation(self.context, instance)
++                    expected_final_state = 'stopped'
+                     # If the instance was in 'error' state before failure
+                     # it should be set to 'error' after recovery.
+                     if vm_state == 'error':
+@@ -325,10 +336,16 @@ class EvacuateInstancesTask(base.MasakariTask):
+                             self.powerops_coordinator)
+                         self.novaclient.reset_instance_state(
+                             context, instance.id)
++                        expected_final_state = 'error'
+ 
+             instance = self.novaclient.get_server(context, instance_uuid)
+-            dest_host = getattr(
+-                instance, "OS-EXT-SRV-ATTR:hypervisor_hostname")
++            if (getattr(instance, 'OS-EXT-SRV-ATTR:host', None) != dest_host or
++                    getattr(instance, 'OS-EXT-STS:task_state', 'unknown')
++                    is not None or
++                    getattr(instance, 'OS-EXT-STS:vm_state', None) !=
++                    expected_final_state):
++                raise exception.InstanceEvacuateFailed(
++                    instance_uuid=instance_uuid)
+             _update_vmove(
+                 vmove,
+                 status=fields.VMoveStatus.SUCCEEDED,
+@@ -506,9 +523,13 @@ def get_auto_flow(context, novaclient, process_what,
+     nested_flow = linear_flow.Flow(flow_name)
+ 
+     task_dict = TASKFLOW_CONF.host_auto_failure_recovery_tasks
++    if CONF.powerops.enabled:
++        base.validate_powerops_host_flow(task_dict)
+ 
+     auto_evacuate_flow_pre = linear_flow.Flow('pre_tasks')
+-    for plugin in base.get_recovery_flow(task_dict['pre'], context=context,
++    for plugin in base.get_recovery_flow(task_dict['pre'],
++                                         strict=CONF.powerops.enabled,
++                                         context=context,
+                                          novaclient=novaclient,
+                                          update_host_method=None,
+                                          powerops_coordinator=(
+@@ -516,7 +537,9 @@ def get_auto_flow(context, novaclient, process_what,
+         auto_evacuate_flow_pre.add(plugin)
+ 
+     auto_evacuate_flow_main = linear_flow.Flow('main_tasks')
+-    for plugin in base.get_recovery_flow(task_dict['main'], context=context,
++    for plugin in base.get_recovery_flow(task_dict['main'],
++                                         strict=CONF.powerops.enabled,
++                                         context=context,
+                                          novaclient=novaclient,
+                                          update_host_method=None,
+                                          powerops_coordinator=(
+@@ -524,7 +547,9 @@ def get_auto_flow(context, novaclient, process_what,
+         auto_evacuate_flow_main.add(plugin)
+ 
+     auto_evacuate_flow_post = linear_flow.Flow('post_tasks')
+-    for plugin in base.get_recovery_flow(task_dict['post'], context=context,
++    for plugin in base.get_recovery_flow(task_dict['post'],
++                                         strict=CONF.powerops.enabled,
++                                         context=context,
+                                          novaclient=novaclient,
+                                          update_host_method=None,
+                                          powerops_coordinator=(
+@@ -554,10 +579,13 @@ def get_rh_flow(context, novaclient, process_what,
+     nested_flow = linear_flow.Flow(flow_name)
+ 
+     task_dict = TASKFLOW_CONF.host_rh_failure_recovery_tasks
++    if CONF.powerops.enabled:
++        base.validate_powerops_host_flow(task_dict, reserved_host=True)
+ 
+     rh_evacuate_flow_pre = linear_flow.Flow('pre_tasks')
+     for plugin in base.get_recovery_flow(
+             task_dict['pre'],
++            strict=CONF.powerops.enabled,
+             context=context, novaclient=novaclient,
+             powerops_coordinator=powerops_coordinator, **kwargs):
+         rh_evacuate_flow_pre.add(plugin)
+@@ -568,6 +596,7 @@ def get_rh_flow(context, novaclient, process_what,
+ 
+     for plugin in base.get_recovery_flow(
+             task_dict['main'],
++            strict=CONF.powerops.enabled,
+             context=context, novaclient=novaclient,
+             powerops_coordinator=powerops_coordinator, **kwargs):
+         rh_evacuate_flow_main.add(plugin)
+@@ -575,6 +604,7 @@ def get_rh_flow(context, novaclient, process_what,
+     rh_evacuate_flow_post = linear_flow.Flow('post_tasks')
+     for plugin in base.get_recovery_flow(
+             task_dict['post'],
++            strict=CONF.powerops.enabled,
+             context=context, novaclient=novaclient,
+             powerops_coordinator=powerops_coordinator, **kwargs):
+         rh_evacuate_flow_post.add(plugin)
+diff --git a/masakari/tests/unit/cmd/test_powerops_check.py b/masakari/tests/unit/cmd/test_powerops_check.py
+new file mode 100644
+index 0000000..d2d558c
+--- /dev/null
++++ b/masakari/tests/unit/cmd/test_powerops_check.py
+@@ -0,0 +1,112 @@
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++# http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++import importlib
++import importlib.metadata as metadata
++from pathlib import Path
++import signal
++import socket
++import subprocess
++import sys
++import tempfile
++from unittest import mock
++
++from masakari.engine.drivers.taskflow import base
++from masakari import exception
++from masakari import rpc
++from masakari import test
++from masakari.tests.unit.engine.drivers.taskflow import test_powerops_repair
++
++
++class PowerOpsCheckTest(test.TestCase):
++    def setUp(self):
++        super().setUp()
++        self.checker = importlib.import_module('masakari.cmd.powerops_check')
++        self.override_config('enabled', True, 'powerops')
++        for kind, tasks in (('auto', test_powerops_repair.AUTO),
++                            ('rh', test_powerops_repair.RH)):
++            self.override_config('host_%s_failure_recovery_tasks' % kind,
++                                 tasks, 'taskflow_driver_recovery_flows')
++
++    def test_real_plugins_and_flows_compile_without_network(self):
++        with mock.patch.object(
++                socket.socket, 'connect',
++                side_effect=AssertionError('network forbidden')), \
++                mock.patch.object(base, 'PERSISTENCE_BACKEND',
++                                  'sqlite:////offline-forbidden.db'), \
++                mock.patch.object(
++                    base.backends, 'fetch',
++                    side_effect=AssertionError('DB forbidden')), \
++                mock.patch.object(rpc, 'init',
++                                  side_effect=AssertionError('RPC forbidden')):
++            report = self.checker.check()
++        self.assertEqual('ok', report['result'])
++        self.assertEqual(['auto', 'reserved_host'], report['flows'])
++        self.assertIn('masakari/engine/drivers/taskflow/host_failure.py',
++                      report['sha256'])
++
++    def test_broken_import_is_not_accepted_by_metadata_check(self):
++        original = metadata.EntryPoint.load
++
++        def broken(entry):
++            if entry.name == 'ironic_fence':
++                raise ImportError('offline missing SDK')
++            return original(entry)
++
++        with mock.patch.object(metadata.EntryPoint, 'load', broken):
++            self.assertRaises(exception.HostRecoveryFailureException,
++                              self.checker.check)
++
++    def test_disabled_powerops_and_unsafe_config_fail(self):
++        self.override_config('enabled', False, 'powerops')
++        self.assertRaises(exception.HostRecoveryFailureException,
++                          self.checker.check)
++        self.override_config('enabled', True, 'powerops')
++        self.override_config('host_rh_failure_recovery_tasks',
++                             {'pre': [], 'main': [], 'post': []},
++                             'taskflow_driver_recovery_flows')
++        self.assertRaises(exception.HostRecoveryFailureException,
++                          self.checker.check)
++
++    def test_cli_checks_deployed_config_without_filling_missing_fencing(self):
++        common = '[powerops]\nenabled = true\n[taskflow]\nconnection = ' \
++                 'sqlite:////offline-must-not-be-opened.db\n' \
++                 '[taskflow_driver_recovery_flows]\n'
++        valid = common + (
++            "host_auto_failure_recovery_tasks = "
++            "pre:['disable_compute_service_task',"
++            "'ironic_fence'],main:['prepare_HA_enabled_instances_task'],"
++            "post:['evacuate_instances_task']\n"
++            "host_rh_failure_recovery_tasks = "
++            "pre:['disable_compute_service_task',"
++            "'ironic_fence'],main:['prepare_HA_enabled_instances_task',"
++            "'evacuate_instances_task'],post:[]\n")
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / 'masakari.conf'
++            for content, expected in ((valid, 0), (common, 1),
++                                      ('[powerops]\nenabled = false\n', 1)):
++                path.write_text(content)
++                result = subprocess.run(
++                    [sys.executable, '-B', '-m', 'masakari.cmd.powerops_check',
++                     '--config-file', str(path)],
++                    capture_output=True, text=True, timeout=30)
++                self.assertEqual(expected, result.returncode, result.stdout)
++                self.assertIn('"result": "ok"' if expected == 0 else
++                              '"result": "failed"', result.stdout)
++
++    def test_cli_kills_its_own_hung_process_without_container_cli_help(self):
++        code = ('import sys, time; '
++                'from masakari.cmd import powerops_check as c; '
++                'c.CHECK_TIMEOUT_SECONDS = 1; '
++                'c.check = lambda: time.sleep(60); sys.exit(c.main([]))')
++        result = subprocess.run([sys.executable, '-B', '-c', code],
++                                capture_output=True, text=True, timeout=5)
++        self.assertEqual(-signal.SIGALRM, result.returncode)
+diff --git a/masakari/tests/unit/engine/drivers/taskflow/test_powerops_repair.py b/masakari/tests/unit/engine/drivers/taskflow/test_powerops_repair.py
+new file mode 100644
+index 0000000..fbe112b
+--- /dev/null
++++ b/masakari/tests/unit/engine/drivers/taskflow/test_powerops_repair.py
+@@ -0,0 +1,300 @@
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++# http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++import copy
++import importlib.metadata as metadata
++from types import SimpleNamespace
++from unittest import mock
++
++from taskflow.patterns import linear_flow
++from taskflow import task as taskflow_task
++
++from masakari.engine.drivers.taskflow import base
++from masakari.engine.drivers.taskflow import driver
++from masakari.engine.drivers.taskflow import host_failure
++from masakari.engine.drivers.taskflow import powerops
++from masakari import exception
++from masakari import test
++
++
++AUTO = {'pre': ['disable_compute_service_task', 'ironic_fence'],
++        'main': ['prepare_HA_enabled_instances_task'],
++        'post': ['evacuate_instances_task']}
++RH = {'pre': ['disable_compute_service_task', 'ironic_fence'],
++      'main': ['prepare_HA_enabled_instances_task', 'evacuate_instances_task'],
++      'post': []}
++
++
++class RecoveryLoadingTest(test.TestCase):
++    def setUp(self):
++        super().setUp()
++        self.override_config('enabled', True, 'powerops')
++        self.coordinator = SimpleNamespace(assert_healthy=lambda: None)
++
++    def build(self, reserved=False, tasks=None):
++        option = ('host_rh_failure_recovery_tasks' if reserved else
++                  'host_auto_failure_recovery_tasks')
++        self.override_config(option, tasks if tasks is not None else
++                             copy.deepcopy(RH if reserved else AUTO),
++                             'taskflow_driver_recovery_flows')
++        build = (host_failure.get_rh_flow if reserved
++                 else host_failure.get_auto_flow)
++        with mock.patch.object(base, 'PERSISTENCE_BACKEND', None):
++            return build(None, None, {
++                'host_name': 'source.example', 'notification_uuid': 'offline',
++                'reserved_host_list': ['destination.example']},
++                powerops_coordinator=self.coordinator,
++                **({'update_host_method': None} if reserved else {}))
++
++    def test_broken_fencing_import_fails_before_engine_exists(self):
++        original = metadata.EntryPoint.load
++
++        def load(entry):
++            if entry.name == 'ironic_fence':
++                raise ImportError('simulated missing dependency')
++            return original(entry)
++
++        with mock.patch.object(metadata.EntryPoint, 'load', load):
++            for reserved in (False, True):
++                with self.subTest(reserved=reserved):
++                    self.assertRaises(exception.HostRecoveryFailureException,
++                                      self.build, reserved)
++
++    def test_real_loader_rejects_fencing_constructor_failure(self):
++        with mock.patch.object(powerops.IronicFenceTask, '__init__',
++                               side_effect=RuntimeError('broken constructor')):
++            for reserved in (False, True):
++                self.assertRaises(exception.HostRecoveryFailureException,
++                                  self.build, reserved)
++
++    def test_missing_duplicate_and_misordered_stages_fail_closed(self):
++        for reserved, valid in ((False, AUTO), (True, RH)):
++            for bad_pre in (['disable_compute_service_task'],
++                            ['ironic_fence', 'disable_compute_service_task'],
++                            ['disable_compute_service_task', 'ironic_fence',
++                             'ironic_fence']):
++                tasks = copy.deepcopy(valid)
++                tasks['pre'] = bad_pre
++                with self.subTest(reserved=reserved, pre=bad_pre):
++                    self.assertRaises(exception.HostRecoveryFailureException,
++                                      self.build, reserved, tasks)
++
++    def test_absent_custom_plugin_is_not_silently_skipped(self):
++        tasks = copy.deepcopy(AUTO)
++        tasks['post'].append('nonexistent_safety_check')
++        self.assertRaises(exception.HostRecoveryFailureException,
++                          self.build, False, tasks)
++
++    def test_duplicate_installed_fencing_entry_points_are_rejected(self):
++        entries = list(metadata.entry_points(group='masakari.task_flow.tasks'))
++        entries.append(next(e for e in entries if e.name == 'ironic_fence'))
++        original = base.named.NamedExtensionManager.list_entry_points
++
++        def listed(manager):
++            return (entries if manager.namespace == 'masakari.task_flow.tasks'
++                    else original(manager))
++
++        with mock.patch.object(base.named.NamedExtensionManager,
++                               'list_entry_points', listed):
++            self.assertRaises(exception.HostRecoveryFailureException,
++                              self.build)
++
++    def test_reserved_host_evacuation_cannot_leave_retry_stage(self):
++        for stage in ('pre', 'post'):
++            tasks = copy.deepcopy(RH)
++            tasks[stage].extend(tasks['main'])
++            tasks['main'] = []
++            self.assertRaises(exception.HostRecoveryFailureException,
++                              self.build, True, tasks)
++
++    def test_fence_entry_point_must_construct_the_fencing_task(self):
++        original = metadata.EntryPoint.load
++
++        class UnrelatedTask(taskflow_task.Task):
++            def execute(self):
++                pass
++
++        for obj in (linear_flow.Flow('empty-fence'), UnrelatedTask()):
++            def load(entry):
++                return ((lambda **kwargs: obj) if entry.name == 'ironic_fence'
++                        else original(entry))
++
++            with mock.patch.object(metadata.EntryPoint, 'load', load):
++                self.assertRaises(exception.HostRecoveryFailureException,
++                                  self.build)
++
++    def test_real_taskflow_executes_disable_fence_prepare_evacuate(self):
++        for reserved in (False, True):
++            events = []
++
++            def record(name):
++                def execute(*args, **kwargs):
++                    events.append(name)
++                return execute
++
++            with mock.patch.object(host_failure.DisableComputeServiceTask,
++                                   'execute', record('disable')), \
++                    mock.patch.object(powerops.IronicFenceTask,
++                                      'execute', record('fence')), \
++                    mock.patch.object(
++                        host_failure.PrepareHAEnabledInstancesTask,
++                        'execute', record('prepare')), \
++                    mock.patch.object(host_failure.EvacuateInstancesTask,
++                                      'execute', record('evacuate')):
++                engine = self.build(reserved)
++                engine.run()
++            self.assertEqual(['disable', 'fence', 'prepare', 'evacuate'],
++                             events)
++            self.assertEqual('SUCCESS', engine.storage.get_flow_state())
++
++    def test_both_priority_fallbacks_refuse_broken_fence(self):
++        self.build(False)
++        self.build(True)
++        original = metadata.EntryPoint.load
++
++        def load(entry):
++            if entry.name == 'ironic_fence':
++                raise ImportError('simulated missing fencing dependency')
++            return original(entry)
++
++        recovery = driver.TaskFlowDriver()
++        with mock.patch.object(metadata.EntryPoint, 'load', load), \
++                mock.patch.object(base, 'PERSISTENCE_BACKEND', None), \
++                mock.patch.object(host_failure.DisableComputeServiceTask,
++                                  'execute') as disable, \
++                mock.patch.object(host_failure.EvacuateInstancesTask,
++                                  'execute') as evacuate:
++            for run in (recovery._execute_auto_priority_workflow,
++                        recovery._execute_rh_priority_workflow):
++                self.assertRaises(
++                    exception.HostRecoveryFailureException, run, None, None,
++                    {'host_name': 'source.example',
++                     'notification_uuid': 'offline'},
++                    powerops_coordinator=self.coordinator,
++                    reserved_host_list=['destination.example'],
++                    update_host_method=None)
++            disable.assert_not_called()
++            evacuate.assert_not_called()
++
++
++class OneObservationTimer:
++    """Replace wall-clock waiting only, keeping the real confirmation logic."""
++    def __init__(self, callback):
++        self.callback = callback
++
++    def start(self, **kwargs):
++        return self
++
++    def wait(self):
++        try:
++            self.callback()
++        except host_failure.loopingcall.LoopingCallDone as done:
++            return done.retvalue
++        raise host_failure.loopingcall.LoopingCallTimeOut()
++
++    def stop(self):
++        pass
++
++
++class EvacuationConfirmationTest(test.TestCase):
++    def setUp(self):
++        super().setUp()
++        self.override_config('enabled', True, 'powerops')
++        self.nova = mock.Mock()
++        self.coordinator = SimpleNamespace(assert_healthy=mock.Mock())
++        self.task = host_failure.EvacuateInstancesTask(
++            None, self.nova, update_host_method=None,
++            powerops_coordinator=self.coordinator)
++
++    def server(self, host='source.example', state='active', task_state=None):
++        return SimpleNamespace(id='vm-1', locked=True, **{
++            'OS-EXT-SRV-ATTR:host': host,
++            'OS-EXT-SRV-ATTR:hypervisor_hostname': 'different-hypervisor-name',
++            'OS-EXT-STS:vm_state': state,
++            'OS-EXT-STS:task_state': task_state})
++
++    def evacuate(self, observation, initial=None, final=None, target=None):
++        initial = initial or self.server()
++        self.nova.get_server.side_effect = [initial, initial, observation,
++                                            final or observation]
++        vmove = SimpleNamespace(
++            instance_uuid='vm-1', source_host='source.example',
++            status='pending', dest_host=None, save=lambda: None)
++        with mock.patch.object(host_failure.loopingcall,
++                               'FixedIntervalWithTimeoutLoopingCall',
++                               OneObservationTimer):
++            self.task._evacuate_and_confirm(None, vmove, target)
++        return vmove
++
++    def test_different_hypervisor_name_on_same_nova_host_is_not_success(self):
++        result = self.evacuate(self.server())
++        self.assertEqual('failed', result.status)
++        self.assertIsNone(result.dest_host)
++
++    def test_missing_or_empty_nova_host_is_not_success(self):
++        for host in (None, '', '  ', 42):
++            with self.subTest(host=host):
++                self.assertEqual('failed',
++                                 self.evacuate(self.server(host)).status)
++        observation = self.server()
++        delattr(observation, 'OS-EXT-SRV-ATTR:host')
++        self.assertEqual('failed', self.evacuate(observation).status)
++
++    def test_pending_or_missing_task_state_is_not_success(self):
++        for task_state in ('rebuilding', 'spawning'):
++            observation = self.server('destination.example',
++                                      task_state=task_state)
++            self.assertEqual('failed', self.evacuate(observation).status)
++        observation = self.server('destination.example')
++        delattr(observation, 'OS-EXT-STS:task_state')
++        self.assertEqual('failed', self.evacuate(observation).status)
++
++    def test_destination_still_in_error_is_not_success(self):
++        self.assertEqual('failed', self.evacuate(
++            self.server('destination.example', state='error'),
++            initial=self.server(state='error')).status)
++
++    def test_changed_nova_host_records_canonical_destination(self):
++        for state in ('active', 'stopped'):
++            result = self.evacuate(self.server('destination.example', state),
++                                   initial=self.server(state=state))
++            self.assertEqual('succeeded', result.status)
++            self.assertEqual('destination.example', result.dest_host)
++
++    def test_reserved_destination_must_match(self):
++        result = self.evacuate(self.server('unexpected.example'),
++                               target='reserved.example')
++        self.assertEqual('failed', result.status)
++
++    def test_final_read_must_not_contradict_confirmation(self):
++        for final in (self.server(), self.server('third.example'),
++                      self.server('destination.example',
++                                  task_state='rebuilding'),
++                      self.server('destination.example', state='error')):
++            self.assertEqual('failed', self.evacuate(
++                self.server('destination.example'), final=final).status)
++
++    def test_ownership_error_before_timer_is_preserved(self):
++        error = RuntimeError('ownership lost')
++        self.coordinator.assert_healthy.side_effect = error
++        actual = self.assertRaises(
++            RuntimeError, self.task._stop_after_evacuation,
++            None, self.server())
++        self.assertIs(error, actual)
++        self.nova.stop_server.assert_not_called()
++
++    def test_stop_api_error_before_timer_is_preserved(self):
++        error = RuntimeError('stop API failed')
++        self.nova.stop_server.side_effect = error
++        actual = self.assertRaises(
++            RuntimeError, self.task._stop_after_evacuation,
++            None, self.server())
++        self.assertIs(error, actual)
+diff --git a/masakari/tests/unit/fakes.py b/masakari/tests/unit/fakes.py
+index 0ad9fe7..81415d8 100644
+--- a/masakari/tests/unit/fakes.py
++++ b/masakari/tests/unit/fakes.py
+@@ -47,6 +47,7 @@ class FakeNovaClient(object):
+             self.host = host
+             self.name = 'fake_instance'
+             setattr(self, 'OS-EXT-SRV-ATTR:hypervisor_hostname', host)
++            setattr(self, 'OS-EXT-SRV-ATTR:host', host)
+             setattr(self, 'OS-EXT-STS:vm_state', vm_state)
+             setattr(self, 'OS-EXT-STS:task_state', task_state)
+             setattr(self, 'OS-EXT-STS:power_state', power_state)
+@@ -92,12 +93,15 @@ class FakeNovaClient(object):
+             self.reset_state_calls.append((uuid, current_status))
+             server = self.get(uuid)
+             setattr(server, 'OS-EXT-STS:vm_state', status)
++            setattr(server, 'OS-EXT-STS:task_state', None)
+ 
+         def evacuate(self, uuid, host=None):
+             if not host:
+                 host = 'fake-host-1'
+             server = self.get(uuid)
+             setattr(server, 'OS-EXT-SRV-ATTR:hypervisor_hostname', host)
++            setattr(server, 'OS-EXT-SRV-ATTR:host', host)
++            setattr(server, 'OS-EXT-STS:task_state', None)
+             # pretending that instance is evacuated successfully on given host
+             if getattr(server, "OS-EXT-STS:vm_state") in ['active', 'error']:
+                 setattr(server, 'OS-EXT-STS:vm_state', 'active')
+-- 
+2.49.0
+

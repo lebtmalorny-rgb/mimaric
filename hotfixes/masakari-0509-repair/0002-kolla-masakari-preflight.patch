@@ -1,0 +1,146 @@
+From 792f2f0998697de4c9d4fad396d05de95208fd36 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Sun, 6 Sep 2026 03:34:07 +0300
+Subject: [PATCH] fix: verify configured PowerOps flows on every Masakari
+ engine replica
+
+---
+ ansible/roles/masakari/tasks/deploy.yml       | 15 +++++-
+ ansible/roles/masakari/tasks/powerops.yml     | 11 ++--
+ .../unit/test_masakari_repair_preflight.py    | 54 +++++++++++++++++++
+ .../tests/unit/test_powerops_registration.py  |  7 +--
+ 4 files changed, 80 insertions(+), 7 deletions(-)
+ create mode 100644 kolla_ansible/tests/unit/test_masakari_repair_preflight.py
+
+diff --git a/ansible/roles/masakari/tasks/deploy.yml b/ansible/roles/masakari/tasks/deploy.yml
+index 93506cb..05b7560 100644
+--- a/ansible/roles/masakari/tasks/deploy.yml
++++ b/ansible/roles/masakari/tasks/deploy.yml
+@@ -13,5 +13,18 @@
+ - name: Flush handlers
+   meta: flush_handlers
+ 
+-- import_tasks: powerops.yml
++- name: Verify selected Masakari hosts completed deploy
++  ansible.builtin.assert:
++    that:
++      - ansible_play_hosts_all | difference(ansible_play_hosts) | length == 0
++    fail_msg: >-
++      Some selected Masakari hosts failed or became unreachable.
++      PowerOps verification must not accept a partial deploy.
++  run_once: true
++  any_errors_fatal: true
+   when: enable_powerops | bool
++
++- import_tasks: powerops.yml
++  when:
++    - enable_powerops | bool
++    - ansible_play_hosts_all[-1] in ansible_play_batch
+diff --git a/ansible/roles/masakari/tasks/powerops.yml b/ansible/roles/masakari/tasks/powerops.yml
+index 2c61c9f..c821aa2 100644
+--- a/ansible/roles/masakari/tasks/powerops.yml
++++ b/ansible/roles/masakari/tasks/powerops.yml
+@@ -2,8 +2,13 @@
+ - name: Verify PowerOps Masakari fencing entry point
+   become: true
+   ansible.builtin.command: >-
+-    {{ kolla_container_engine }} exec masakari_engine python -c
+-    "import importlib.metadata as m; found={e.name for e in m.entry_points(group='masakari.task_flow.tasks')}; assert 'ironic_fence' in found"
++    {{ kolla_container_engine }} exec masakari_engine
++    python -m masakari.cmd.powerops_check
++    --config-file /etc/masakari/masakari.conf
+   changed_when: false
++  async: 60
++  poll: 5
++  any_errors_fatal: true
++  loop: "{{ groups['masakari-engine'] }}"
+   run_once: true
+-  delegate_to: "{{ groups['masakari-engine'][0] }}"
++  delegate_to: "{{ item }}"
+diff --git a/kolla_ansible/tests/unit/test_masakari_repair_preflight.py b/kolla_ansible/tests/unit/test_masakari_repair_preflight.py
+new file mode 100644
+index 0000000..9227d58
+--- /dev/null
++++ b/kolla_ansible/tests/unit/test_masakari_repair_preflight.py
+@@ -0,0 +1,54 @@
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++# http://www.apache.org/licenses/LICENSE-2.0
++
++import unittest
++
++from kolla_ansible.tests.unit.test_powerops_registration import (
++    MASAKARI_DEPLOY, MASAKARI_POWEROPS, _assertion_outcome, _load_yaml, _named,
++    _task_runs, _template,
++)
++
++
++class MasakariRepairPreflightTest(unittest.TestCase):
++    def test_every_engine_replica_is_checked_even_with_limit(self):
++        check = _named(_load_yaml(MASAKARI_POWEROPS),
++                       'Verify PowerOps Masakari fencing entry point')
++        variables = {'groups': {'masakari-engine': ['c1', 'c2', 'c3']},
++                     'ansible_play_hosts_all': ['c2'],
++                     'kolla_container_engine': 'podman'}
++        hosts = _template(check.get('loop', []), variables)
++        commands = []
++        for item in hosts:
++            current = dict(variables, item=item)
++            host = _template(check['delegate_to'], current)
++            command = _template(check['ansible.builtin.command'], current)
++            commands.append((host, ' '.join(command.split())))
++        self.assertEqual([(host, 'podman exec masakari_engine python -m '
++                          'masakari.cmd.powerops_check --config-file '
++                          '/etc/masakari/masakari.conf')
++                          for host in ['c1', 'c2', 'c3']], commands)
++        self.assertEqual(60, check['async'])
++        self.assertEqual(5, check['poll'])
++        self.assertTrue(check['any_errors_fatal'])
++
++    def test_checks_wait_for_last_selected_serial_batch(self):
++        phase = next(t for t in _load_yaml(MASAKARI_DEPLOY)
++                     if t.get('import_tasks') == 'powerops.yml')
++        for selected in (['c1', 'c2', 'c3'], ['c2']):
++            for host in selected:
++                self.assertEqual(host == selected[-1], _task_runs(phase, {
++                    'enable_powerops': True,
++                    'ansible_play_hosts_all': selected,
++                    'ansible_play_batch': [host]}))
++
++    def test_partial_deploy_cannot_pass_the_guard(self):
++        tasks = _load_yaml(MASAKARI_DEPLOY)
++        guard = _named(tasks, 'Verify selected Masakari hosts completed deploy')
++        for active, expected in ((['c1', 'c2', 'c3'], 'passed'),
++                                 (['c1', 'c2'], 'failed')):
++            self.assertEqual(expected, _assertion_outcome(guard, {
++                'ansible_play_hosts_all': ['c1', 'c2', 'c3'],
++                'ansible_play_hosts': active}))
++        self.assertTrue(guard['any_errors_fatal'])
+diff --git a/kolla_ansible/tests/unit/test_powerops_registration.py b/kolla_ansible/tests/unit/test_powerops_registration.py
+index 7550563..348bb57 100644
+--- a/kolla_ansible/tests/unit/test_powerops_registration.py
++++ b/kolla_ansible/tests/unit/test_powerops_registration.py
+@@ -182,15 +182,16 @@ class PowerOpsRegistrationTest(unittest.TestCase):
+         self.assertIs(check.get("run_once"), True)
+         self.assertIs(check.get("changed_when"), False)
+         self.assertEqual(
+-            "{{ groups['masakari-engine'][0] }}",
++            "{{ item }}",
+             check.get("delegate_to"),
+         )
+         command = _normalise(check["ansible.builtin.command"])
+         self.assertIn(
+-            "m.entry_points(group='masakari.task_flow.tasks')",
++            "python -m masakari.cmd.powerops_check",
+             command,
+         )
+-        self.assertIn("assert 'ironic_fence' in found", command)
++        self.assertIn("--config-file /etc/masakari/masakari.conf", command)
++        self.assertEqual("{{ groups['masakari-engine'] }}", check['loop'])
+ 
+     def test_keystone_v3_authentication_is_scoped_and_secret(self):
+         tasks = _load_yaml(MISTRAL_POWEROPS)
+-- 
+2.49.0
+

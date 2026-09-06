@@ -1,0 +1,122 @@
+{
+  "result": "ok",
+  "source_sha256": {
+    "/Users/dmitry/Desktop/ironic:mistral:masakari/powerops-patches/worktrees/repair-0509-kolla-ansible/ansible/roles/masakari/tasks/deploy.yml": "f67028f0f48a53dff39cf29cc21bac70a9aa6f8092d8fe9605b4af5de861878a",
+    "/Users/dmitry/Desktop/ironic:mistral:masakari/powerops-patches/worktrees/repair-0509-kolla-ansible/ansible/roles/masakari/tasks/powerops.yml": "80f3e397d802c1e4e60381fa5104f0f81ae955d7f574ecc432c84bb69b79b404"
+  },
+  "output": "/tmp/masakari-0509-ansible-probe-76b5ypo7",
+  "scenarios": [
+    {
+      "scenario": "healthy-serial0",
+      "result": "ok",
+      "rc": 0,
+      "checks": 3,
+      "acceptances": 1,
+      "assertions": {
+        "return_code": true,
+        "acceptance_count": true,
+        "all_three_replicas": true,
+        "exactly_three_checks": true,
+        "selected_deploys_before_checks": true,
+        "checks_before_acceptance": true
+      }
+    },
+    {
+      "scenario": "healthy-serial1",
+      "result": "ok",
+      "rc": 0,
+      "checks": 3,
+      "acceptances": 1,
+      "assertions": {
+        "return_code": true,
+        "acceptance_count": true,
+        "all_three_replicas": true,
+        "exactly_three_checks": true,
+        "selected_deploys_before_checks": true,
+        "checks_before_acceptance": true
+      }
+    },
+    {
+      "scenario": "third-check-fails-serial0",
+      "result": "ok",
+      "rc": 2,
+      "checks": 3,
+      "acceptances": 0,
+      "assertions": {
+        "return_code": true,
+        "acceptance_count": true,
+        "all_three_replicas": true,
+        "exactly_three_checks": true,
+        "selected_deploys_before_checks": true
+      }
+    },
+    {
+      "scenario": "third-check-fails-serial1",
+      "result": "ok",
+      "rc": 2,
+      "checks": 3,
+      "acceptances": 0,
+      "assertions": {
+        "return_code": true,
+        "acceptance_count": true,
+        "all_three_replicas": true,
+        "exactly_three_checks": true,
+        "selected_deploys_before_checks": true
+      }
+    },
+    {
+      "scenario": "limit-one-still-checks-three",
+      "result": "ok",
+      "rc": 0,
+      "checks": 3,
+      "acceptances": 1,
+      "assertions": {
+        "return_code": true,
+        "acceptance_count": true,
+        "all_three_replicas": true,
+        "exactly_three_checks": true,
+        "selected_deploys_before_checks": true,
+        "checks_before_acceptance": true
+      }
+    },
+    {
+      "scenario": "limit-one-third-check-fails",
+      "result": "ok",
+      "rc": 2,
+      "checks": 3,
+      "acceptances": 0,
+      "assertions": {
+        "return_code": true,
+        "acceptance_count": true,
+        "all_three_replicas": true,
+        "exactly_three_checks": true,
+        "selected_deploys_before_checks": true
+      }
+    },
+    {
+      "scenario": "last-selected-deploy-fails-serial0",
+      "result": "ok",
+      "rc": 2,
+      "checks": 0,
+      "acceptances": 0,
+      "assertions": {
+        "return_code": true,
+        "acceptance_count": true,
+        "no_check_after_partial_deploy": true,
+        "guard_failed": true
+      }
+    },
+    {
+      "scenario": "last-selected-deploy-fails-serial1",
+      "result": "ok",
+      "rc": 2,
+      "checks": 0,
+      "acceptances": 0,
+      "assertions": {
+        "return_code": true,
+        "acceptance_count": true,
+        "no_check_after_partial_deploy": true
+      }
+    }
+  ]
+}

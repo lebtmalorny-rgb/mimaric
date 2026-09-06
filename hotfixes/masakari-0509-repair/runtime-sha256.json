@@ -1,0 +1,10 @@
+{
+  "masakari/cmd/powerops_check.py": "6314d1c947d4cae28b1c5e29edd9d5f7fbfa6dfcbc4f37850f3e80deb64d6d58",
+  "masakari/engine/drivers/taskflow/base.py": "afb20a7ff14320dc4ae24d5c3d0fa5dbbc64c23866d663a09ab929b0fdf02f53",
+  "masakari/engine/drivers/taskflow/driver.py": "3978b95d62f6172dab6fcc2d91a370ac0880c57bae3c8e5e509012318a33a375",
+  "masakari/engine/drivers/taskflow/host_failure.py": "54fac5ca00ae37d46fcd4a0a38bffce4663df9b59913341c67d45cb4b82dab0f",
+  "masakari/engine/drivers/taskflow/powerops.py": "8ad4030c282ea6d74a226860934d5458b4cd53e33349d296430e0b13998cd4df",
+  "masakari/powerops/__init__.py": "debb0997aec20afbf4c9b3050484434761390c701012ea8c51519ab9964f9c39",
+  "masakari/powerops/coordination.py": "5271520c90ea18b093b3f034d004014d5e20e29692789a8b423ad739eabfe885",
+  "masakari/powerops/ironic.py": "c883525240b8bb7334471c659f9d5abf25e66e09662e2dcd92565745c5b2ad4d"
+}
