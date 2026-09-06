@@ -69,3 +69,15 @@ print('HOST:', h.id, h.name, 'maintenance:', h.on_maintenance)
   nova_enabled: false
   masakari_maintenance: true
   stopped_instance_ids: []
+
+
+
+  openstack baremetal node show \
+    edebd181-6865-4134-8657-0e318efd4336 \
+    -f yaml -c power_state -c target_power_state -c last_error
+
+  openstack compute service list \
+    --host ultra1-2.ultra1.test.pvs.un.sbt --service nova-compute
+
+  openstack segment host list \
+    b045da78-bc53-435a-937e-f12d41a217b1
