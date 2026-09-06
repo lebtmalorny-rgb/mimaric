@@ -2,18 +2,11 @@
   from mistral import config
   from mistral.actions.powerops import clients
 
-  config.parse_args(
-      args=[],
-      default_config_files=['/etc/mistral/mistral.conf']
-  )
+  config.parse_args(args=[], default_config_files=['/etc/mistral/mistral.conf'])
   cloud = clients.CloudClients(clients.connection_from_conf())
   cloud.connection.session.timeout = 15
 
-  r = cloud.ha_adapter.get(
-      '/segments/b045da78-bc53-435a-937e-f12d41a217b1',
-      raise_exc=False,
-      timeout=15
-  )
+  r = cloud.ha_adapter.get('/segments/b045da78-bc53-435a-937e-f12d41a217b1', raise_exc=False, timeout=15)
   print('URL:', r.url)
   print('HTTP:', r.status_code)
   print('Request-ID:', r.headers.get('X-Openstack-Request-Id'))
