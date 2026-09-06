@@ -33,3 +33,39 @@ print('HOST:', h.id, h.name, 'maintenance:', h.on_maintenance)
 
   openstack workflow execution show "$powerops_status_id"
   openstack workflow execution output show "$powerops_status_id"
+
+
+
+  ### 1. Убедиться, что хост пустой
+
+  Проверяем ВМ всех проектов, включая выключенные. Параметры команды.
+
+  openstack server list --all-projects \
+    --host ultra1-2.ultra1.test.pvs.un.sbt --long
+
+  Продолжай только если команда успешна, список пустой и на узле нет других нужных нагрузок. Для этого хоста не должно быть другой выполняющейся операции питания.
+
+  ### 2. Запустить плановое выключение один раз
+
+  if powerops_off_id=$(openstack workflow execution create \
+      -f value -c ID \
+      power_ops.planned_power_off \
+      '{"host":"ultra1-2.ultra1.test.pvs.un.sbt","segment_uuid":"b045da78-bc53-435a-937e-f12d41a217b1","instance_policy":"require_empty","allow_hard_off":false}'); then
+      printf 'Execution: %s\n' "$powerops_off_id"
+  fi
+
+  require_empty запрещает выключение при обнаружении ВМ. allow_hard_off:false запрещает переход к принудительному отключению при таймауте мягкого выключения.
+
+  ### 3. Смотреть результат
+
+  Если получен UUID, в той же shell:
+
+  openstack workflow execution show "$powerops_off_id"
+  openstack workflow execution output show "$powerops_off_id"
+
+  При RUNNING повторяй только эти проверки. Ожидаем SUCCESS и в output:
+
+  power_state: power off
+  nova_enabled: false
+  masakari_maintenance: true
+  stopped_instance_ids: []
