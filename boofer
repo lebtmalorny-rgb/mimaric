@@ -228,3 +228,15 @@ print('HOST:', h.id, h.name, 'maintenance:', h.on_maintenance)
 
   openstack segment host list \
     b045da78-bc53-435a-937e-f12d41a217b1
+
+
+
+  ssh -o BatchMode=yes -o ConnectTimeout=10 ultra1-6 \
+    "sudo -n grep -F 'req-ad9ceed0-4e8f-45f5-b68f-c575670e527e' /var/log/kolla/ironic/ironic-api-wsgi.log"
+
+  timeout 25s openstack role assignment list \
+    --user a5449e1120d443b3a83d7b61d5c44c2e \
+    --effective --names
+
+
+
