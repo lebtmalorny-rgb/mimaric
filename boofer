@@ -239,4 +239,40 @@ print('HOST:', h.id, h.name, 'maintenance:', h.on_maintenance)
     --effective --names
 
 
+  ### 1. Назначение роли — на ultra1-0
+
+  Эта команда изменяет права Masakari. Существующий admin оставляем:
+
+  openstack role add \
+    --user a5449e1120d443b3a83d7b61d5c44c2e \
+    --project 9831a2184f424d79bd262af0a9ca7c1c \
+    service
+
+  Для назначения роли пересборка образов и реконфиг не нужны.
+
+  ### 2. Проверка — на ultra1-7
+
+  Только чтение, без выключения хоста. Новый процесс получит новый токен:
+
+  sudo podman exec -i masakari_engine python - <<'PY'
+  from masakari import conf
+  from masakari.powerops import ironic
+
+  conf.CONF(args=[], project='masakari',
+            default_config_files=['/etc/masakari/masakari.conf'])
+  c = ironic.connection_from_conf()
+  c.session.timeout = 15
+
+  a = c.session.auth.get_access(c.session)
+  print('AUTH:', a.username, a.project_name, sorted(a.role_names))
+  nodes = [n for n in c.baremetal.nodes(details=True)
+           if n.name == 'ultra1-2.ultra1.test.pvs.un.sbt']
+  print('MATCHES:', len(nodes))
+  for n in nodes:
+      print('NODE:', n.id, n.name)
+      print('STATE:', n.power_state, n.provision_state, n.network_interface)
+      print('LAST_ERROR_EMPTY:', not bool(n.last_error))
+  PY
+
+
 
