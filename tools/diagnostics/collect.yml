@@ -23,6 +23,13 @@
       - ultra1-6.ultra1.test.pvs.un.sbt
       - ultra1-7.ultra1.test.pvs.un.sbt
       - ultra1-8.ultra1.test.pvs.un.sbt
+    # SSH aliases already used on ultra1-0; OpenStack continues to use FQDNs.
+    diag_ssh_hosts:
+      ultra1-2.ultra1.test.pvs.un.sbt: ultra1-2
+      ultra1-3.ultra1.test.pvs.un.sbt: ultra1-3
+      ultra1-6.ultra1.test.pvs.un.sbt: ultra1-6
+      ultra1-7.ultra1.test.pvs.un.sbt: ultra1-7
+      ultra1-8.ultra1.test.pvs.un.sbt: ultra1-8
     diag_incident:
       since: '2026-09-07T12:25:00Z'
       until: '2026-09-07T12:45:00Z'
@@ -87,8 +94,18 @@
           text = re.sub(r"-----BEGIN [^-]*PRIVATE KEY-----.*?(?:-----END [^-]*PRIVATE KEY-----|\Z)",
                         MASK, text, flags=re.S)
           text = re.sub(r"(?i)([a-z][a-z0-9+.-]*://)[^\s/@]+:[^\s/@]+@", r"\1[REDACTED]@", text)
-          text = re.sub(r"(?im)((?:x-auth-token|x-subject-token|authorization|set-cookie|cookie)[\"']?\s*:\s*)[^\n]*",
-                        lambda m: m.group(1) + MASK, text)
+          def mask_header(match):
+              # Preserve only the complete Ironic policy-denial form, never arbitrary
+              # Authorization values (including Bearer/Basic after 'Rejecting').
+              if (match.group(1).lower().startswith('authorization:')
+                      and match.string[max(0, match.start() - 10):match.start()].lower() == 'rejecting '
+                      and re.fullmatch(r'baremetal:[a-z_][a-z_:.]* is disallowed by policy[ \t]*',
+                                       match.group(2))):
+                  return match.group(0)
+              return match.group(1) + MASK
+
+          text = re.sub(r"(?im)((?:x-auth-token|x-subject-token|authorization|set-cookie|cookie)[\"']?\s*:\s*)([^\n]*)",
+                        mask_header, text)
           key = r"[\w.-]*(?:password|passwd|secret|token)[\w.-]*"
           # In prefixed/partial JSON, do not guess where an escaped secret ends.
           text = re.sub(r"(?i)(" + key + r"[\"']?\s*[:=]\s*)\\+[\"'][^\n]*",
@@ -312,7 +329,7 @@
 
 
       def api_jobs(cfg):
-          base = ["openstack", "--os-api-timeout", str(cfg["api_timeout"])]
+          base = ["openstack"]
           jobs = []
 
           def add(name, args, fields=()):
@@ -360,7 +377,10 @@
               if time.monotonic() >= self.deadline or self.remaining <= 0:
                   result = dict(status="skipped_budget", rc=None, output="", truncated=False)
               else:
-                  result = run_command(argv, min(self.cfg["command_timeout"], self.deadline - time.monotonic()),
+                  timeout = self.cfg["command_timeout"]
+                  if argv[0] == 'openstack':
+                      timeout = min(timeout, self.cfg['api_timeout'])
+                  result = run_command(argv, min(timeout, self.deadline - time.monotonic()),
                                        min(self.remaining, self.cfg["max_command_bytes"]), self.secrets)
               result["name"] = name
               line_cap = 500 if name == "clock_journal" else (
@@ -388,8 +408,7 @@
                               identifier = row.get("uuid") or row.get("UUID") or row.get("ID") or row.get("vmove_uuid")
                               identifier = str(uuid.UUID(identifier))
                               self.command("vmove_" + identifier,
-                                           ["openstack", "--os-api-timeout", str(self.cfg["api_timeout"]),
-                                            "notification", "vmove", "show", self.cfg["notification_id"],
+                                           ["openstack", "notification", "vmove", "show", self.cfg["notification_id"],
                                             identifier, "-f", "json"])
                       except (ValueError, TypeError, AttributeError) as exc:
                           self.report["checks"].append(dict(name="vmove_details", status="parse_error",
@@ -560,6 +579,7 @@
     - name: Build inventory using existing SSH keys and host-key checking
       ansible.builtin.add_host:
         name: "{{ item }}"
+        ansible_host: "{{ diag_ssh_hosts.get(item, item) }}"
         groups: powerops_diag
         ansible_connection: ssh
         ansible_python_interpreter: "{{ diag_python | default('/usr/bin/python3') }}"
@@ -645,6 +665,33 @@
           - inventory_hostname is match('^[A-Za-z0-9][A-Za-z0-9_.-]{0,252}$')
         fail_msg: "Do not exclude localhost with --limit."
 
+    - name: Check SSH and host identity without sudo or secret-bearing commands
+      ansible.builtin.raw: hostname -f
+      become: false
+      register: diag_ssh_probe
+      changed_when: false
+      failed_when: false
+      ignore_errors: true
+
+    - name: Require expected FQDN before copying the collector or reading privileged logs
+      ansible.builtin.set_fact:
+        diag_identity_ok: >-
+          {{ not (diag_ssh_probe.unreachable | default(false))
+             and (diag_ssh_probe.rc | default(1)) == 0
+             and (diag_ssh_probe.stdout | default('') | trim | lower)
+                 == (diag_expected_fqdn | default(inventory_hostname) | lower) }}
+
+    - name: Explain failed preflight without exposing credentials
+      ansible.builtin.debug:
+        msg: >-
+          SSH/FQDN preflight failed for {{ inventory_hostname }} via
+          {{ ansible_host | default(inventory_hostname) }}.
+          {{ diag_ssh_probe.msg | default('') }}
+          {{ diag_ssh_probe.stderr | default('') }}
+          Expected {{ diag_expected_fqdn | default(inventory_hostname) }};
+          received {{ diag_ssh_probe.stdout | default('') | trim }}.
+      when: not (diag_identity_ok | bool)
+
     - name: Collect bounded sanitized evidence without changing services
       ansible.builtin.script:
         cmd: >-
@@ -656,16 +703,31 @@
       failed_when: false
       ignore_errors: true
       no_log: true
+      when: diag_identity_ok | bool
+
+    - name: Preserve the preflight reason even when the collector was skipped
+      ansible.builtin.set_fact:
+        diag_transport: >-
+          {{ {'rc': (diag_host_result.rc | default(1)) if (diag_identity_ok | bool) else 1,
+              'unreachable': (diag_ssh_probe.unreachable | default(false))
+                             or (diag_host_result.unreachable | default(false)),
+              'msg': (diag_host_result.msg | default('')) if (diag_identity_ok | bool)
+                     else ('SSH/FQDN preflight failed; identity mismatch or unavailable host. '
+                           ~ (diag_ssh_probe.msg | default(''))),
+              'stderr': (diag_host_result.stderr | default('')) if (diag_identity_ok | bool)
+                        else (diag_ssh_probe.stderr | default('')),
+              'ssh_host': ansible_host | default(inventory_hostname),
+              'expected_fqdn': diag_expected_fqdn | default(inventory_hostname),
+              'observed_fqdn': diag_ssh_probe.stdout | default('') | trim,
+              'identity_verified': diag_identity_ok | bool} }}
+      no_log: true
 
     - name: Record even unreachable nodes on the operator host
       ansible.builtin.copy:
         dest: "{{ hostvars['localhost'].diag_run_dir }}/{{ inventory_hostname }}.json"
         mode: '0600'
         content: >-
-          {{ {'transport': {'rc': diag_host_result.rc | default(1),
-                            'unreachable': diag_host_result.unreachable | default(false),
-                            'msg': diag_host_result.msg | default(''),
-                            'stderr': diag_host_result.stderr | default('')},
+          {{ {'transport': diag_transport,
               'report': diag_host_result.stdout | default('')} | to_nice_json }}
       delegate_to: localhost
       become: false
