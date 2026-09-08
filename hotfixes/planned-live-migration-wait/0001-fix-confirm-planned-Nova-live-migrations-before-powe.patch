@@ -1,0 +1,1414 @@
+From f9e57d78fd3f4ffd1aec03a87065d1df81b5bc88 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Tue, 8 Sep 2026 01:44:20 +0300
+Subject: [PATCH] fix: confirm planned Nova live migrations before power off
+
+---
+ docs/POWEROPS-PLANNED-LIVE-MIGRATION-WAIT.md  | 146 +++++++++
+ mistral/actions/powerops/clients.py           |  66 ++--
+ mistral/actions/powerops/live_migration.py    | 241 +++++++++++++++
+ mistral/tests/unit/actions/powerops/fakes.py  |  64 ++++
+ .../unit/actions/powerops/test_clients.py     |  41 +--
+ .../actions/powerops/test_live_migration.py   | 291 ++++++++++++++++++
+ .../powerops/test_live_migration_actions.py   | 140 +++++++++
+ .../powerops/test_live_migration_http.py      | 271 ++++++++++++++++
+ 8 files changed, 1184 insertions(+), 76 deletions(-)
+ create mode 100644 docs/POWEROPS-PLANNED-LIVE-MIGRATION-WAIT.md
+ create mode 100644 mistral/actions/powerops/live_migration.py
+ create mode 100644 mistral/tests/unit/actions/powerops/test_live_migration.py
+ create mode 100644 mistral/tests/unit/actions/powerops/test_live_migration_actions.py
+ create mode 100644 mistral/tests/unit/actions/powerops/test_live_migration_http.py
+
+diff --git a/docs/POWEROPS-PLANNED-LIVE-MIGRATION-WAIT.md b/docs/POWEROPS-PLANNED-LIVE-MIGRATION-WAIT.md
+new file mode 100644
+index 0000000..6e85d0c
+--- /dev/null
++++ b/docs/POWEROPS-PLANNED-LIVE-MIGRATION-WAIT.md
+@@ -0,0 +1,146 @@
++# PowerOps: подтверждение плановой live migration — часть 1
++
++Дата: 2026-09-08.
++База Mistral: `7be711a1df54655fed9cfdaca66516023536558a`.
++Ветка: `fix/planned-live-migration-wait`.
++
++## Область изменения
++
++Только старые `PlannedPowerOffAction` и `PlannedRebootAction` при
++`instance_policy=live_migrate`, через общий `CloudClients`.
++Имена workflow, YAML, конфигурационные параметры и формат результата сохранены.
++Политики `require_empty` и `stop`, сценарии включения, Masakari и Kolla не меняются.
++`planned-return-v2` не исследовался и не включён.
++
++Никаких SSH/libvirt/domain-проверок: только Nova API для миграции и существующий
++путь Ironic для питания после успешных проверок. Патч сам не запускает операции.
++
++## Исходный дефект
++
++На стенде workflow `be44830e-598f-4581-bae4-6f8d235f64ce` завершился ошибкой
++`instance entered an unsafe migration state`; позднее ВМ была `ACTIVE` на
++назначении, `task_state=null`, исходный хост остался включённым.
++
++Локально подтверждено: прежний валидатор отвергал любое состояние, кроме
++`ACTIVE`, в том числе штатное `MIGRATING`. Одновременно он принимал `ACTIVE`
++на другом compute без проверки `task_state` и записи миграции. Точное состояние
++Nova в момент стендового исключения в предоставленном traceback не записано;
++его нельзя считать доказанным задним числом.
++
++## Новый порядок
++
++1. Проверить, что SDK response cache выключен. Получить полный список ВМ
++   исходного Nova compute, с видимостью всех проектов.
++2. Для каждой ВМ последовательно: проверить поддержку Nova microversion 2.59,
++   прочитать всю историю `/os-migrations?instance_uuid=...`, запомнить UUID.
++   Неразрешённая прежняя миграция блокирует отправку нового запроса.
++3. Свежим ответом Nova подтвердить `ACTIVE`, исходный `host` и явно присутствующий
++   `OS-EXT-STS:task_state=null`. Отсутствующее поле не считается `null`.
++4. Отправить один `os-migrateLive` через публичный SDK adapter с microversion
++   2.59: `host=null`, `block_migration=auto`. Транспортные retries, redirects и
++   повтор POST после reauth выключены именно для этого запроса. Требуется 202.
++5. Наблюдать одну новую migration UUID относительно исходной истории. Разрешены
++   `accepted`, `queued`, `preparing`, `running`, `running (post-copy)` и
++   `post-migrating`; это ожидание, а не успех. Неизвестные состояния, несколько
++   новых UUID, другой source/type и ошибки приводят к отказу.
++6. Успех: одна и та же новая live-migration имеет `completed`, её destination
++   отличается от source и совпадает с текущим Nova compute ВМ; ВМ `ACTIVE`,
++   `task_state=null`. Требуются последовательные наблюдения согласно
++   `stable_observations`. Несовпадение сбрасывает счётчик либо завершает отказом.
++7. Перед выключением снова проверить входящие/исходящие миграции хоста,
++   подтверждение каждой перемещённой ВМ, затем свежий полный список ВМ на source.
++   Только пустой список позволяет перейти к существующей операции Ironic.
++
++`vm_action_timeout` — общий предел preflight, отправки и ожидания одной ВМ,
++а не новый таймаут на каждый GET. Финальная проверка истории/подтверждений группы
++имеет отдельный предел `vm_action_timeout`; следующее за ней чтение списка
++source имеет собственный такой же предел. Поэтому эти две финальные фазы вместе
++могут занять почти два `vm_action_timeout`. Пауза `instance_interval` сохранена.
++Проверки владельца блокировки/coordination остаются обязательными.
++
++При таймауте ответа POST неизвестно, применён ли запрос: автоматической повторной
++миграции, abort, force-complete, reset-state, обратной миграции или выключения нет.
++Даже если первая ВМ переехала, а вторая не смогла, source не выключается;
++в рамках доступной coordination сохраняются Nova disabled и Masakari maintenance.
++После потери lock не выполняются обходящие lock fail-safe мутации.
++
++Ошибки ожидания содержат UUID ВМ, source, migration UUID, destination и последние
++наблюдённые состояния. Это последние ответы, не гарантированное текущее состояние
++стенда; токены, пароли и тела ответов в эти сообщения не включаются.
++
++## Требования и ограничения
++
++- Nova должна поддерживать 2.59 или выше; принудительно закреплённая в SDK
++  microversion ниже 2.59 блокирует сценарий до POST. Новые параметры globals
++  для этого не вводятся.
++- Учётке PowerOps нужна видимость серверов всех проектов, расширенных host/task
++  полей, глобальной истории миграций и право live migration. HTTP 403 нельзя
++  превращать в пустой результат или успешную проверку.
++- SDK response cache должен быть выключен. Обычный клиент без кеширования
++  поддерживается; включённый кеш отклоняется до чтения исходного списка и при
++  последующих проверках, чтобы cached `ACTIVE` не стал подтверждением.
++- Пагинация истории обрабатывается SDK до конца в пределах deadline.
++  `/servers/{id}/migrations` не подходит для подтверждения: он возвращает
++  только находящиеся в процессе live migrations.
++- Пустота Nova source означает отсутствие назначенных ему ВМ в control plane.
++  Это **не доказательство отсутствия локальных доменов/дисков** и не проверка
++  чистоты выключенного физического хоста.
++- Нет атомарной транзакции между последним чтением Nova и Ironic. Блокировка
++  PowerOps не блокирует сторонние прямые действия операторов через Nova.
++  Корреляция новой migration UUID не доказывает исключительное авторство POST;
++  конкурентные внешние миграции должны быть исключены организационно.
++- Консервативно блокируются прежние неразрешённые migration records. В частности,
++  историческая evacuation `done` может сохраняться до возвращения её прежнего
++  source и cleanup в Nova, даже если ВМ уже `ACTIVE/null` на здоровом назначении.
++  Пока такая запись существует, этот патч может запретить последующую плановую
++  миграцию/выключение затронутого compute. Автоматически считать `done` безопасным
++  для всех направлений или редактировать записи БД нельзя; это отдельный вопрос
++  согласования с аварийным восстановлением, не решённый в части 1.
++- Переход planned → emergency не добавлен. Masakari maintenance во время
++  плановой операции нельзя считать автоматической передачей в evacuation.
++- Полный запуск Mistral engine, настоящая migration/libvirt cleanup, etcd,
++  Nova multi-cell, реальные роли и Ironic/BMC на стенде локальными тестами
++  не подтверждены. Образ не собирался и не развёртывался.
++
++## Локальная проверка
++
++Полный набор PowerOps: 163 теста; flake8 изменённых Python-файлов — без ошибок.
++Новые тесты используют как реальные composite actions с имитацией внешних
++сервисов, так и установленный openstacksdk 4.10 с локальными HTTP-ответами.
++Это не live OpenStack acceptance.
++
++```bash
++.venv/bin/python -m unittest discover \
++  -s mistral/tests/unit/actions/powerops -p 'test_*.py' -q
++```
++
++Проверены:
++
++- исходный `MIGRATING` дефект, все разрешённые промежуточные статусы;
++- `ACTIVE` на destination при ещё занятом task или незавершённой миграции;
++- исторический completed UUID, несколько новых UUID, несоответствие source,
++  destination/type/VM, неполные поля и исчезновение подтверждения;
++- стабильные наблюдения и сброс после промежуточного состояния;
++- локальные HTTP-контракты discovery для Nova 2.59, 2.69 и 2.95, нижний pinned
++  version, `instance_uuid`, `host`, `all_tenants`, pagination и microversion;
++- потеря ответа POST: фактически один HTTP-запрос, в отличие от двух в прежнем
++  вызове SDK; HTTP errors, redirects, reauth и configured status retries;
++- невозможность принять non-200 с server-shaped body;
++- запрет кешированных наблюдений;
++- частичный сбой двух ВМ, timeout, потеря lock, новая ВМ на source;
++  ни выключение, ни reboot не отправляют BMC-команду при этих отказах;
++- успешные выключение и reboot отправляют BMC только после подтверждений.
++
++## Первичные источники контрактов
++
++- [Nova Compute API reference](https://docs.openstack.org/api-ref/compute/):
++  server fields, os-migrateLive и глобальная история миграций.
++- [Nova conductor stable/2025.1](https://raw.githubusercontent.com/openstack/nova/stable/2025.1/nova/conductor/manager.py):
++  начальное состояние live migration `accepted`.
++- [Nova migrations API stable/2025.1](https://raw.githubusercontent.com/openstack/nova/stable/2025.1/nova/api/openstack/compute/migrations.py):
++  UUID и pagination начиная с 2.59.
++- [Nova compute manager stable/2025.1](https://raw.githubusercontent.com/openstack/nova/stable/2025.1/nova/compute/manager.py):
++  жизненный цикл evacuation records и cleanup старого source.
++- Локально проверенный код SDK 4.10: `openstack/proxy.py`,
++  `openstack/compute/v2/migration.py`, `openstack/compute/v2/server.py`,
++  `keystoneauth1/session.py`.
+diff --git a/mistral/actions/powerops/clients.py b/mistral/actions/powerops/clients.py
+index d9ff1e3..5f7bac3 100644
+--- a/mistral/actions/powerops/clients.py
++++ b/mistral/actions/powerops/clients.py
+@@ -26,6 +26,7 @@ from oslo_config import cfg
+ 
+ from mistral.actions.powerops import coordination
+ from mistral.actions.powerops import exceptions
++from mistral.actions.powerops import live_migration
+ 
+ 
+ CONF = cfg.CONF
+@@ -154,6 +155,7 @@ class CloudClients:
+         self.monotonic = monotonic
+         self.health_check = health_check or _noop_health_check
+         self.ha_adapter = ha_adapter
++        self._live_migrations = {}
+ 
+         if self.ha_adapter is None:
+             self.ha_adapter = ks_adapter.Adapter(
+@@ -429,24 +431,6 @@ class CloudClients:
+ 
+         return server.status == 'SHUTOFF'
+ 
+-    @staticmethod
+-    def _validate_migration_observation(server, source_host):
+-        if server.status != 'ACTIVE':
+-            raise exceptions.InstancePolicyError(
+-                'instance entered an unsafe migration state'
+-            )
+-
+-        compute_host = getattr(server, 'compute_host', None)
+-
+-        if (
+-                not isinstance(compute_host, str)
+-                or not coordination.HOST_RE.fullmatch(compute_host)):
+-            raise exceptions.HostResolutionError(
+-                'Nova migration response has no canonical compute host'
+-            )
+-
+-        return compute_host != source_host
+-
+     def _pace_instances(self):
+         if CONF.powerops.instance_interval:
+             self.sleep(CONF.powerops.instance_interval)
+@@ -459,6 +443,9 @@ class CloudClients:
+                 'unsupported planned instance policy'
+             )
+ 
++        if policy == 'live_migrate':
++            self._live_migrations.pop(host, None)
++            live_migration.require_uncached(self)
+         servers = self.instances_on_host(host)
+ 
+         if policy == 'require_empty':
+@@ -516,37 +503,16 @@ class CloudClients:
+                 'live migration requires ACTIVE instances'
+             )
+ 
++        completed = []
+         for server in servers:
+-            deadline = self._deadline(CONF.powerops.vm_action_timeout)
+-            mutation_description = (
+-                'timed out live-migrating Nova instance {}'.format(
+-                    server.id
+-                )
+-            )
+-            wait_description = (
+-                'timed out waiting for Nova instance migration {}'.format(
+-                    server.id
+-                )
+-            )
+-            self._mutation(
+-                lambda server=server:
+-                    self.connection.compute.live_migrate_server(server),
+-                deadline,
+-                mutation_description,
+-            )
+-            self._wait_until(
+-                lambda server_id=server.id:
+-                    self._server_by_id(server_id, deadline),
+-                lambda current, source=host:
+-                    self._validate_migration_observation(current, source),
+-                CONF.powerops.vm_action_timeout,
+-                wait_description,
+-                deadline=deadline,
+-                observations=1,
+-            )
++            migration = live_migration.LiveMigrationWaiter(
++                self, server.id, host)
++            migration.run()
++            completed.append(migration)
+             self._pace_instances()
+ 
+         self.health_check()
++        self._live_migrations[host] = completed
+         return []
+ 
+     @staticmethod
+@@ -870,6 +836,16 @@ class CloudClients:
+             )
+ 
+         self._validate_stopped_manifest(stopped_instance_ids)
++        if policy == 'live_migrate':
++            if host not in self._live_migrations:
++                raise exceptions.InstancePolicyError(
++                    'no completed planned migration pass for source ' + host)
++            deadline = self._deadline(CONF.powerops.vm_action_timeout)
++            live_migration.assert_no_inflight(self, host, deadline)
++            for migration in self._live_migrations[host]:
++                migration.revalidate(deadline)
++
++        # Keep this Nova placement read last; it is not a domain inventory.
+         servers = self.instances_on_host(host)
+ 
+         if policy in ('require_empty', 'live_migrate'):
+diff --git a/mistral/actions/powerops/live_migration.py b/mistral/actions/powerops/live_migration.py
+new file mode 100644
+index 0000000..c14e7d5
+--- /dev/null
++++ b/mistral/actions/powerops/live_migration.py
+@@ -0,0 +1,241 @@
++# Copyright 2026 OpenStack Foundation
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++# http://www.apache.org/licenses/LICENSE-2.0
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++"""Bounded Nova-only observation of one planned live migration.
++
++Nova does not return a migration UUID from os-migrateLive. Correlate a single
++new history record, rejecting ambiguity; this is not exclusive ownership of
++Nova operations initiated outside PowerOps, nor proof of local domain cleanup.
++"""
++
++from collections.abc import Mapping
++import uuid
++
++from keystoneauth1 import exceptions as ks_exceptions
++from openstack import exceptions as sdk_exceptions
++from openstack import utils as sdk_utils
++from oslo_config import cfg
++
++from mistral.actions.powerops import coordination
++from mistral.actions.powerops import exceptions
++
++
++CONF = cfg.CONF
++_MIN_VERSION = '2.59'  # Global migration history includes stable UUIDs.
++_PROGRESS = frozenset(('accepted', 'queued', 'preparing', 'running',
++                       'post-migrating',
++                       'running (post-copy)'))
++_TERMINAL = frozenset(('completed', 'confirmed', 'reverted', 'error',
++                       'failed', 'cancelled', 'canceled'))
++
++
++def require_uncached(cloud):
++    # Repeated cached snapshots are not independent observations. SDK list()
++    # pagination cannot forward skip_cache through the compute query mapping.
++    if getattr(cloud.connection, 'cache_enabled', False) is not False:
++        raise exceptions.PowerOpsConfigurationError(
++            'planned live migration requires SDK response caching disabled')
++
++
++def assert_no_inflight(cloud, host, deadline):
++    """Block unfinished migrations even if Nova lists no source VMs."""
++    cloud.health_check()
++    require_uncached(cloud)
++    supported = cloud._call_with_deadline(
++        lambda: sdk_utils.supports_microversion(
++            cloud.connection.compute, _MIN_VERSION), deadline,
++        'timed out discovering Nova microversions for ' + host)
++    if not supported:
++        raise exceptions.PowerOpsConfigurationError(
++            'planned live migration requires Nova microversion 2.59')
++    records = cloud._call_with_deadline(
++        lambda: list(cloud.connection.compute.migrations(host=host)),
++        deadline, 'timed out reading migrations for source ' + host)
++    for record in records:
++        if (host not in (record.source_compute, record.dest_compute)
++                or record.status not in _TERMINAL):
++            raise exceptions.InstancePolicyError(
++                'unresolved or mismatched migration before power off '
++                '(source={!r}, vm={!r}, migration={!r}, status={!r})'.format(
++                    host, record.server_id, record.uuid, record.status))
++    cloud.health_check()
++
++
++class LiveMigrationWaiter:
++    def __init__(self, cloud, server_id, source):
++        cloud._validate_resource_id(server_id, 'Nova instance UUID')
++        cloud._validate_host(source)
++        self.cloud = cloud
++        self.compute = cloud.connection.compute
++        self.server_id = server_id
++        self.source = source
++        self.baseline = set()
++        self.migration_id = None
++        self.destination = None
++        self.last = {}
++
++    def describe(self, reason):
++        # Include only identifiers/state, never response bodies or credentials.
++        fields = dict(vm=self.server_id, source=self.source,
++                      migration=self.migration_id,
++                      destination=self.destination, **self.last)
++        return '{} ({})'.format(reason, ', '.join(
++            '{}={!r}'.format(key, str(value)[:160])
++            for key, value in fields.items()))
++
++    def reject(self, reason):
++        raise exceptions.InstancePolicyError(self.describe(reason))
++
++    def call(self, function, deadline, description):
++        self.cloud.health_check()
++        require_uncached(self.cloud)
++        return self.cloud._call_with_deadline(
++            function, deadline, self.describe(description))
++
++    def history(self, deadline):
++        # /servers/{id}/migrations excludes completed live migrations. Use the
++        # global history and exhaust SDK pagination within the same deadline.
++        records = self.call(
++            lambda: list(self.compute.migrations(server_id=self.server_id)),
++            deadline, 'timed out reading Nova migration history')
++        by_id = {}
++        for record in records:
++            record_id = getattr(record, 'uuid', None)
++            try:
++                canonical = str(uuid.UUID(record_id)) == record_id
++            except (ValueError, TypeError, AttributeError):
++                canonical = False
++            if (not canonical or record_id in by_id
++                    or record.server_id != self.server_id):
++                self.reject('invalid or duplicate Nova migration identity')
++            by_id[record_id] = record
++        return by_id
++
++    def server(self, deadline):
++        # SDK Server.task_state defaults to None even when the API field is
++        # absent. Read the JSON via the public SDK adapter to require explicit
++        # null, not a missing/filtered field.
++        response = self.call(
++            lambda: self.compute.get(
++                '/servers/' + self.server_id,
++                microversion=_MIN_VERSION),
++            deadline, 'timed out reading Nova instance')
++        sdk_exceptions.raise_from_response(response)
++        if response.status_code != 200:
++            self.reject('Nova instance read did not return HTTP 200')
++        body = response.json()
++        server = body.get('server') if isinstance(body, Mapping) else None
++        required = ('id', 'status', 'OS-EXT-SRV-ATTR:host',
++                    'OS-EXT-STS:task_state')
++        if (not isinstance(server, Mapping)
++                or any(key not in server for key in required)
++                or server['id'] != self.server_id):
++            self.reject('incomplete or mismatched Nova instance response')
++        current = server['OS-EXT-SRV-ATTR:host']
++        status = server['status']
++        task = server['OS-EXT-STS:task_state']
++        self.last.update(current=current, server_status=status,
++                         task_state=task)
++        if (not isinstance(current, str)
++                or not coordination.HOST_RE.fullmatch(current)):
++            self.reject('Nova instance has no canonical compute host')
++        if (status not in ('ACTIVE', 'MIGRATING')
++                or task not in (None, 'migrating')):
++            self.reject('instance entered an unsafe migration state')
++        return current, status, task
++
++    def observe(self, deadline):
++        records = self.history(deadline)
++        new_ids = set(records) - self.baseline
++        if len(new_ids) > 1:
++            self.reject('multiple new migrations; cannot correlate request')
++        record = records[next(iter(new_ids))] if new_ids else None
++        if record is not None:
++            record_id = record.uuid
++            self.last.update(migration_status=record.status,
++                             reported_destination=record.dest_compute)
++            if self.migration_id not in (None, record_id):
++                self.reject('Nova migration identity changed while waiting')
++            self.migration_id = record_id
++            if (record.migration_type != 'live-migration'
++                    or record.source_compute != self.source):
++                self.reject('new migration does not match planned source/type')
++            if record.status not in _PROGRESS | {'completed'}:
++                self.reject('migration failed or entered unsupported state')
++            dest = record.dest_compute
++            if record.status == 'completed':
++                if (not isinstance(dest, str)
++                        or not coordination.HOST_RE.fullmatch(dest)
++                        or dest == self.source):
++                    self.reject('completed migration has invalid destination')
++                if self.destination not in (None, dest):
++                    self.reject('completed migration destination changed')
++                self.destination = dest
++
++        current, status, task = self.server(deadline)
++        if record is None or record.status != 'completed':
++            return False
++        if current not in (self.source, self.destination):
++            self.reject('instance host differs from migration destination')
++        return (current == self.destination and status == 'ACTIVE'
++                and task is None)
++
++    def run(self):
++        deadline = self.cloud._deadline(CONF.powerops.vm_action_timeout)
++        try:
++            if not self.call(lambda: sdk_utils.supports_microversion(
++                    self.compute, _MIN_VERSION), deadline,
++                    'timed out discovering Nova microversions'):
++                raise exceptions.PowerOpsConfigurationError(self.describe(
++                    'planned live migration requires Nova microversion 2.59'))
++            records = self.history(deadline)
++            if any(record.status not in _TERMINAL
++                   for record in records.values()):
++                self.reject('preexisting unresolved Nova migration')
++            self.baseline = set(records)
++            current, status, task = self.server(deadline)
++            if (current != self.source or status != 'ACTIVE'
++                    or task is not None):
++                self.reject('instance is not idle ACTIVE on planned source')
++
++            # One submission only. A lost response is not permission to retry.
++            self.cloud._mutation(
++                self.submit,
++                deadline, self.describe('timed out submitting live migration'))
++            self.cloud._wait_until(
++                lambda: self.observe(deadline), bool,
++                CONF.powerops.vm_action_timeout,
++                'timed out waiting for confirmed Nova live migration',
++                deadline=deadline)
++        except exceptions.PowerOpsTimeout as exc:
++            raise type(exc)(self.describe(str(exc))) from exc
++        except ks_exceptions.ConnectTimeout as exc:
++            raise exceptions.PowerOpsCallTimeout(self.describe(
++                'Nova request timed out; migration submission not retried'
++            )) from exc
++
++    def submit(self):
++        # SDK live_migrate_server() inherits Proxy.request connect_retries=1,
++        # which also retries a lost read response. Use the public SDK adapter
++        # with per-request retry/redirect/reauth disabled, not global settings.
++        response = self.compute.post(
++            '/servers/' + self.server_id + '/action',
++            json={'os-migrateLive': {'host': None, 'block_migration': 'auto'}},
++            microversion=_MIN_VERSION, connect_retries=0,
++            status_code_retries=0, redirect=False, allow_reauth=False,
++            raise_exc=False)
++        sdk_exceptions.raise_from_response(response)
++        if response.status_code != 202:
++            self.reject('Nova did not acknowledge migration with HTTP 202')
++
++    def revalidate(self, deadline):
++        if not self.observe(deadline):
++            self.reject('migration is no longer confirmed before power off')
+diff --git a/mistral/tests/unit/actions/powerops/fakes.py b/mistral/tests/unit/actions/powerops/fakes.py
+index 32425f9..03de9d8 100644
+--- a/mistral/tests/unit/actions/powerops/fakes.py
++++ b/mistral/tests/unit/actions/powerops/fakes.py
+@@ -15,6 +15,7 @@
+ from contextlib import contextmanager
+ from types import SimpleNamespace
+ from unittest import mock
++import uuid
+ 
+ from mistral_lib.actions import context as actions
+ 
+@@ -82,6 +83,7 @@ def cloud(ironic_nodes=None, instances=None, nova_services=None,
+     events = events if events is not None else []
+     connection = mock.Mock()
+     connection.session = SimpleNamespace(timeout=17)
++    connection.cache_enabled = False
+     nodes = list(ironic_nodes or [])
+     servers = list(instances or [])
+     services = list(nova_services or [])
+@@ -177,6 +179,68 @@ def cloud(ironic_nodes=None, instances=None, nova_services=None,
+     )
+ 
+ 
++def nova_live_migrations(data, failed_vm=None):
++    """Opt-in Nova API sequence; never teleport directly to final success."""
++    compute = data.connection.compute
++    servers = list(compute.servers.return_value)
++    by_id = {item.id: item for item in servers}
++    sources = {item.id: item.compute_host for item in servers}
++    phases = {}
++    compute.default_microversion = None
++    compute.get_endpoint_data.return_value = SimpleNamespace(
++        min_microversion='2.1', max_microversion='2.95')
++
++    def submit(path, **kwargs):
++        server_id = path.split('/')[-2]
++        data.events.append(('migrate', server_id))
++        phases[server_id] = 0
++        return mock.Mock(status_code=202)
++
++    def record(server_id):
++        status = ('error' if server_id == failed_vm else
++                  'running' if phases[server_id] < 3 else 'completed')
++        return SimpleNamespace(
++            uuid=str(uuid.uuid5(uuid.NAMESPACE_URL, server_id)),
++            server_id=server_id, source_compute=sources[server_id],
++            dest_compute='compute-02', migration_type='live-migration',
++            status=status)
++
++    def history(**query):
++        if 'host' in query:
++            return [record(server_id) for server_id in phases]
++        server_id = query['server_id']
++        rows = [record(server_id)] if server_id in phases else []
++        data.events.append(('history', server_id,
++                            rows[0].status if rows else None))
++        return rows
++
++    def read(path, **kwargs):
++        server_id = path.rsplit('/', 1)[-1]
++        item = by_id[server_id]
++        task = None
++        if server_id in phases:
++            phases[server_id] += 1
++            step = phases[server_id]
++            item.status = 'MIGRATING' if step < 3 else 'ACTIVE'
++            task = 'migrating' if step < 3 else None
++            if step >= 2:
++                item.compute_host = 'compute-02'
++        data.events.append(('observe', server_id, item.status, task))
++        response = mock.Mock(status_code=200)
++        response.json.return_value = {'server': {
++            'id': item.id, 'status': item.status,
++            'OS-EXT-SRV-ATTR:host': item.compute_host,
++            'OS-EXT-STS:task_state': task}}
++        return response
++
++    compute.post.side_effect = submit
++    compute.migrations.side_effect = history
++    compute.get.side_effect = read
++    compute.servers.side_effect = lambda **query: [
++        item for item in servers
++        if item.compute_host == query.get('compute_host', item.compute_host)]
++
++
+ class _RecordingCoordinator:
+     def __init__(self, events):
+         self.events = events
+diff --git a/mistral/tests/unit/actions/powerops/test_clients.py b/mistral/tests/unit/actions/powerops/test_clients.py
+index 10a2cd5..71a63e6 100644
+--- a/mistral/tests/unit/actions/powerops/test_clients.py
++++ b/mistral/tests/unit/actions/powerops/test_clients.py
+@@ -477,31 +477,6 @@ class CloudClientsTest(base.BaseTest):
+                     "compute-01",
+                 )
+ 
+-    def test_migration_completion_uses_pinned_sdk_compute_host(self):
+-        source = sdk_server.Server.existing(
+-            id="vm-a",
+-            compute_host="compute-01",
+-            hypervisor_hostname="unrelated-display-name",
+-            status="ACTIVE",
+-        )
+-        migrated = sdk_server.Server.existing(
+-            id="vm-a",
+-            compute_host="compute-02",
+-            hypervisor_hostname="compute-01",
+-            status="ACTIVE",
+-        )
+-
+-        self.assertFalse(
+-            clients.CloudClients._validate_migration_observation(
+-                source, "compute-01"
+-            )
+-        )
+-        self.assertTrue(
+-            clients.CloudClients._validate_migration_observation(
+-                migrated, "compute-01"
+-            )
+-        )
+-
+     def test_stop_policy_rejects_intermediate_vm_state(self):
+         cloud = fakes.cloud(instances=[
+             fakes.server("vm-a", "compute-01", "MIGRATING"),
+@@ -627,6 +602,7 @@ class CloudClientsTest(base.BaseTest):
+             ],
+             events=events,
+         )
++        fakes.nova_live_migrations(cloud)
+         client = self._client(
+             cloud,
+             sleep=lambda seconds: events.append(("sleep", seconds)),
+@@ -636,12 +612,15 @@ class CloudClientsTest(base.BaseTest):
+         self.assertEqual(
+             [], client.apply_instance_policy("compute-01", "live_migrate")
+         )
+-        self.assertEqual(
+-            [("migrate", "vm-a"), ("wait-active", "vm-a"),
+-             ("sleep", 5), ("migrate", "vm-b"),
+-             ("wait-active", "vm-b"), ("sleep", 5)],
+-            events,
+-        )
++        self.assertEqual([('migrate', 'vm-a'), ('migrate', 'vm-b')],
++                         [event for event in events if event[0] == 'migrate'])
++        next_vm = events.index(('migrate', 'vm-b'))
++        completed = [index for index, event in enumerate(events)
++                     if event == ('history', 'vm-a', 'completed')]
++        self.assertGreaterEqual(len(completed), 2)
++        self.assertLess(completed[-1], next_vm)
++        self.assertIn(('sleep', 5), events[completed[-1]:next_vm])
++        self.assertEqual(('sleep', 5), events[-1])
+ 
+     def test_start_instances_is_sorted_sequential_and_paced(self):
+         events = []
+diff --git a/mistral/tests/unit/actions/powerops/test_live_migration.py b/mistral/tests/unit/actions/powerops/test_live_migration.py
+new file mode 100644
+index 0000000..8df428b
+--- /dev/null
++++ b/mistral/tests/unit/actions/powerops/test_live_migration.py
+@@ -0,0 +1,291 @@
++# Copyright 2026 OpenStack Foundation
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++# http://www.apache.org/licenses/LICENSE-2.0
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++from types import SimpleNamespace
++from unittest import mock
++
++from openstack.compute.v2.migration import Migration
++from openstack.compute.v2.server import Server
++
++from mistral.actions.powerops import clients
++from mistral.actions.powerops import exceptions
++from mistral.tests.unit.actions.powerops import fakes
++from mistral.tests.unit import base
++
++
++VM = '85387b2a-32fe-48b2-be94-df20701d2659'
++MIGRATION = 'a0cf1001-ab27-4a18-ae47-cf976f171060'
++OLD_MIGRATION = 'f0cf1001-ab27-4a18-ae47-cf976f171060'
++
++
++def server_body(status='ACTIVE', host='compute-01', task_state=None):
++    return {'id': VM, 'status': status,
++            'OS-EXT-SRV-ATTR:host': host,
++            'OS-EXT-STS:task_state': task_state}
++
++
++def migration(status='completed', **overrides):
++    body = dict(id=7, uuid=MIGRATION, server_id=VM,
++                source_compute='compute-01', dest_compute='compute-02',
++                migration_type='live-migration', status=status,
++                created_at='2026-09-07T11:43:11.000000',
++                updated_at='2026-09-07T11:45:01.000000')
++    body.update(overrides)
++    return Migration.existing(**body)
++
++
++class LiveMigrationTest(base.BaseTest):
++    def setUp(self):
++        super().setUp()
++        self.override_config('poll_interval', 1, 'powerops')
++        self.override_config('instance_interval', 0, 'powerops')
++        self.override_config('stable_observations', 2, 'powerops')
++        self.override_config('vm_action_timeout', 30, 'powerops')
++        self.data = fakes.cloud(instances=[
++            Server.existing(**server_body())])
++        self.compute = self.data.connection.compute
++        self.compute.get_endpoint_data.return_value = SimpleNamespace(
++            min_microversion='2.1', max_microversion='2.95')
++        self.compute.default_microversion = None
++        self.compute.post.return_value.status_code = 202
++        self.compute.get.return_value.status_code = 200
++        self.clock = 0
++        self.sleeps = []
++        self.cloud = clients.CloudClients(
++            self.data.connection, ha_adapter=self.data.ha_adapter,
++            sleep=self.sleep, monotonic=lambda: self.clock,
++        )
++
++    def sleep(self, seconds):
++        self.clock += seconds
++        self.sleeps.append(seconds)
++
++    def observations(self, states, records, baseline=()):
++        """Keep both the SDK server and raw API boundary available."""
++        current = server_body()
++        history = [list(baseline)] + records
++        snapshots = [server_body()] + states
++
++        def get_server(*args, **kwargs):
++            nonlocal current
++            if snapshots:
++                current = snapshots.pop(0)
++            return current
++
++        def get(*args, **kwargs):
++            response = mock.Mock(status_code=200)
++            response.json.return_value = {'server': get_server()}
++            return response
++
++        last_records = list(baseline)
++
++        def migrations(**kwargs):
++            nonlocal last_records
++            self.assertEqual({'server_id': VM}, kwargs)
++            if history:
++                last_records = history.pop(0)
++            return list(last_records)
++
++        self.compute.get.side_effect = get
++        self.compute.get_server.side_effect = (
++            lambda *args, **kwargs: Server.existing(**get_server()))
++        self.compute.migrations.side_effect = migrations
++
++    def run_policy(self):
++        return self.cloud.apply_instance_policy('compute-01', 'live_migrate')
++
++    def test_waits_through_migrating_and_confirms_new_record(self):
++        self.observations([
++            server_body('MIGRATING', task_state='migrating'),
++            server_body('MIGRATING', 'compute-02', 'migrating'),
++            server_body('ACTIVE', 'compute-02', 'migrating'),
++            server_body('ACTIVE', 'compute-02'),
++            server_body('ACTIVE', 'compute-02'),
++        ], [[migration('running')], [migration('post-migrating')],
++            [migration('completed')], [migration()], [migration()]])
++
++        self.assertEqual([], self.run_policy())
++        self.assertGreaterEqual(len(self.sleeps), 4)
++        self.compute.post.assert_called_once()
++        self.assertGreaterEqual(self.compute.migrations.call_count, 6)
++
++    def test_active_destination_does_not_replace_migration_confirmation(self):
++        self.observations([server_body('ACTIVE', 'compute-02')],
++                          [[migration('running')]])
++        self.assertRaises(exceptions.PowerOpsTimeout, self.run_policy)
++        self.compute.post.assert_called_once()
++
++    def test_historical_completed_migration_cannot_confirm_new_request(self):
++        old = migration(uuid=OLD_MIGRATION)
++        self.observations([server_body('ACTIVE', 'compute-02')], [[old]],
++                          baseline=[old])
++        self.assertRaises(exceptions.PowerOpsTimeout, self.run_policy)
++
++    def test_ambiguous_new_migrations_fail_closed(self):
++        self.observations([server_body('ACTIVE', 'compute-02')],
++                          [[migration(), migration(uuid=OLD_MIGRATION)]])
++        self.assertRaises(exceptions.InstancePolicyError, self.run_policy)
++
++    def test_failed_record_reports_vm_and_migration_without_retry(self):
++        self.observations([server_body()], [[migration('error')]])
++        error = self.assertRaises(exceptions.InstancePolicyError,
++                                  self.run_policy)
++        self.assertIn(VM, str(error))
++        self.assertIn(MIGRATION, str(error))
++        self.assertIn('error', str(error))
++        self.compute.post.assert_called_once()
++
++    def test_completed_record_requires_matching_destination(self):
++        self.observations([server_body('ACTIVE', 'compute-03')],
++                          [[migration()]])
++        self.assertRaises(exceptions.InstancePolicyError, self.run_policy)
++
++    def test_missing_task_state_is_not_treated_as_idle(self):
++        incomplete = server_body('ACTIVE', 'compute-02')
++        incomplete.pop('OS-EXT-STS:task_state')
++        self.observations([incomplete], [[migration()]])
++        self.assertRaises(exceptions.InstancePolicyError, self.run_policy)
++
++    def test_preexisting_in_progress_migration_blocks_post(self):
++        self.observations([], [], baseline=[migration('running')])
++        self.assertRaises(exceptions.InstancePolicyError, self.run_policy)
++        self.compute.post.assert_not_called()
++
++    def test_unsupported_microversion_blocks_post(self):
++        self.compute.get_endpoint_data.return_value.max_microversion = '2.58'
++        self.observations([server_body('ACTIVE', 'compute-02')],
++                          [[migration()]])
++        self.assertRaises(exceptions.PowerOpsConfigurationError,
++                          self.run_policy)
++        self.compute.post.assert_not_called()
++
++    def test_post_timeout_is_not_retried(self):
++        self.observations([], [])
++        self.compute.post.side_effect = (
++            exceptions.PowerOpsCallTimeout('response lost'))
++        error = self.assertRaises(exceptions.PowerOpsTimeout, self.run_policy)
++        self.assertIn(VM, str(error))
++        self.compute.post.assert_called_once()
++
++    def completed_policy(self):
++        self.observations([server_body('ACTIVE', 'compute-02')],
++                          [[migration()]])
++        self.run_policy()
++        self.compute.servers.return_value = []
++        self.compute.migrations.side_effect = None
++        self.compute.migrations.return_value = [migration()]
++
++    def guard(self):
++        self.cloud.assert_host_safe_for_power_off(
++            'compute-01', 'live_migrate', [])
++
++    def test_final_guard_rechecks_migration_and_explicit_idle_state(self):
++        self.completed_policy()
++        self.compute.get.side_effect = None
++        self.compute.get.return_value.json.return_value = {
++            'server': server_body('ACTIVE', 'compute-02', 'migrating')}
++        self.assertRaises(exceptions.InstancePolicyError, self.guard)
++
++    def test_final_guard_rejects_new_inflight_migration_to_empty_source(self):
++        self.completed_policy()
++        incoming = migration('running', uuid=OLD_MIGRATION,
++                             server_id='another-vm',
++                             source_compute='compute-03',
++                             dest_compute='compute-01')
++        self.compute.migrations.side_effect = lambda **query: (
++            [incoming] if 'host' in query else [migration()])
++        self.assertRaises(exceptions.InstancePolicyError, self.guard)
++
++    def test_final_guard_requires_successful_policy_in_same_client(self):
++        self.compute.servers.return_value = []
++        self.compute.migrations.return_value = []
++        self.assertRaises(exceptions.InstancePolicyError, self.guard)
++
++    def test_final_guard_checks_source_after_revalidating_receipts(self):
++        self.completed_policy()
++        self.compute.servers.reset_mock()
++        result = self.guard()
++        self.assertIsNone(result)
++        self.compute.migrations.assert_any_call(host='compute-01')
++        self.compute.migrations.assert_any_call(server_id=VM)
++        self.compute.servers.assert_called_once_with(
++            details=True, all_projects=True, compute_host='compute-01')
++
++    def test_empty_policy_checks_inflight_migrations_before_power_off(self):
++        self.compute.servers.return_value = []
++        self.assertEqual([], self.run_policy())
++        self.compute.migrations.return_value = [migration('post-migrating')]
++        self.assertRaises(exceptions.InstancePolicyError, self.guard)
++
++    def test_loss_of_lock_stops_wait_without_resubmission(self):
++        self.observations([
++            server_body('MIGRATING', task_state='migrating')],
++            [[migration('running')]])
++
++        def health():
++            if self.clock >= 1:
++                raise RuntimeError('lock ownership lost')
++
++        self.cloud.health_check = health
++        self.assertRaises(RuntimeError, self.run_policy)
++        self.compute.post.assert_called_once()
++
++    def test_interrupted_stability_requires_two_fresh_observations(self):
++        self.observations([
++            server_body('ACTIVE', 'compute-02'),
++            server_body('ACTIVE', 'compute-02', 'migrating'),
++            server_body('ACTIVE', 'compute-02'),
++            server_body('ACTIVE', 'compute-02')], [[migration()]])
++        self.assertEqual([], self.run_policy())
++        self.assertEqual(3, len(self.sleeps))
++
++    def test_history_identity_and_types_fail_closed(self):
++        variants = [migration(uuid=None), migration(uuid='7'),
++                    migration(server_id='other-vm'),
++                    migration(source_compute='other-source'),
++                    migration(migration_type='resize'),
++                    migration(status='unexpected-state')]
++        for record in variants:
++            with self.subTest(record=record):
++                self.observations([server_body('ACTIVE', 'compute-02')],
++                                  [[record]])
++                self.assertRaises(exceptions.InstancePolicyError,
++                                  self.run_policy)
++
++    def test_compute_host_not_display_name_confirms_destination(self):
++        body = server_body('ACTIVE', 'compute-02')
++        body['OS-EXT-SRV-ATTR:hypervisor_hostname'] = 'compute-01'
++        self.observations([body], [[migration()]])
++        self.assertEqual([], self.run_policy())
++
++    def test_waits_for_accepted_before_destination_is_scheduled(self):
++        statuses = ('accepted', 'queued', 'preparing', 'running',
++                    'running (post-copy)', 'post-migrating')
++        states = [server_body('MIGRATING', task_state='migrating')
++                  for _ in statuses] + [server_body('ACTIVE', 'compute-02')]
++        records = [[migration(state, dest_compute=None)] for state in statuses]
++        self.observations(states, records + [[migration()]])
++        self.assertEqual([], self.run_policy())
++        self.assertGreaterEqual(len(self.sleeps), len(statuses) + 1)
++
++    def test_sdk_cache_enabled_blocks_live_policy_before_read_or_post(self):
++        self.data.connection.cache_enabled = True
++        self.observations([server_body('ACTIVE', 'compute-02')],
++                          [[migration()]])
++        self.assertRaises(exceptions.PowerOpsConfigurationError,
++                          self.run_policy)
++        self.compute.servers.assert_not_called()
++        self.compute.post.assert_not_called()
++
++    def test_sdk_cache_enabled_blocks_final_guard(self):
++        self.completed_policy()
++        self.data.connection.cache_enabled = True
++        self.assertRaises(exceptions.PowerOpsConfigurationError, self.guard)
+diff --git a/mistral/tests/unit/actions/powerops/test_live_migration_actions.py b/mistral/tests/unit/actions/powerops/test_live_migration_actions.py
+new file mode 100644
+index 0000000..a26881a
+--- /dev/null
++++ b/mistral/tests/unit/actions/powerops/test_live_migration_actions.py
+@@ -0,0 +1,140 @@
++# Copyright 2026 OpenStack Foundation
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++# http://www.apache.org/licenses/LICENSE-2.0
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++from unittest import mock
++
++from keystoneauth1 import exceptions as ks_exceptions
++
++from mistral.actions.powerops import base as action_base
++from mistral.actions.powerops import clients
++from mistral.actions.powerops import exceptions
++from mistral.actions.powerops import planned
++from mistral.tests.unit.actions.powerops import fakes
++from mistral.tests.unit import base
++
++
++class PlannedLiveMigrationSafetyTest(base.BaseTest):
++    """Real composite actions and CloudClients; fake only external services."""
++
++    def setUp(self):
++        super().setUp()
++        self.override_config('enabled', True, 'powerops')
++        self.override_config('allowed_project_names', ['operations'],
++                             'powerops')
++        self.override_config('allowed_user_names', ['powerops-operator'],
++                             'powerops')
++        self.override_config('poll_interval', 1, 'powerops')
++        self.override_config('stable_observations', 2, 'powerops')
++        self.override_config('instance_interval', 1, 'powerops')
++        self.override_config('vm_action_timeout', 20, 'powerops')
++
++    def exercise(self, action_class, failure=None):
++        node = fakes.node('node-1', 'compute-01')
++        service = fakes.service('service-1', 'compute-01')
++        host = fakes.masakari_host('host-1', 'compute-01', False)
++        vms = [fakes.server(vm, 'compute-01', 'ACTIVE')
++               for vm in ('vm-a', 'vm-b')]
++        data = fakes.cloud(ironic_nodes=[node], nova_services=[service],
++                           masakari_hosts=[host], instances=vms)
++        fakes.nova_live_migrations(
++            data, failed_vm='vm-b' if failure == 'error' else None)
++        compute = data.connection.compute
++        read_history = compute.migrations.side_effect
++        submit = compute.post.side_effect
++        list_servers = compute.servers.side_effect
++        clock = 0
++
++        def sleep(seconds):
++            nonlocal clock
++            clock += seconds
++
++        def health():
++            if (failure == 'lost-lock'
++                    and ('migrate', 'vm-b') in data.events):
++                raise RuntimeError('lock ownership lost')
++
++        def history(**query):
++            records = read_history(**query)
++            if failure == 'timeout' and query.get('server_id') == 'vm-b':
++                for record in records:
++                    record.status = 'running'
++            return records
++
++        def post(path, **kwargs):
++            result = submit(path, **kwargs)
++            if failure == 'post-timeout' and '/vm-b/' in path:
++                raise ks_exceptions.ConnectTimeout('response lost')
++            return result
++
++        def servers(**query):
++            if failure == 'source-not-empty' and all(
++                    vm.compute_host != 'compute-01' for vm in vms):
++                return [fakes.server('new-vm', 'compute-01', 'ACTIVE')]
++            return list_servers(**query)
++
++        compute.migrations.side_effect = history
++        compute.post.side_effect = post
++        compute.servers.side_effect = servers
++        coordinator = fakes.recording_coordinator(data.events)
++        coordinator.assert_healthy = health
++        cloud = clients.CloudClients(
++            data.connection, ha_adapter=data.ha_adapter, sleep=sleep,
++            monotonic=lambda: clock, health_check=health)
++        with mock.patch.object(
++                action_base.coordination, 'OperationCoordinator',
++                return_value=coordinator), mock.patch.object(
++                clients, 'connection_from_conf', return_value=data.connection
++        ), mock.patch.object(clients, 'CloudClients', return_value=cloud):
++            action = action_class('compute-01', 'segment-1',
++                                  instance_policy='live_migrate')
++            if failure:
++                self.assertRaises(
++                    (exceptions.InstancePolicyError,
++                     exceptions.PowerOpsTimeout, RuntimeError), action.run,
++                    fakes.action_context('live-migration-safety'))
++            else:
++                action.run(fakes.action_context('live-migration-safety'))
++
++        self.assertEqual(2, compute.post.call_count)
++        self.assertEqual('compute-02', vms[0].compute_host)
++        self.assertEqual('ACTIVE', vms[0].status)
++        if failure:
++            data.connection.baremetal.set_node_power_state.assert_not_called()
++            compute.enable_service.assert_not_called()
++            compute.start_server.assert_not_called()
++            self.assertEqual('power on', node.power_state)
++            self.assertEqual('disabled', service.status)
++            self.assertTrue(host.on_maintenance)
++        else:
++            power_events = [
++                event for event in data.events
++                if isinstance(event, tuple) and event[0] == 'power']
++            expected = 2 if action_class is planned.PlannedRebootAction else 1
++            self.assertEqual(expected, len(power_events))
++            last_migration = max(i for i, event in enumerate(data.events)
++                                 if isinstance(event, tuple)
++                                 and event[0] == 'history')
++            self.assertLess(last_migration, data.events.index(power_events[0]))
++        self.assertIn('host-lock-exit', data.events)
++
++    def test_partial_failure_never_powers_off_or_reenables_source(self):
++        for action in (planned.PlannedPowerOffAction,
++                       planned.PlannedRebootAction):
++            for failure in ('error', 'timeout', 'post-timeout', 'lost-lock',
++                            'source-not-empty'):
++                with self.subTest(action=action.__name__, failure=failure):
++                    self.exercise(action, failure)
++
++    def test_power_off_and_reboot_follow_confirmed_migrations(self):
++        for action in (planned.PlannedPowerOffAction,
++                       planned.PlannedRebootAction):
++            with self.subTest(action=action.__name__):
++                self.exercise(action)
+diff --git a/mistral/tests/unit/actions/powerops/test_live_migration_http.py b/mistral/tests/unit/actions/powerops/test_live_migration_http.py
+new file mode 100644
+index 0000000..ae24e29
+--- /dev/null
++++ b/mistral/tests/unit/actions/powerops/test_live_migration_http.py
+@@ -0,0 +1,271 @@
++# Copyright 2026 OpenStack Foundation
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++# http://www.apache.org/licenses/LICENSE-2.0
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++from urllib.parse import urlencode
++
++from keystoneauth1 import fixture as ks_fixture
++from keystoneauth1.identity import v3
++from keystoneauth1 import session as ks_session
++from openstack import connection
++from openstack import exceptions as sdk_exceptions
++import requests
++import requests_mock
++
++from mistral.actions.powerops import clients
++from mistral.actions.powerops import exceptions
++from mistral.tests.unit.actions.powerops import test_live_migration as samples
++from mistral.tests.unit import base
++
++
++class LiveMigrationHTTPTest(base.BaseTest):
++    """Real SDK discovery, resources, query mapping, pagination and POST."""
++
++    endpoint = 'http://nova.example/v2.1'
++
++    def setUp(self):
++        super().setUp()
++        self.override_config('poll_interval', 1, 'powerops')
++        self.override_config('instance_interval', 0, 'powerops')
++        self.override_config('stable_observations', 2, 'powerops')
++        self.override_config('vm_action_timeout', 15, 'powerops')
++        self.http = requests_mock.Mocker()
++        self.http.start()
++        self.addCleanup(self.http.stop)
++        self.clock = 0
++        self.reads = 0
++        self.submissions = []
++        self.paginate = False
++        self.migration_error = False
++        self.missing_task = False
++
++    def sleep(self, seconds):
++        self.clock += seconds
++
++    def row(self, migration_id=samples.MIGRATION, status='completed'):
++        # Actual global /os-migrations schema, not SDK Python field names.
++        return {'id': 7, 'uuid': migration_id, 'instance_uuid': samples.VM,
++                'source_compute': 'compute-01', 'dest_compute': 'compute-02',
++                'source_node': 'display-01', 'dest_node': 'display-02',
++                'migration_type': 'live-migration', 'status': status}
++
++    def history(self, request, context):
++        if 'marker' in request.qs:
++            return {'migrations': [self.row(samples.OLD_MIGRATION)]}
++        rows = []
++        if self.submissions:
++            state = ('error' if self.migration_error else
++                     'running' if self.reads < 3 else 'completed')
++            rows = [self.row(status=state)]
++        body = {'migrations': rows}
++        if self.paginate:
++            # Nova puts the next URL in migrations_links; preserve the VM
++            # filter across pages. A nonempty first page is required by SDK.
++            if not rows:
++                rows.append(self.row(
++                    '24de0f00-ab27-4a18-ae47-cf976f171060'))
++            query = urlencode({'instance_uuid': samples.VM,
++                               'marker': samples.OLD_MIGRATION})
++            body['migrations_links'] = [{
++                'rel': 'next',
++                'href': self.endpoint + '/os-migrations?' + query}]
++        return body
++
++    def read_server(self, request, context):
++        if not self.submissions:
++            return {'server': samples.server_body()}
++        self.reads += 1
++        body = samples.server_body(
++            'MIGRATING' if self.reads < 3 else 'ACTIVE',
++            'compute-01' if self.reads == 1 else 'compute-02',
++            'migrating' if self.reads < 4 else None)
++        if self.missing_task:
++            body.pop('OS-EXT-STS:task_state')
++        return {'server': body}
++
++    def submit(self, request, context):
++        self.submissions.append(request.json())
++        context.status_code = 202
++        return ''
++
++    def cloud(self, maximum='2.95', pinned=None):
++        version = {'id': 'v2.1', 'status': 'CURRENT', 'version': maximum,
++                   'min_version': '2.1', 'updated': '2013-07-23T11:33:21Z',
++                   'links': [{'rel': 'self', 'href': self.endpoint + '/'}]}
++        self.http.get('http://nova.example/', json={'versions': [version]})
++        self.http.get(self.endpoint, json={'version': version})
++        token = ks_fixture.V3Token()
++        token.add_service('compute', 'nova').add_endpoint(
++            'internal', self.endpoint, region='RegionOne')
++        self.http.post('http://identity.example/v3/auth/tokens', json=token,
++                       headers={'X-Subject-Token': 'local-test-token'})
++        auth = v3.Password(
++            auth_url='http://identity.example/v3', username='mistral',
++            password='test-password', project_name='service',
++            user_domain_name='Default', project_domain_name='Default')
++        conn = connection.Connection(
++            session=ks_session.Session(auth=auth), region_name='RegionOne',
++            interface='internal')
++        self.addCleanup(conn.close)
++        if pinned:
++            conn.compute.default_microversion = pinned
++        self.http.get(self.endpoint + '/os-migrations', json=self.history)
++        self.http.get(self.endpoint + '/servers/' + samples.VM,
++                      json=self.read_server)
++        self.http.get(self.endpoint + '/servers/detail', json=lambda r, c: {
++            'servers': [] if self.reads >= 2 else [samples.server_body()]})
++        self.http.post(self.endpoint + '/servers/' + samples.VM + '/action',
++                       text=self.submit)
++        return clients.CloudClients(
++            conn, sleep=self.sleep, monotonic=lambda: self.clock)
++
++    def test_sdk_discovery_versions_payload_filters_and_final_read(self):
++        for maximum, history_version in [('2.59', '2.59'), ('2.69', '2.69'),
++                                         ('2.95', '2.80')]:
++            with self.subTest(maximum=maximum):
++                self.submissions = []
++                self.reads = 0
++                self.http.reset_mock()
++                cloud = self.cloud(maximum)
++                self.assertEqual([], cloud.apply_instance_policy(
++                    'compute-01', 'live_migrate'))
++                cloud.assert_host_safe_for_power_off(
++                    'compute-01', 'live_migrate', [])
++                self.assertEqual([{'os-migrateLive': {
++                    'host': None, 'block_migration': 'auto'}}],
++                    self.submissions)
++                histories = [r for r in self.http.request_history
++                             if r.path.endswith('/os-migrations')]
++                for request in histories:
++                    self.assertEqual('compute ' + history_version,
++                                     request.headers['OpenStack-API-Version'])
++                    self.assertTrue(
++                        'instance_uuid' in request.qs
++                        or request.qs.get('host') == ['compute-01'])
++                reads = [r for r in self.http.request_history
++                         if r.path.endswith('/servers/' + samples.VM)]
++                self.assertGreaterEqual(len(reads), 6)
++                self.assertTrue(all(r.headers['OpenStack-API-Version'] ==
++                                    'compute 2.59' for r in reads))
++                self.assertEqual('/v2.1/servers/detail',
++                                 self.http.last_request.path)
++                self.assertEqual(['true'],
++                                 self.http.last_request.qs['all_tenants'])
++                self.assertEqual(['compute-01'],
++                                 self.http.last_request.qs['host'])
++
++    def test_history_pagination_is_consumed_before_post_and_during_wait(self):
++        cloud = self.cloud()
++        self.paginate = True
++        self.assertEqual([], cloud.apply_instance_policy(
++            'compute-01', 'live_migrate'))
++        requests_seen = self.http.request_history
++        action = next(i for i, r in enumerate(requests_seen)
++                      if r.path.endswith('/action'))
++        self.assertTrue(any('marker' in r.qs for r in requests_seen[:action]))
++        self.assertTrue(any('marker' in r.qs for r in requests_seen[action:]))
++        for request in requests_seen:
++            if 'marker' in request.qs:
++                self.assertEqual([samples.VM], request.qs['instance_uuid'])
++
++    def test_old_or_low_pinned_microversion_blocks_submission(self):
++        for maximum, pinned in [('2.58', None), ('2.95', '2.1')]:
++            with self.subTest(maximum=maximum, pinned=pinned):
++                cloud = self.cloud(maximum, pinned)
++                self.assertRaises(exceptions.PowerOpsConfigurationError,
++                                  cloud.apply_instance_policy,
++                                  'compute-01', 'live_migrate')
++                self.assertEqual([], self.submissions)
++
++    def test_history_http_error_blocks_submission(self):
++        for status in (403, 404, 503):
++            with self.subTest(status=status):
++                cloud = self.cloud()
++                self.http.get(self.endpoint + '/os-migrations',
++                              status_code=status, json={'error': 'test'})
++                self.assertRaises(sdk_exceptions.HttpException,
++                                  cloud.apply_instance_policy,
++                                  'compute-01', 'live_migrate')
++                self.assertEqual([], self.submissions)
++
++    def test_lost_post_response_is_not_retried(self):
++        cloud = self.cloud()
++        self.http.post(self.endpoint + '/servers/' + samples.VM + '/action',
++                       exc=requests.exceptions.ReadTimeout('response lost'))
++        error = self.assertRaises(exceptions.PowerOpsCallTimeout,
++                                  cloud.apply_instance_policy,
++                                  'compute-01', 'live_migrate')
++        self.assertIn(samples.VM, str(error))
++        posts = [r for r in self.http.request_history
++                 if r.path.endswith('/action')]
++        self.assertEqual(1, len(posts))
++
++    def test_raw_server_requires_task_state_field(self):
++        cloud = self.cloud()
++        self.missing_task = True
++        self.assertRaises(exceptions.InstancePolicyError,
++                          cloud.apply_instance_policy,
++                          'compute-01', 'live_migrate')
++        self.assertEqual(1, len(self.submissions))
++
++    def test_migration_error_reports_uuid_from_real_sdk_resource(self):
++        cloud = self.cloud()
++        self.migration_error = True
++        error = self.assertRaises(exceptions.InstancePolicyError,
++                                  cloud.apply_instance_policy,
++                                  'compute-01', 'live_migrate')
++        self.assertIn(samples.MIGRATION, str(error))
++        self.assertIn(samples.VM, str(error))
++        self.assertEqual(1, len(self.submissions))
++
++    def test_post_redirect_reauth_and_status_retries_are_disabled(self):
++        for status in (200, 301, 302, 307, 308, 401, 409, 429, 503):
++            with self.subTest(status=status):
++                self.http.reset_mock()
++                cloud = self.cloud()
++                cloud.connection.compute.status_code_retries = 2
++                self.http.post(
++                    self.endpoint + '/servers/' + samples.VM + '/action',
++                    status_code=status, json={'error': 'test'},
++                    headers={'Location': self.endpoint + '/redirected-action'})
++                self.assertRaises(
++                    (exceptions.InstancePolicyError,
++                     sdk_exceptions.HttpException),
++                    cloud.apply_instance_policy, 'compute-01', 'live_migrate')
++                posts = [
++                    r for r in self.http.request_history
++                    if r.method == 'POST' and r.hostname == 'nova.example']
++                self.assertEqual(1, len(posts))
++                self.assertTrue(posts[0].path.endswith('/action'))
++
++    def test_malformed_history_blocks_submission(self):
++        for body in ({'unexpected': []}, {'migrations': None},
++                     {'migrations': [{'id': 7, 'instance_uuid': samples.VM}]}):
++            with self.subTest(body=body):
++                cloud = self.cloud()
++                self.http.get(self.endpoint + '/os-migrations', json=body)
++                self.assertRaises((KeyError, AttributeError,
++                                   exceptions.InstancePolicyError),
++                                  cloud.apply_instance_policy,
++                                  'compute-01', 'live_migrate')
++                self.assertEqual([], self.submissions)
++
++    def test_server_shaped_non_200_response_cannot_authorize_submission(self):
++        for status in (202, 302, 404, 503):
++            with self.subTest(status=status):
++                cloud = self.cloud()
++                self.http.get(self.endpoint + '/servers/' + samples.VM,
++                              status_code=status,
++                              json={'server': samples.server_body()})
++                self.assertRaises((exceptions.InstancePolicyError,
++                                   sdk_exceptions.HttpException),
++                                  cloud.apply_instance_policy,
++                                  'compute-01', 'live_migrate')
++                self.assertEqual([], self.submissions)
+-- 
+2.49.0
+
