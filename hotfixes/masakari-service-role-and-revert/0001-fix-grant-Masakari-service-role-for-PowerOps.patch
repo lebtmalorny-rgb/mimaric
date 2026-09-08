@@ -1,0 +1,157 @@
+From 7fe65f436be842fc6bc0ea3fdb09d748f7254780 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Mon, 7 Sep 2026 20:18:32 +0300
+Subject: [PATCH] fix: grant Masakari service role for PowerOps
+
+Create and grant the service role in the service project when enable_powerops is enabled, preserving the admin assignment and configurable username. Do not revoke existing assignments when PowerOps is disabled.
+
+Regression tests render Masakari registration through the shared Keystone task arguments. Local validation: 64 PowerOps and Masakari Kolla tests passed. No live Keystone or deployment actions performed.
+---
+ ansible/roles/masakari/defaults/main.yml      |   7 ++
+ ansible/roles/masakari/tasks/register.yml     |   2 +
+ .../tests/unit/test_masakari_service_role.py  | 103 ++++++++++++++++++
+ 3 files changed, 112 insertions(+)
+ create mode 100644 kolla_ansible/tests/unit/test_masakari_service_role.py
+
+diff --git a/ansible/roles/masakari/defaults/main.yml b/ansible/roles/masakari/defaults/main.yml
+index 8fc16ac..e6207cf 100644
+--- a/ansible/roles/masakari/defaults/main.yml
++++ b/ansible/roles/masakari/defaults/main.yml
+@@ -194,6 +194,13 @@ masakari_ks_users:
+     password: "{{ masakari_keystone_password }}"
+     role: "admin"
+ 
++# Ironic service policy requires this role in the service project in addition
++# to admin. Disabling PowerOps must not revoke an operator-managed assignment.
++masakari_ks_roles: "{{ ['service'] if enable_powerops | bool else [] }}"
++masakari_ks_user_roles: >-
++  {{ [{'project': 'service', 'user': masakari_keystone_user, 'role': 'service'}]
++     if enable_powerops | bool else [] }}
++
+ ####################
+ # libvirt
+ ####################
+diff --git a/ansible/roles/masakari/tasks/register.yml b/ansible/roles/masakari/tasks/register.yml
+index 9f2413a..b436c9a 100644
+--- a/ansible/roles/masakari/tasks/register.yml
++++ b/ansible/roles/masakari/tasks/register.yml
+@@ -5,3 +5,5 @@
+     service_ks_register_auth: "{{ openstack_masakari_auth }}"
+     service_ks_register_services: "{{ masakari_ks_services }}"
+     service_ks_register_users: "{{ masakari_ks_users }}"
++    service_ks_register_roles: "{{ masakari_ks_roles }}"
++    service_ks_register_user_roles: "{{ masakari_ks_user_roles }}"
+diff --git a/kolla_ansible/tests/unit/test_masakari_service_role.py b/kolla_ansible/tests/unit/test_masakari_service_role.py
+new file mode 100644
+index 0000000..f258a4f
+--- /dev/null
++++ b/kolla_ansible/tests/unit/test_masakari_service_role.py
+@@ -0,0 +1,103 @@
++# Licensed under the Apache License, Version 2.0 (the "License"); you may
++# not use this file except in compliance with the License. You may obtain
++# a copy of the License at
++#
++# http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++from pathlib import Path
++import unittest
++
++from ansible.parsing.dataloader import DataLoader
++from ansible.template import Templar
++import yaml
++
++
++ROLES = Path(__file__).resolve().parents[3] / 'ansible/roles'
++
++
++def load(relative):
++    return yaml.safe_load((ROLES / relative).read_text(encoding='utf-8'))
++
++
++class MasakariServiceRoleTest(unittest.TestCase):
++    """Render Masakari registration through the shared Keystone tasks."""
++
++    def render_registration(self, enabled, username='masakari'):
++        variables = load('service-ks-register/defaults/main.yml')
++        variables.update(load('masakari/defaults/main.yml'))
++        variables.update(load('masakari/tasks/register.yml')[0]['vars'])
++        variables.update({
++            'enable_powerops': enabled,
++            'masakari_keystone_user': username,
++            'masakari_keystone_password': 'test-only-password',
++            'openstack_region_name': 'RegionOne',
++            'openstack_masakari_auth': {},
++            'openstack_interface': 'internal',
++            'openstack_cacert': '',
++            'service_ks_register_mtls': False,
++            'omit': '__omit__',
++        })
++        tasks = load('service-ks-register/tasks/main.yml')[0]['block']
++        rendered = {}
++        for module in ('identity_role', 'identity_user', 'role_assignment'):
++            task = next(t for t in tasks if t['kolla_toolbox'][
++                'module_name'] == 'openstack.cloud.' + module)
++            templar = Templar(loader=DataLoader(), variables=variables)
++            items = templar.template(task['with_items'])
++            rendered[module] = []
++            for item in items:
++                templar = Templar(loader=DataLoader(), variables={
++                    **variables, 'item': item,
++                    'update_keystone_service_user_passwords': False,
++                })
++                args = templar.template(task['kolla_toolbox']['module_args'])
++                rendered[module].append({
++                    key: value for key, value in args.items()
++                    if value != '__omit__'
++                })
++        return rendered
++
++    def test_enabled_creates_service_role_and_project_assignment(self):
++        for enabled in (True, 'yes', 'true'):
++            with self.subTest(enabled=enabled):
++                result = self.render_registration(enabled)
++                self.assertEqual(['admin', 'service'], [
++                    r['name'] for r in result['identity_role']])
++                self.assertEqual([
++                    ('masakari', 'service', 'admin', 'present'),
++                    ('masakari', 'service', 'service', 'present'),
++                ], [(r['user'], r['project'], r['role'], r['state'])
++                    for r in result['role_assignment']])
++                for assignment in result['role_assignment']:
++                    self.assertNotIn('system', assignment)
++                    self.assertNotIn('domain', assignment)
++
++    def test_disabled_does_not_grant_or_revoke_service_role(self):
++        for enabled in (False, 'no', 'false'):
++            with self.subTest(enabled=enabled):
++                result = self.render_registration(enabled)
++                self.assertEqual(['admin'], [
++                    r['name'] for r in result['identity_role']])
++                self.assertEqual([('admin', 'present')], [
++                    (r['role'], r['state'])
++                    for r in result['role_assignment']])
++
++    def test_custom_username_receives_both_roles(self):
++        result = self.render_registration(True, 'custom-masakari')
++        self.assertEqual([
++            ('custom-masakari', 'admin'),
++            ('custom-masakari', 'service'),
++        ], [(r['user'], r['role']) for r in result['role_assignment']])
++
++    def test_additional_role_does_not_duplicate_user_creation(self):
++        result = self.render_registration(True)
++        self.assertEqual(1, len(result['identity_user']))
++        self.assertEqual('masakari', result['identity_user'][0]['name'])
++        self.assertEqual('on_create',
++                         result['identity_user'][0]['update_password'])
+
+base-commit: 792f2f0998697de4c9d4fad396d05de95208fd36
+-- 
+2.49.0
+

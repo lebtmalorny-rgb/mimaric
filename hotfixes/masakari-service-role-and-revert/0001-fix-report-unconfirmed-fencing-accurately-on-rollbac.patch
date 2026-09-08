@@ -1,0 +1,159 @@
+From 1218340934e0f92a1ae81af82cb2636d3d155f52 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Mon, 7 Sep 2026 20:18:32 +0300
+Subject: [PATCH] fix: report unconfirmed fencing accurately on rollback
+
+TaskFlow reverts a failed fencing task too, passing a Failure rather than a confirmed power-off result. Do not claim that a host remains powered off when node lookup or fencing failed. Distinguish historical confirmation from unknown current state; retain manual return and no automatic power-on.
+
+Execute, Ironic power operations and evacuation ordering are unchanged. Regression tests run real TaskFlow rollback before fencing and after confirmed fencing with an isolated API double. Local validation: 93 PowerOps and host-recovery tests passed. No live BMC or evacuation actions performed.
+---
+ masakari/engine/drivers/taskflow/powerops.py  | 16 +++-
+ .../engine/drivers/taskflow/test_powerops.py  | 90 +++++++++++++++++--
+ 2 files changed, 97 insertions(+), 9 deletions(-)
+
+diff --git a/masakari/engine/drivers/taskflow/powerops.py b/masakari/engine/drivers/taskflow/powerops.py
+index d15a130..e041f39 100644
+--- a/masakari/engine/drivers/taskflow/powerops.py
++++ b/masakari/engine/drivers/taskflow/powerops.py
+@@ -48,6 +48,20 @@ class IronicFenceTask(base.MasakariTask):
+         )
+ 
+     def revert(self, host_name, result, flow_failures):
++        # TaskFlow also reverts a failed execute(), passing a Failure instead
++        # of a fencing result. Neither case establishes current power state.
++        if (isinstance(result, dict) and
++                result.get("power_state") == "power off"):
++            LOG.critical(
++                "Fencing for host %s previously confirmed power off; "
++                "current power state is not rechecked during rollback. "
++                "No automatic power-on is attempted; manual inspection "
++                "is required before return to service", host_name
++            )
++            return
+         LOG.critical(
+-            "Fenced host %s remains powered off after flow failure", host_name
++            "Fencing for host %s failed or power-off was not confirmed; "
++            "current power state is unknown. No automatic power-on is "
++            "attempted; manual inspection is required before recovery "
++            "or return to service", host_name
+         )
+diff --git a/masakari/tests/unit/engine/drivers/taskflow/test_powerops.py b/masakari/tests/unit/engine/drivers/taskflow/test_powerops.py
+index b65ead4..bb51b69 100644
+--- a/masakari/tests/unit/engine/drivers/taskflow/test_powerops.py
++++ b/masakari/tests/unit/engine/drivers/taskflow/test_powerops.py
+@@ -14,6 +14,10 @@
+ 
+ from unittest import mock
+ 
++from taskflow import engines
++from taskflow.patterns import linear_flow
++from taskflow import task as taskflow_task
++
+ from masakari.engine.drivers.taskflow import powerops
+ from masakari import exception
+ from masakari import test
+@@ -94,21 +98,91 @@ class IronicFenceTaskTest(test.TestCase):
+         self.assertEqual([], self.events)
+ 
+     @mock.patch.object(powerops.ironic, "connection_from_conf")
+-    @mock.patch.object(powerops, "LOG")
+-    def test_revert_leaves_host_powered_off(self, log, connection_from_conf):
++    def test_revert_reports_previous_confirmation_not_current_power(
++        self, connection_from_conf
++    ):
+         task = powerops.IronicFenceTask(
+             self.context,
+             self.novaclient,
+             powerops_coordinator=self.coordinator,
+         )
+ 
+-        task.revert(
+-            "compute-01", {"power_state": "power off"}, flow_failures={}
++        result = vars(fakes.node("node-01", "compute-01", "power off"))
++        with self.assertLogs(powerops.LOG.logger, level="CRITICAL") as logs:
++            task.revert("compute-01", result, flow_failures={})
++
++        message = logs.records[0].getMessage()
++        self.assertIn("compute-01", message)
++        self.assertIn("previously confirmed power off", message)
++        self.assertIn("current power state is not rechecked", message)
++        connection_from_conf.assert_not_called()
++        self.assertEqual([], self.events)
++
++    @mock.patch.object(powerops.ironic, "connection_from_conf")
++    def test_failed_fencing_revert_does_not_claim_power_off(
++        self, connection_from_conf
++    ):
++        connection = fakes.connection([])
++        connection_from_conf.return_value = connection
++        fence = powerops.IronicFenceTask(
++            self.context, self.novaclient,
++            powerops_coordinator=self.coordinator,
+         )
++        flow = linear_flow.Flow("failed-fencing").add(fence)
+ 
+-        log.critical.assert_called_once_with(
+-            "Fenced host %s remains powered off after flow failure",
+-            "compute-01",
++        with self.assertLogs(powerops.LOG.logger, level="CRITICAL") as logs:
++            self.assertRaises(
++                powerops.ironic.FencingError,
++                engines.run, flow, store={"host_name": "compute-01"},
++            )
++
++        message = logs.records[0].getMessage()
++        self.assertIn("compute-01", message)
++        self.assertIn("power-off was not confirmed", message)
++        self.assertIn("current power state is unknown", message)
++        connection.baremetal.set_node_power_state.assert_not_called()
++        connection_from_conf.assert_called_once_with()
++
++    @mock.patch.object(powerops.ironic, "connection_from_conf")
++    def test_downstream_failure_revert_does_not_power_on(
++        self, connection_from_conf
++    ):
++        self.override_config("stable_off_observations", 2, "powerops")
++        connection = fakes.connection([
++            fakes.node("node-01", "compute-01", "power off")])
++        connection_from_conf.return_value = connection
++        fence = powerops.IronicFenceTask(
++            self.context, self.novaclient,
++            powerops_coordinator=self.coordinator,
+         )
++
++        def fail_after_fencing():
++            raise RuntimeError("downstream recovery failed")
++
++        flow = linear_flow.Flow("downstream-failure").add(
++            fence, taskflow_task.FunctorTask(fail_after_fencing))
++        with self.assertLogs(powerops.LOG.logger, level="CRITICAL") as logs:
++            self.assertRaises(
++                RuntimeError, engines.run, flow,
++                store={"host_name": "compute-01"},
++            )
++
++        self.assertIn("previously confirmed power off",
++                      logs.records[0].getMessage())
++        connection.baremetal.set_node_power_state.assert_not_called()
++        connection_from_conf.assert_called_once_with()
++
++    @mock.patch.object(powerops.ironic, "connection_from_conf")
++    def test_revert_with_unknown_result_does_not_claim_power_off(
++        self, connection_from_conf
++    ):
++        task = powerops.IronicFenceTask(self.context, self.novaclient)
++        for result in (None, {}, {"power_state": "power on"}):
++            with self.subTest(result=result):
++                with self.assertLogs(
++                    powerops.LOG.logger, level="CRITICAL"
++                ) as logs:
++                    task.revert("compute-01", result, flow_failures={})
++                self.assertIn("power-off was not confirmed",
++                              logs.records[0].getMessage())
+         connection_from_conf.assert_not_called()
+-        self.assertEqual([], self.events)
+
+base-commit: 4fcbe3da46d4ec6a231be10a933fd57e8856663f
+-- 
+2.49.0
+
