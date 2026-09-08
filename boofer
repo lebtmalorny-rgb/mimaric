@@ -274,5 +274,14 @@ print('HOST:', h.id, h.name, 'maintenance:', h.on_maintenance)
       print('LAST_ERROR_EMPTY:', not bool(n.last_error))
   PY
 
+####0809
+Состояние и PID контейнера — только чтение. Документация Podman:
 
+  sudo -n timeout 15s podman inspect --format 'status={{.State.Status}} pid={{.State.Pid}} error={{.State.Error}}' masakari_hostmonitor
+
+  Последние сообщения монитора:
+
+  sudo -n tail -n 100 /var/log/kolla/masakari/masakari-hostmonitor.log
+
+  Пришли вывод. Пока не запускаем сценарии питания, не делаем kill -9 и не перезагружаем контроллер. Сначала выясним состояние процесса; менять setuptools из-за этой ошибки не нужно.
 
