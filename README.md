@@ -80,3 +80,4 @@ API-наблюдения не доказывают отсутствие stale do
 и [запись исходного инцидента](docs/INCIDENT-2026-09-07-planned-off-live-migration.md).
 
 [Состав объединения и происхождение файлов](docs/REPOSITORY-CONSOLIDATION.md).
+[Результаты локальных проверок объединения](docs/REPOSITORY-VERIFICATION.md).
