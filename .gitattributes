@@ -1,1 +1,3 @@
+# Mailbox patches contain mandatory context spaces and the Git mail signature.
+# Keep their verified bytes; check the resulting component sources separately.
 *.patch -whitespace

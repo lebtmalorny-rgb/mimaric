@@ -1,0 +1,27 @@
+{
+  "baseline": "0809",
+  "archives": {
+    "kolla-ansible": {
+      "file": "kolla-ansible-enroll-ironic-patch-3_0809.zip",
+      "sha256": "b5958f14a09b1bdad4edc9c6b3dd092f4376b55dee9d5814fd2ad78fdffb1be9"
+    },
+    "mistral": {
+      "file": "mistral-integration-powerops-mistral-2025.1 _0809.zip",
+      "sha256": "3df7cd4afa9052251107335b0ec5771c2704ccf03894c7e6c1f34880a43daf0c"
+    },
+    "masakari": {
+      "file": "masakari-integration-powerops-masakari-2025.1_0809.zip",
+      "sha256": "0bbda50f9553b65a5757d7cc43ed47b4d2a8cf99641c4b9ce88a01d09f1bcde9"
+    }
+  },
+  "additional_patch": {
+    "file": "hotfixes/masakari-post-fence-nova-down/0001-fix-wait-for-Nova-down-after-confirmed-fencing.patch",
+    "sha256": "319e1814cd4ab42be9df0bb7007e9c3cc36d9f7cbbc396a1a0b7558dc50ee43c"
+  },
+  "horizon": {
+    "directory": "horizon",
+    "source_commit": "6f14ecdcaf4012eb1637f58c0ab88ec176c4adc4",
+    "compatible_with_0809": "not_verified"
+  },
+  "retired": ["planned-return-v2", "planned-return-kit-delivery"]
+}

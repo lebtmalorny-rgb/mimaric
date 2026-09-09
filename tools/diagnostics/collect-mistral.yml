@@ -1,0 +1,1094 @@
+---
+# Один автономный файл: ansible-playbook collect-mistral.yml
+# Запускать на операторе (ultra1-0) с рабочим OpenStack RC/clouds.yaml, НЕ через sudo.
+# На контроллерах: существующие SSH-ключи, Python 3.8+, sudo и rootful Podman.
+# Если sudo требует пароль: добавить -K. Проверка SSH host key не отключается.
+# Результат, как у collect_v2: artifacts/mistral-diag-XXXXXXXX.txt рядом с playbook.
+# Интернет, установка пакетов, отдельный inventory, роли и скрипты не нужны.
+# Нет фиксированных дат: по умолчанию журналы за последний час, два API-снимка.
+# Примеры необязательных параметров:
+#   -e '{"mistral_diag":{"lookback_minutes":120}}'
+#   -e '{"mistral_diag":{"execution_ids":["UUID"]}}'
+#   -e mistral_diag_output_parent=/path/to/artifacts
+# Для другого стенда измените mistral_diag_controllers и api_endpoints ниже.
+# Только чтение: никаких restart, db sync, purge, create/resume или команд питания.
+# PARTIAL означает неполный сбор, а COLLECTED — не доказательство здоровья облака.
+# Секреты маскируются, но отчёт остаётся конфиденциальным; проверьте перед передачей.
+- name: Prepare standalone Mistral diagnostics on the operator
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars:
+    mistral_diag_controllers:
+      - name: ultra1-6
+        fqdn: ultra1-6.ultra1.test.pvs.un.sbt
+        ip: 10.101.25.150
+      - name: ultra1-7
+        fqdn: ultra1-7.ultra1.test.pvs.un.sbt
+        ip: 10.101.25.151
+      - name: ultra1-8
+        fqdn: ultra1-8.ultra1.test.pvs.un.sbt
+        ip: 10.101.25.152
+    mistral_diag_defaults:
+      api_endpoints:
+        - http://10.101.25.42:8989/v2
+        - http://10.101.25.150:8989/v2
+        - http://10.101.25.151:8989/v2
+        - http://10.101.25.152:8989/v2
+      execution_ids: []
+      lookback_minutes: 60
+      api_timeout: 10
+      command_timeout: 15
+      total_timeout: 180
+    mistral_diag_source: |
+      {% raw %}
+      """Standalone bounded Mistral diagnostics, Python 3.8+ standard library."""
+      import argparse
+      import concurrent.futures
+      import csv
+      import datetime as dt
+      import gzip
+      import io
+      import ipaddress
+      import json
+      import os
+      from pathlib import Path
+      import re
+      import selectors
+      import signal
+      import socket
+      import stat
+      import subprocess
+      import sys
+      import threading
+      import time
+      from urllib.parse import urlsplit
+      import uuid
+
+      UTC = dt.timezone.utc
+      MASK = "[REDACTED]"
+      SECRET = re.compile(r"password|passwd|secret|token|authorization|cookie|private.?key|api.?key|access.?key", re.I)
+      NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,252}$")
+      CONTAINER = re.compile(r"^(?:mistral(?:[_-][A-Za-z0-9_.-]+)?|haproxy|rabbitmq|mariadb|proxysql|memcached)$")
+      META = "\nMISTRAL_DIAG_METRICS "
+      EXEC_FIELDS = "id,workflow_name,state,state_info,created_at,updated_at"
+      TASK_FIELDS = "id,name,workflow_execution_id,state,state_info,created_at,updated_at"
+      STAMP = re.compile(r"\b(\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:[.,]\d+)?(?:Z|[+-]\d\d:\d\d)?)")
+      APACHE = re.compile(r"\[(\d\d/[A-Za-z]{3}/\d{4}:\d\d:\d\d:\d\d [+-]\d{4})\]")
+
+      def now():
+          return dt.datetime.now(UTC)
+
+      def iso(value):
+          return value.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+      def parse_time(value):
+          parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00").replace(",", "."))
+          if parsed.tzinfo is None:
+              raise ValueError("Timestamp needs Z or UTC offset")
+          return parsed.astimezone(UTC)
+
+      def redact(value, secrets=()):
+          text = str(value)
+          for secret in sorted(secrets, key=len, reverse=True):
+              if secret:
+                  text = text.replace(secret, MASK)
+          if text.lstrip().startswith(("{", "[")):
+              try:
+                  obj = json.loads(text)
+              except (ValueError, RecursionError):
+                  pass
+              else:
+                  return json.dumps(sanitize(obj, secrets), ensure_ascii=False)
+          # Opaque payloads in prefixed log records may contain unnamed secrets.
+          # Decode their complete JSON value; for malformed/multiline values,
+          # conservatively drop the remainder of that timestamped log record.
+          opaque = r"(?:input|output|result|published(?:_global)?|runtime_context|env(?:ironment)?|definition|payload|user_data|driver_info)"
+          sensitive = r"[\w.-]*(?:password|passwd|secret|token|api.?key|access.?key)[\w.-]*"
+          pattern = re.compile(r"(?i)([\"']?(?:" + opaque + "|" + sensitive + r")[\"']?\s*[:=]\s*)(?=[\[{])(?!\[REDACTED\])")
+          pos = 0
+          while True:
+              match = pattern.search(text, pos)
+              if not match:
+                  break
+              start = match.end()
+              try:
+                  _, size = json.JSONDecoder().raw_decode(text[start:])
+                  end = start + size
+              except (ValueError, RecursionError):
+                  next_record = re.search(r"\n[^\n]{0,100}\b\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d", text[start:])
+                  end = start + next_record.start() if next_record else len(text)
+              text = text[:start] + '"' + MASK + '"' + text[end:]
+              pos = start + len(MASK) + 2
+          text = re.sub(r"-----BEGIN [^-]*PRIVATE KEY-----.*?(?:-----END [^-]*PRIVATE KEY-----|\Z)",
+                        MASK, text, flags=re.S)
+          text = re.sub(r"(?i)([a-z][a-z0-9+.-]*://)[^\s/@]+:[^\s/@]+@", r"\1[REDACTED]@", text)
+          text = re.sub(r"(?im)((?:x-auth-token|x-subject-token|authorization|cookie|set-cookie)[\"']?\s*:\s*)[^\n]*",
+                        lambda m: m.group(1) + MASK, text)
+          key = r"(?:" + sensitive + "|" + opaque + ")"
+          text = re.sub(r"(?i)(" + key + r"[\"']?\s*[:=]\s*)\\+[\"'][^\n]*",
+                        lambda m: m.group(1) + MASK, text)
+          value_re = r'''(?:"(?:\\[^\n]|[^"\\\n])*(?:"|\\?(?=\n|\Z))|'(?:\\[^\n]|[^'\\\n])*(?:'|\\?(?=\n|\Z))|[^"'\s,;&}\]\n]+)'''
+          text = re.sub(r"(?i)([\"']?" + key + r"[\"']?\s*[:=]\s*)" + value_re,
+                        lambda m: m.group(1) + '"' + MASK + '"', text)
+          text = re.sub(r"(?i)(--" + key + r"\s+)" + value_re, lambda m: m.group(1) + MASK, text)
+          return text
+
+      def sanitize(value, secrets=()):
+          if isinstance(value, dict):
+              return {str(k): MASK if SECRET.search(str(k)) or str(k).lower() in
+                      {"env", "environment", "input", "output", "definition", "user_data", "driver_info",
+                       "result", "published", "published_global", "runtime_context", "payload"}
+                      else sanitize(v, secrets) for k, v in value.items()}
+          if isinstance(value, list):
+              return [sanitize(v, secrets) for v in value]
+          return redact(value, secrets) if isinstance(value, str) else value
+
+      def validate(raw):
+          cfg = dict(api_endpoints=["http://10.101.25.%s:8989/v2" % n for n in (42, 150, 151, 152)],
+                     execution_ids=[], lookback_minutes=60, since="", until="", log_timezone="+00:00",
+                     api_timeout=10, command_timeout=15, total_timeout=180,
+                     max_bytes=262144, max_total_bytes=8388608, max_log_bytes=131072,
+                     max_scan_bytes=1048576, max_logs=24, max_executions=10, max_details=3,
+                     max_tasks=10, log_root="/var/log/kolla", rabbit_vhost="/")
+          if not isinstance(raw, dict) or set(raw) - set(cfg):
+              raise ValueError("Unknown diagnostic option")
+          cfg.update(raw)
+          for key, upper in (("api_timeout", 30), ("command_timeout", 60), ("total_timeout", 900),
+                             ("lookback_minutes", 10080), ("max_bytes", 1048576),
+                             ("max_total_bytes", 16777216), ("max_log_bytes", 1048576),
+                             ("max_scan_bytes", 8388608), ("max_logs", 64),
+                             ("max_executions", 50), ("max_details", 5), ("max_tasks", 30)):
+              if isinstance(cfg[key], bool) or not isinstance(cfg[key], int) or not 0 < cfg[key] <= upper:
+                  raise ValueError("Invalid bounded integer: " + key)
+          endpoints = cfg["api_endpoints"]
+          if not isinstance(endpoints, list) or not 1 <= len(endpoints) <= 8:
+              raise ValueError("Need 1..8 trusted API endpoints")
+          for endpoint in endpoints:
+              u = urlsplit(endpoint)
+              if (u.scheme not in ("http", "https") or u.username or u.password or
+                      u.query or u.fragment or u.path.rstrip("/") != "/v2"):
+                  raise ValueError("Endpoint must be trusted http(s)://IP:port/v2 without credentials")
+              ipaddress.ip_address(u.hostname)
+              if not u.port or not 0 < u.port < 65536:
+                  raise ValueError("Endpoint needs a valid explicit port")
+          cfg["api_endpoints"] = list(dict.fromkeys(e.rstrip("/") for e in endpoints))
+          if not isinstance(cfg["execution_ids"], list) or len(cfg["execution_ids"]) > cfg["max_details"]:
+              raise ValueError("Too many execution UUIDs")
+          cfg["execution_ids"] = list(dict.fromkeys(str(uuid.UUID(str(v))) for v in cfg["execution_ids"]))
+          if not re.fullmatch(r"[+-](?:0\d|1[0-4]):[0-5]\d", cfg["log_timezone"]):
+              raise ValueError("Invalid log_timezone")
+          cfg["since"] = iso(parse_time(cfg["since"])) if cfg["since"] else iso(now() - dt.timedelta(minutes=cfg["lookback_minutes"]))
+          if cfg["until"]:
+              cfg["until"] = iso(parse_time(cfg["until"]))
+              if parse_time(cfg["until"]) <= parse_time(cfg["since"]):
+                  raise ValueError("until must be later than since")
+          if not isinstance(cfg["log_root"], str) or not os.path.isabs(cfg["log_root"]):
+              raise ValueError("log_root must be absolute")
+          if not isinstance(cfg["rabbit_vhost"], str) or len(cfg["rabbit_vhost"]) > 255 or any(c in cfg["rabbit_vhost"] for c in "\r\n\x00"):
+              raise ValueError("Invalid RabbitMQ vhost")
+          return cfg
+
+      def run(argv, timeout, cap, stdin=None, discard_stderr=False):
+          # Only collector-owned children are terminated on deadline. No service PID.
+          start = time.monotonic()
+          data, state, process = bytearray(), "ok", None
+          try:
+              process = subprocess.Popen(argv, stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
+                                         stdout=subprocess.PIPE,
+                                         stderr=subprocess.DEVNULL if discard_stderr else subprocess.STDOUT,
+                                         start_new_session=True)
+              if stdin is not None:
+                  process.stdin.write(stdin.encode())
+                  process.stdin.close()
+              with selectors.DefaultSelector() as selector:
+                  selector.register(process.stdout, selectors.EVENT_READ)
+                  while selector.get_map():
+                      remaining = timeout - (time.monotonic() - start)
+                      if remaining <= 0:
+                          state = "timeout"
+                          break
+                      for key, _ in selector.select(min(remaining, .1)):
+                          chunk = os.read(key.fileobj.fileno(), min(65536, cap + 1 - len(data)))
+                          if chunk:
+                              data.extend(chunk)
+                          else:
+                              selector.unregister(key.fileobj)
+                      if len(data) > cap:
+                          state = "output_limit"
+                          break
+                  if state == "ok":
+                      try:
+                          process.wait(timeout=max(.01, timeout - (time.monotonic() - start)))
+                      except subprocess.TimeoutExpired:
+                          state = "timeout"
+          except FileNotFoundError:
+              state = "missing_command"
+          except OSError:
+              state = "os_error"
+          finally:
+              if process:
+                  if state != "ok":
+                      try:
+                          os.killpg(process.pid, signal.SIGKILL)
+                      except ProcessLookupError:
+                          pass
+                  process.wait()
+                  process.stdout.close()
+          rc = process.returncode if process else None
+          if state == "ok" and rc:
+              state = "error"
+          raw = bytes(data[:cap])
+          partial = bool(raw) and not raw.endswith(b"\n") and state != "ok"
+          if partial:
+              raw = raw.rpartition(b"\n")[0]
+          return dict(status=state, rc=rc, duration_seconds=round(time.monotonic() - start, 3),
+                      truncated=len(data) > cap or partial, output=raw.decode("utf-8", "replace"))
+
+      def probe(cfg, endpoint, path, token):
+          started = iso(now())
+          # Do not follow redirects or send a scoped token through environment proxies.
+          argv = ["curl", "-q", "--noproxy", "*", "-sS", "--connect-timeout", "3",
+                  "--max-time", str(cfg["api_timeout"]), "-H", "@-", "-D", "-", "-w",
+                  META + "%{http_code} %{time_connect} %{time_starttransfer} %{time_total}\n",
+                  endpoint + "/" + path]
+          result = run(argv, cfg["api_timeout"] + 2, cfg["max_bytes"], stdin="X-Auth-Token: " + token + "\n")
+          row = {k: v for k, v in result.items() if k != "output"}
+          row.update(name="GET " + path, endpoint=endpoint, path=path, started_at=started,
+                     ended_at=iso(now()), http_status=None, request_id=None)
+          payload, marker, metrics = result["output"].rpartition(META)
+          if marker:
+              try:
+                  status, connect, first, total = metrics.strip().split()
+                  row.update(http_status=int(status) or None, connect_seconds=float(connect),
+                             first_byte_seconds=float(first), total_seconds=float(total))
+              except ValueError:
+                  row["status"] = "metrics_parse_error"
+          else:
+              payload = result["output"]
+          # curl reports its own deadline as exit 28 before our outer watchdog fires.
+          if result["rc"] == 28:
+              row["status"] = "timeout"
+          headers, separator, body = payload.partition("\r\n\r\n")
+          if not separator:
+              headers, separator, body = payload.partition("\n\n")
+          if separator:
+              for line in headers.splitlines():
+                  key, _, value = line.partition(":")
+                  if key.lower() in ("x-openstack-request-id", "x-request-id"):
+                      row["request_id"] = value.strip()
+                  elif key.lower() in ("date", "server", "x-backend-server"):
+                      row[key.lower()] = value.strip()
+          else:
+              body = payload
+          if row["status"] == "ok" and row["http_status"] != 200:
+              row["status"] = "http_error"
+          if row["status"] == "ok":
+              try:
+                  raw_data = json.loads(body)
+                  resource = path.split("?",1)[0]
+                  if resource == "executions" or resource == "tasks" or resource == "workflows":
+                      fields = EXEC_FIELDS if resource == "executions" else TASK_FIELDS if resource == "tasks" else "id,name"
+                      if not isinstance(raw_data,dict) or not isinstance(raw_data.get(resource),list):
+                          raise ValueError("Invalid resource list")
+                      items = raw_data[resource]
+                      if any(not isinstance(item,dict) or not isinstance(item.get("id"),str) for item in items):
+                          raise ValueError("Invalid resource row")
+                      row["data"] = {resource: [{k:item[k] for k in fields.split(",") if k in item} for item in items]}
+                  elif resource.startswith("executions/"):
+                      if not isinstance(raw_data,dict) or raw_data.get("id") != resource.split("/")[1]:
+                          raise ValueError("Invalid execution identity")
+                      row["data"] = {k:raw_data[k] for k in EXEC_FIELDS.split(",") if k in raw_data}
+                  else:
+                      if not isinstance(raw_data,dict) or raw_data.get("name") != "std.noop":
+                          raise ValueError("Invalid action identity")
+                      row["data"] = {"name": raw_data["name"]}
+              except ValueError:
+                  row["status"] = "json_parse_error"
+          if row["status"] != "ok":
+              row["error_excerpt"] = redact(body, [token])[:2000]
+          # No raw response headers, input/output payloads or token-bearing argv.
+          return sanitize(row, [token])
+
+      def api(cfg, previous=None):
+          deadline = time.monotonic() + cfg["total_timeout"]
+          payload_remaining = cfg["max_total_bytes"]
+          budget_lock = threading.Lock()
+          data = dict(kind="api", started_at=iso(now()), checks=[], selected_execution_ids=[],
+                      snapshot="after" if previous else "before")
+          selected = list(cfg["execution_ids"])
+          if previous:
+              try:
+                  old = json.loads(Path(previous).read_text())["report"]
+                  old = json.loads(old) if isinstance(old, str) else old
+                  old_ids = old.get("selected_execution_ids", [])
+                  if not isinstance(old_ids, list) or len(old_ids) > cfg["max_details"]:
+                      raise ValueError("Invalid previous selection")
+                  selected += [str(uuid.UUID(str(v))) for v in old_ids]
+              except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                  data["checks"].append(dict(name="previous_snapshot", status="invalid_previous_snapshot"))
+          selected = list(dict.fromkeys(selected))[:cfg["max_details"]]
+          auth = run(["openstack", "token", "issue", "-f", "value", "-c", "id"],
+                     min(25, cfg["total_timeout"]), 16384, discard_stderr=True)
+          token = auth["output"].strip()
+          if auth["status"] != "ok" or not token or not re.fullmatch(r"[A-Za-z0-9_.~+/=-]+", token):
+              data["checks"].append(dict(name="authentication", status="authentication_failed",
+                                         reason=auth["status"], rc=auth["rc"],
+                                         duration_seconds=auth.get("duration_seconds"),
+                                         note="No valid token obtained; API probes skipped. Controller evidence is still collected."))
+              data["selected_execution_ids"] = selected
+              data["ended_at"] = iso(now())
+              return data
+          data["checks"].append(dict(name="authentication", status="ok", duration_seconds=auth.get("duration_seconds")))
+          listing_path = "executions?limit=%d&sort_keys=created_at&sort_dirs=desc&fields=%s" % (cfg["max_executions"], EXEC_FIELDS)
+          def guarded_probe(endpoint, path):
+              nonlocal payload_remaining
+              with budget_lock:
+                  cap = min(cfg["max_bytes"], payload_remaining)
+                  if cap < 1024 or time.monotonic() + cfg["api_timeout"] + 2 > deadline:
+                      return dict(name="GET "+path, endpoint=endpoint, path=path, status="skipped_budget")
+                  # Reserve full capture capacity before parallel requests. Metadata
+                  # is a separate fixed overhead; no speculative unbounded buffers.
+                  payload_remaining -= cap
+              return probe(dict(cfg, max_bytes=cap), endpoint, path, token)
+          def per_endpoint(endpoint):
+              rows = []
+              for path in ("actions/std.noop", "workflows?limit=1&fields=id,name", listing_path):
+                  rows.append(guarded_probe(endpoint, path))
+              return rows
+          with concurrent.futures.ThreadPoolExecutor(max_workers=4) as workers:
+              for rows in workers.map(per_endpoint, cfg["api_endpoints"]):
+                  data["checks"].extend(rows)
+          healthy = []
+          for row in data["checks"]:
+              if row.get("path") != listing_path or row["status"] != "ok":
+                  continue
+              body = row.get("data")
+              rows = body.get("executions") if isinstance(body,dict) else None
+              if not isinstance(rows, list):
+                  row["status"] = "invalid_execution_list"
+                  continue
+              healthy.append(row["endpoint"])
+              row["limited_snapshot"] = len(rows) >= cfg["max_executions"]
+              for execution in rows:
+                  if not isinstance(execution, dict):
+                      row["status"] = "invalid_execution_list"
+                      continue
+                  if str(execution.get("workflow_name", "")).startswith("power_ops."):
+                      try:
+                          ident = str(uuid.UUID(str(execution.get("id"))))
+                      except ValueError:
+                          continue
+                      if ident not in selected and len(selected) < cfg["max_details"]:
+                          selected.append(ident)
+          data["selected_execution_ids"] = selected
+          # Exact IDs are read even if list discovery fails. Prefer a responsive
+          # replica; otherwise preserve evidence from the first configured endpoint.
+          endpoint = healthy[0] if healthy else cfg["api_endpoints"][0]
+          data["detail_endpoint"] = endpoint
+          for ident in selected:
+              for path in ("executions/" + ident + "?fields=" + EXEC_FIELDS,
+                           "tasks?workflow_execution_id=%s&limit=%d&fields=%s" % (ident, cfg["max_tasks"], TASK_FIELDS)):
+                  data["checks"].append(guarded_probe(endpoint, path))
+          data["payload_capacity_reserved_bytes"] = cfg["max_total_bytes"] - payload_remaining
+          data["ended_at"] = iso(now())
+          return sanitize(data, [token])
+
+      # Only whitelisted, non-secret settings are emitted by this subprocess.
+      CONFIG_PROBE = r'''
+      import configparser,json,os,signal
+      from urllib.parse import urlsplit
+      signal.signal(signal.SIGALRM, lambda *_: os._exit(124)); signal.alarm(8)
+      c=configparser.ConfigParser(interpolation=None)
+      if not c.read("/etc/mistral/mistral.conf"): raise RuntimeError("Missing Mistral config")
+      allowed={
+        "DEFAULT": ["host","debug","rpc_response_timeout"],
+        "api": ["host","port","enable_ssl","api_workers"],
+        "database": ["max_pool_size","max_overflow","pool_timeout","connection_recycle_time","max_retries","retry_interval"],
+        "keystone_authtoken": ["auth_type","region_name","interface","http_connect_timeout","http_request_max_retries","memcache_use_advanced_pool","memcache_pool_socket_timeout","memcache_pool_conn_get_timeout","token_cache_time"],
+        "oslo_messaging_rabbit": ["heartbeat_timeout_threshold","heartbeat_rate","rabbit_retry_interval","rabbit_retry_backoff","rabbit_interval_max","rabbit_quorum_queue"],
+        "powerops": ["enabled","host_lock_timeout","power_timeout","poll_interval","stable_observations","vm_action_timeout","service_timeout"]}
+      out={s:{k:c.get(s,k,fallback="<not set>") for k in keys} for s,keys in allowed.items()}
+      for section,key in [("database","connection"),("DEFAULT","transport_url"),("coordination","backend_url"),("powerops","coordination_url"),("keystone_authtoken","auth_url")]:
+        value=c.get(section,key,fallback="")
+        u=urlsplit(value)
+        out.setdefault(section,{})[key+"_endpoint"]={"scheme":u.scheme,"hostport":u.netloc.rsplit("@",1)[-1],"path":u.path}
+      # Keep safe labels as values so generic secret-key masking does not remove
+      # the entire keystone_authtoken section or the numeric token_cache_time.
+      out["keystone_http_and_cache"]=[{"section":"keystone_authtoken","option":k,"value":v}
+                                     for k,v in out.pop("keystone_authtoken").items()]
+      print(json.dumps(out))
+      '''
+
+      DATABASE_PROBE = r'''
+      # database_probe: credentials never enter argv, stdout, processlist Info or environment.
+      import configparser,json,os,signal,time
+      def expired(*_):
+        print(json.dumps({"status":"timeout","note":"database probe deadline"}),flush=True)
+        os._exit(124)
+      signal.signal(signal.SIGALRM, expired); signal.alarm(12)
+      c=configparser.ConfigParser(interpolation=None)
+      if not c.read("/etc/mistral/mistral.conf"): raise RuntimeError("Missing Mistral config")
+      from sqlalchemy import create_engine
+      from sqlalchemy.pool import NullPool
+      from sqlalchemy.engine import make_url
+      raw=c.get("database","connection")
+      url=make_url(raw)
+      if url.get_backend_name() != "mysql":
+        print(json.dumps({"status":"unsupported","note":"Only MySQL/MariaDB read probes are supported"})); os._exit(0)
+      result={"status":"ok","checks":[]}
+      statements=[
+        ("connection","SELECT 1 AS ok, @@hostname AS database_server"),
+        ("global_status","SHOW GLOBAL STATUS WHERE Variable_name IN ('Threads_connected','Threads_running','Max_used_connections','Aborted_connects','Aborted_clients','Slow_queries','wsrep_cluster_size','wsrep_cluster_status','wsrep_connected','wsrep_ready','wsrep_local_state_comment','wsrep_flow_control_paused','wsrep_local_recv_queue')"),
+        ("limits","SHOW VARIABLES WHERE Variable_name IN ('max_connections','connect_timeout','wait_timeout','innodb_lock_wait_timeout')"),
+        ("processes_no_sql_text","SELECT ID, USER, HOST, DB, COMMAND, TIME, STATE FROM information_schema.PROCESSLIST ORDER BY TIME DESC LIMIT 30")]
+      engine=None
+      try:
+        engine=create_engine(raw,poolclass=NullPool,hide_parameters=True,connect_args={"connect_timeout":4})
+        with engine.connect() as connection:
+          for name,statement in statements:
+            started=time.monotonic()
+            try:
+              rows=connection.exec_driver_sql(statement)
+              result["checks"].append({"name":name,"status":"ok","seconds":round(time.monotonic()-started,3),"rows":[dict(zip(rows.keys(),r)) for r in rows.fetchmany(40)]})
+            except Exception as exc:
+              result["status"]="partial"
+              result["checks"].append({"name":name,"status":"error","type":type(exc).__name__})
+      except Exception as exc:
+        result.update(status="error",error_type=type(exc).__name__)
+      print(json.dumps(result,default=str),flush=True)
+      # No dispose retry can extend the diagnostic subprocess beyond the alarm.
+      if engine is not None: engine.dispose()
+      '''
+
+      def read_log(path, cfg):
+          row = dict(name=str(path), status="ok", truncated=False, output="")
+          try:
+              fd = os.open(str(path), os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+              with os.fdopen(fd, "rb") as source:
+                  info = os.fstat(source.fileno())
+                  if not stat.S_ISREG(info.st_mode):
+                      raise ValueError("Not a regular log")
+                  cap = cfg["max_scan_bytes"]
+                  if str(path).endswith(".gz"):
+                      with gzip.GzipFile(fileobj=source) as compressed:
+                          raw = compressed.read(cap + 1)
+                      row["scan_truncated"] = len(raw) > cap
+                      raw = raw[:cap]
+                  else:
+                      source.seek(max(0, info.st_size - cap))
+                      raw = source.read(cap)
+                      row["scan_truncated"] = info.st_size > cap
+                      if row["scan_truncated"]:
+                          raw = raw.partition(b"\n")[2]
+              if raw and not raw.endswith(b"\n"):
+                  raw = raw.rpartition(b"\n")[0]
+                  row["truncated"] = True
+              since = parse_time(cfg["since"])
+              until = parse_time(cfg["until"]) if cfg["until"] else now()
+              lines, active, stamped = [], False, False
+              for line in raw.decode("utf-8", "replace").splitlines(keepends=True):
+                  match, apache, stamp = STAMP.search(line), APACHE.search(line), None
+                  try:
+                      if match:
+                          value = match.group(1)
+                          if not re.search(r"(?:Z|[+-]\d\d:\d\d)$", value):
+                              value += cfg["log_timezone"]
+                          stamp = parse_time(value)
+                      elif apache:
+                          stamp = dt.datetime.strptime(apache.group(1), "%d/%b/%Y:%H:%M:%S %z").astimezone(UTC)
+                  except ValueError:
+                      pass
+                  if stamp:
+                      stamped, active = True, since <= stamp <= until
+                  if active:
+                      lines.append(line)
+              text = "".join(lines) if stamped else raw.decode("utf-8", "replace")
+              if not stamped:
+                  row["status"] = "unparsed_time"
+              clean = redact(text).encode()
+              row["truncated"] |= len(clean) > cfg["max_log_bytes"]
+              row["output"] = clean[-cfg["max_log_bytes"]:].decode("utf-8", "ignore")
+          except (OSError, ValueError, EOFError) as exc:
+              row.update(status="read_error", output=type(exc).__name__)
+          return row
+
+      def haproxy_socket_paths(mounts):
+          if not isinstance(mounts,list):
+              return []
+          paths = []
+          for mount in mounts:
+              if not isinstance(mount,dict):
+                  continue
+              source, destination = mount.get("Source",""), mount.get("Destination","").rstrip("/")
+              if destination == "/var/lib/kolla/haproxy" and os.path.isabs(source) and source != "/":
+                  paths.append(str(Path(source) / "haproxy.sock"))
+          return paths
+
+      def haproxy_evidence(cfg, config_root=Path("/etc/kolla/haproxy"), socket_paths=None, deadline=None):
+          result = dict(name="haproxy_config_and_stats", status="ok", config=[], stats=[])
+          deadline = time.monotonic() + 10 if deadline is None else deadline
+          if time.monotonic() >= deadline:
+              result["status"] = "skipped_budget"
+              return result
+          paths = [Path(config_root) / "haproxy.cfg"]
+          paths += sorted((Path(config_root) / "services.d").glob("*mistral*.cfg"))[:8]
+          sockets = list(socket_paths or []) + ["/var/lib/kolla/haproxy/haproxy.sock", "/run/haproxy/admin.sock"]
+          found = False
+          for path in paths:
+              if time.monotonic() >= deadline:
+                  result["status"] = "skipped_budget"
+                  break
+              if not path.is_file() or path.is_symlink():
+                  continue
+              found = True
+              try:
+                  with path.open() as stream:
+                      text = stream.read(cfg["max_bytes"] + 1)
+                  if len(text) > cfg["max_bytes"]:
+                      result["status"] = "config_truncated"
+                  section = ""
+                  for line in text[:cfg["max_bytes"]].splitlines():
+                      words = line.split()
+                      if not words or words[0].startswith("#"):
+                          continue
+                      if line[0] not in " \t":
+                          section = " ".join(words[:2]).lower()
+                      if words[:2] == ["stats", "socket"] and len(words) > 2 and words[2].startswith("/"):
+                          sockets.insert(0, words[2])
+                      if ("mistral" in section and words[0] in
+                          {"listen","frontend","backend","bind","mode","balance","option","timeout","server","default-server","maxconn","default_backend","use_backend"}
+                          or section == "defaults" and words[0] in {"timeout","maxconn"}):
+                          result["config"].append(redact(line.strip()))
+              except OSError:
+                  result["status"] = "config_read_error"
+          if not found:
+              result["status"] = "config_unavailable"
+          result["stats_status"] = "socket_unavailable"
+          for path in dict.fromkeys(sockets):
+              if time.monotonic() >= deadline:
+                  result["stats_status"] = "skipped_budget"
+                  break
+              try:
+                  if not stat.S_ISSOCK(os.stat(path).st_mode):
+                      continue
+                  with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                      socket_deadline = min(deadline, time.monotonic() + 3)
+                      sock.settimeout(max(.001,min(2,socket_deadline-time.monotonic())))
+                      sock.connect(path)
+                      sock.sendall(b"show stat\n")
+                      sock.shutdown(socket.SHUT_WR)
+                      buf = bytearray()
+                      while len(buf) <= cfg["max_bytes"]:
+                          remaining = socket_deadline - time.monotonic()
+                          if remaining <= 0:
+                              raise TimeoutError()
+                          sock.settimeout(min(2, remaining))
+                          chunk = sock.recv(min(65536, cfg["max_bytes"] + 1 - len(buf)))
+                          if not chunk:
+                              break
+                          buf.extend(chunk)
+                  result["stats_status"] = "truncated" if len(buf) > cfg["max_bytes"] else "ok"
+                  text = buf[:cfg["max_bytes"]].decode("utf-8", "replace").lstrip("# ")
+                  for row in csv.DictReader(io.StringIO(text)):
+                      if "mistral" in str(row.get("pxname", "")).lower():
+                          result["stats"].append({k: row.get(k) for k in
+                            ("pxname","svname","status","scur","smax","slim","qcur","qmax","econ","eresp","wretr","wredis","chkfail","check_status","check_duration","lastchg","downtime","stot","hrsp_5xx")})
+                  result["socket"] = path
+                  if not result["stats"] and result["stats_status"] == "ok":
+                      result["stats_status"] = "no_mistral_rows"
+                  break
+              except (OSError, ValueError, TimeoutError):
+                  result["stats_status"] = "socket_error"
+          if result["stats_status"] != "ok" and result["status"] == "ok":
+              result["status"] = result["stats_status"]
+          return result
+
+      def host(cfg):
+          started, deadline = now(), time.monotonic() + cfg["total_timeout"]
+          cfg = dict(cfg, until=cfg["until"] or iso(now()))
+          data = dict(kind="controller", started_at=iso(started), window={k: cfg[k] for k in ("since","until","log_timezone")},
+                      checks=[], logs=[])
+          remaining = cfg["max_total_bytes"]
+          secrets = [v for k,v in os.environ.items() if SECRET.search(k) and len(v) >= 8]
+          def command(name, argv):
+              nonlocal remaining
+              if time.monotonic() >= deadline or remaining <= 0:
+                  row = dict(status="skipped_budget", output="", truncated=False)
+              else:
+                  available = min(cfg["command_timeout"], max(.01, deadline-time.monotonic()))
+                  if argv[:2] == ["podman","exec"]:
+                      # In-container watchdog also kills collector-owned exec children.
+                      # Killing only the outer Podman client would leave them running.
+                      if available <= 3:
+                          row = dict(name=name,status="skipped_budget",output="",truncated=False,
+                                     note="Insufficient budget for in-container timeout and cleanup")
+                          data["checks"].append(row)
+                          return row
+                      # GNU timeout treats zero as disabled; never round to zero.
+                      inner = max(.1, available - 3)
+                      argv = argv[:3] + ["timeout","-k","1s",str(round(inner,1))+"s"] + argv[3:]
+                  row = run(argv, available,
+                            min(cfg["max_bytes"], remaining))
+              row["name"] = name
+              # Text output is redacted explicitly; generic sanitize deliberately drops
+              # opaque workflow input/output fields and is not used on check envelopes.
+              row["output"] = redact(row.get("output", ""), secrets)
+              remaining -= len(row["output"].encode())
+              data["checks"].append(row)
+              return row
+          for name, argv in [
+              ("hostname", ["hostname","-f"]), ("utc_time", ["date","-u","+%Y-%m-%dT%H:%M:%SZ"]),
+              ("uptime", ["uptime"]), ("memory", ["free","-m"]), ("disk", ["df","-h"]),
+              ("processes_no_arguments", ["ps","-eo","pid,ppid,stat,etime,pcpu,pmem,comm"]),
+              ("time_sync", ["timedatectl","show","--property=NTPSynchronized","--property=Timezone"]),
+              ("tcp_listeners", ["ss","-lnt"]),
+              ("podman_version", ["podman","--version"])]:
+              command(name, argv)
+          sockets = command("dependency_tcp_connections", ["ss","-nt"])
+          sockets["output"] = "\n".join(line for line in sockets["output"].splitlines()
+                                        if re.search(r":(?:8989|3306|5671|5672|5000|11211)\b", line) or line.startswith("State"))
+          containers = command("containers", ["podman","ps","-a","--format","{{.Names}}\t{{.Image}}\t{{.Status}}"])
+          names = [line.split("\t")[0] for line in containers["output"].splitlines() if CONTAINER.fullmatch(line.split("\t")[0])]
+          if len(names) > 16:
+              containers["truncated"] = True
+          names = names[:16]
+          for name in names:
+              command("container_state_" + name, ["podman","inspect","--format",
+                      "name={{.Name}} image_id={{.Image}} status={{.State.Status}} pid={{.State.Pid}} "
+                      "exit={{.State.ExitCode}} oom={{.State.OOMKilled}} started={{.State.StartedAt}} finished={{.State.FinishedAt}}", name])
+              if name.startswith("mistral"):
+                  command("container_processes_" + name, ["podman","top",name,"pid","ppid","state","etime","comm"])
+          if names:
+              command("container_resource_snapshot", ["podman","stats","--no-stream","--format",
+                      "{{.Name}}\t{{.CPU}}\t{{.MemUsage}}\t{{.PIDs}}"] + names)
+          mistral = [n for n in names if n.startswith("mistral")]
+          rpc_vhost = cfg["rabbit_vhost"]
+          for name in mistral:
+              row = command("config_" + name, ["podman","exec",name,"/var/lib/kolla/venv/bin/python","-B","-c",CONFIG_PROBE])
+              try:
+                  public = json.loads(row["output"])
+                  path = public.get("DEFAULT",{}).get("transport_url_endpoint",{}).get("path","")
+                  if path:
+                      from urllib.parse import unquote
+                      rpc_vhost = unquote(path[1:]) or "/"
+              except (ValueError, AttributeError):
+                  pass
+          if mistral:
+              preferred = next((n for n in mistral if n in ("mistral_api","mistral-api")), mistral[0])
+              row = command("database_probe", ["podman","exec",preferred,"/var/lib/kolla/venv/bin/python","-B","-c",DATABASE_PROBE])
+              try:
+                  if json.loads(row["output"]).get("status") != "ok":
+                      row["status"] = "database_probe_partial"
+              except (ValueError, AttributeError):
+                  row["status"] = "database_probe_invalid"
+          else:
+              data["checks"].append(dict(name="database_probe", status="no_mistral_container",
+                                         output="No local Mistral container/config for SQL credentials"))
+          if "rabbitmq" in names:
+              for label, argv in [
+                ("rabbit_running", ["rabbitmq-diagnostics","-q","check_running"]),
+                ("rabbit_alarms", ["rabbitmq-diagnostics","-q","check_local_alarms"]),
+                ("rabbit_cluster", ["rabbitmqctl","cluster_status"]),
+                ("rabbit_vhosts", ["rabbitmqctl","list_vhosts","name"]),
+                ("rabbit_queues", ["rabbitmqctl","list_queues","-p",rpc_vhost,"name","consumers","messages_ready","messages_unacknowledged","state"])]:
+                  native_timeout = str(max(1, int(min(cfg["command_timeout"], deadline-time.monotonic())) - 4))
+                  argv = argv[:1] + ["--timeout",native_timeout] + argv[1:]
+                  row = command(label, ["podman","exec","rabbitmq"] + argv)
+                  if label == "rabbit_queues":
+                      row["vhost"] = rpc_vhost
+                      if row["status"] == "ok":
+                          lines = row["output"].splitlines()
+                          row["output"] = "\n".join(line for line in lines if "mistral" in line.lower() or line.startswith("name"))
+                          row["note"] = "Filtered queue names/counts only; absence is not proof that no RPC queues exist."
+          else:
+              data["checks"].append(dict(name="rabbitmq", status="not_present", output="No local rabbitmq container"))
+          if time.monotonic() < deadline and remaining > 0:
+              socket_paths = []
+              if "haproxy" in names:
+                  mounts = command("haproxy_socket_mounts", ["podman","inspect","--format",
+                                   '{{range .Mounts}}{{if or (eq .Destination "/var/lib/kolla/haproxy") (eq .Destination "/var/lib/kolla/haproxy/")}}{"Source":{{json .Source}},"Destination":{{json .Destination}}}{{println}}{{end}}{{end}}',
+                                   "haproxy"])
+                  try:
+                      socket_paths = haproxy_socket_paths([json.loads(line) for line in mounts["output"].splitlines() if line.strip()])
+                  except (ValueError,TypeError):
+                      mounts["status"] = "mount_parse_error"
+              cap = max(1,min(cfg["max_bytes"],remaining))
+              evidence = haproxy_evidence(dict(cfg,max_bytes=cap), socket_paths=socket_paths,deadline=deadline)
+              size = len(json.dumps(evidence).encode())
+              if size > remaining:
+                  evidence = dict(name="haproxy_config_and_stats",status="skipped_budget")
+              else:
+                  remaining -= size
+              data["checks"].append(evidence)
+          else:
+              data["checks"].append(dict(name="haproxy_config_and_stats", status="skipped_budget"))
+          window = ["--utc","--no-pager","--since",cfg["since"].replace("T"," ").replace("Z"," UTC"),
+                    "--until",cfg["until"].replace("T"," ").replace("Z"," UTC"),"-n","250"]
+          command("kernel_journal", ["journalctl","-k"] + window)
+          command("runtime_journal", ["journalctl","-u","podman.service","-u","podman.socket","-u","haproxy.service"] + window)
+          candidates = []
+          for service in ("mistral","haproxy","rabbitmq","mariadb","proxysql","memcached"):
+              directory = Path(cfg["log_root"]) / service
+              try:
+                  if directory.is_symlink() or not directory.is_dir():
+                      continue
+                  for path in directory.iterdir():
+                      info = path.lstat()
+                      if stat.S_ISREG(info.st_mode) and re.search(r"(?:\.log|\.err)(?:\.[A-Za-z0-9_.-]+)?$", path.name):
+                          candidates.append((0 if service == "mistral" else 1, -info.st_mtime, str(path)))
+              except OSError:
+                  data["logs"].append(dict(name=str(directory), status="discovery_error", output="Log directory unreadable"))
+          if len(candidates) > cfg["max_logs"]:
+              data["logs"].append(dict(name="log_selection", status="file_limit", output="Additional logs omitted"))
+          for _, _, path in sorted(candidates)[:cfg["max_logs"]]:
+              if time.monotonic() >= deadline or remaining <= 0:
+                  data["logs"].append(dict(name=path, status="skipped_budget", output=""))
+                  continue
+              row = read_log(Path(path), dict(cfg, max_log_bytes=min(cfg["max_log_bytes"], remaining)))
+              row["output"] = redact(row["output"], secrets)
+              remaining -= len(row["output"].encode())
+              data["logs"].append(row)
+          if not candidates:
+              data["logs"].append(dict(name=cfg["log_root"], status="no_log_files", output=""))
+          for name in names:
+              row = command("container_log_" + name, ["podman","logs","--timestamps","--since",cfg["since"],
+                            "--until",cfg["until"],"--tail","200",name])
+              if len(row["output"].splitlines()) >= 200:
+                  row["truncated"] = True
+          data["ended_at"] = iso(now())
+          return data
+
+      def clean_envelope(value):
+          # Preserve sanitized diagnostic text called 'output', but never opaque API
+          # input/output. API data was sanitized separately before this envelope.
+          if isinstance(value, dict):
+              return {str(k): redact(v) if k == "output" and isinstance(v, str)
+                      else MASK if SECRET.search(str(k))
+                      else clean_envelope(v) for k,v in value.items()}
+          if isinstance(value, list):
+              return [clean_envelope(v) for v in value]
+          return redact(value) if isinstance(value, str) else value
+
+      def write_report(directory, targets):
+          root, target = Path(directory), Path(str(directory) + ".txt")
+          if target.exists():
+              raise FileExistsError("Use a fresh diagnostic directory")
+          if not isinstance(targets, list) or any(not isinstance(n,str) or not NAME.fullmatch(n) or n in ("api_before","api_after") for n in targets):
+              raise ValueError("Invalid report section name")
+          summary = ["Mistral diagnostic collection", "Generated: " + iso(now()),
+                     "Read-only evidence, not cloud-health acceptance or a recovery command.",
+                     "API reads are non-atomic. Snapshots are bounded, not the complete execution history.",
+                     "Log timestamps without offsets use log_timezone; unparsed_time is an unfiltered tail.",
+                     "PARTIAL identifies missing/failed/truncated evidence, not a diagnosis.",
+                     "Confidential: common secrets masked; review before sharing.", ""]
+          sections, partial = [], False
+          for name in ["api_before"] + targets + ["api_after"]:
+              path = root / (name + ".json")
+              if not path.exists() or path.is_symlink():
+                  summary.append(name + ": MISSING")
+                  partial = True
+                  continue
+              try:
+                  envelope = json.loads(path.read_text())
+                  if not isinstance(envelope,dict):
+                      raise ValueError("Invalid envelope")
+              except (OSError, ValueError, TypeError, AttributeError):
+                  summary.append(name + ": INVALID")
+                  partial = True
+                  continue
+              transport = envelope.get("transport", {})
+              if not isinstance(transport,dict):
+                  transport = dict(rc=1,msg="Invalid transport record")
+              report = envelope.get("report") or {}
+              invalid_report = False
+              try:
+                  report = json.loads(report) if isinstance(report,str) else report
+                  if not isinstance(report,dict):
+                      raise ValueError("Invalid report")
+                  for key in ("checks","logs"):
+                      rows = report.get(key,[])
+                      if not isinstance(rows,list) or any(not isinstance(row,dict) for row in rows):
+                          raise ValueError("Invalid check list")
+                      for row in rows:
+                          if not isinstance(row.get("name",""),str) or not isinstance(row.get("status",""),str) or not isinstance(row.get("output",""),str):
+                              raise ValueError("Invalid check metadata")
+              except (ValueError,TypeError):
+                  invalid_report = True
+                  report = {"checks":[{"name":"collector_stdout","status":"invalid_json",
+                                       "output":redact(str(report))}]}
+              if transport.get("unreachable"):
+                  state = "UNREACHABLE"
+              elif transport.get("rc",0) != 0 or not report or invalid_report:
+                  state = "COLLECTOR_ERROR"
+              else:
+                  state = "COLLECTED"
+                  for row in report.get("checks",[]) + report.get("logs",[]):
+                      if row.get("status") != "ok" or row.get("truncated") or row.get("scan_truncated"):
+                          state = "PARTIAL"
+                          summary.append("  " + name + " / " + row.get("name","check") + ": " + row.get("status","unknown") +
+                                         (" [truncated]" if row.get("truncated") or row.get("scan_truncated") else ""))
+              partial |= state != "COLLECTED"
+              summary.append(name + ": " + state)
+              sections += ["", "=" * 72, name + " / " + state, "=" * 72,
+                           "TRANSPORT: " + json.dumps(clean_envelope(transport),ensure_ascii=False),
+                           json.dumps(clean_envelope({k:v for k,v in report.items() if k not in ("checks","logs")}),
+                                      ensure_ascii=False,indent=2)]
+              for row in report.get("checks",[]) + report.get("logs",[]):
+                  clean = clean_envelope(row)
+                  sections += ["", "--- " + clean.get("name","check") + " ---",
+                               json.dumps({k:v for k,v in clean.items() if k not in ("output","data")},ensure_ascii=False)]
+                  if "data" in clean:
+                      sections.append(json.dumps(clean["data"],ensure_ascii=False,indent=2))
+                  if "output" in clean:
+                      sections.append(clean["output"])
+          status = "PARTIAL" if partial else "COLLECTED"
+          summary.insert(1, "Collection status: " + status)
+          body = "\n".join(summary + sections).encode()
+          fd = os.open(str(target), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+          with os.fdopen(fd, "wb") as stream:
+              stream.write(body)
+          return dict(status=status, report=str(target), bytes=len(body))
+
+      def main():
+          parser = argparse.ArgumentParser(description=__doc__)
+          parser.add_argument("mode", choices=["validate","api","host","report"])
+          parser.add_argument("--config", default="{}")
+          parser.add_argument("--previous")
+          parser.add_argument("--directory")
+          parser.add_argument("--targets", default="[]")
+          args = parser.parse_args()
+          os.umask(0o077)
+          try:
+              if args.mode == "report":
+                  result = write_report(args.directory, json.loads(args.targets))
+              else:
+                  cfg = validate(json.loads(args.config))
+                  result = cfg if args.mode == "validate" else api(cfg,args.previous) if args.mode == "api" else host(cfg)
+              print(json.dumps(clean_envelope(result), ensure_ascii=False))
+          except Exception as exc:
+              # Exception class only: no accidental credential URL in an error message.
+              print(json.dumps(dict(status="collector_error", error_type=type(exc).__name__)))
+              return 1
+          return 0
+
+      if __name__ == "__main__":
+          sys.exit(main())
+      {% endraw %}
+  tasks:
+    - name: Validate collection scope before any network connection
+      ansible.builtin.assert:
+        that:
+          - not ansible_check_mode
+          - mistral_diag_controllers is sequence and mistral_diag_controllers is not string
+          - mistral_diag_controllers | length > 0
+          - mistral_diag_controllers | length <= 8
+        fail_msg: "Use --syntax-check for validation; --check does not collect evidence."
+
+    - name: Validate built-in controller identities
+      ansible.builtin.assert:
+        that:
+          - item.name is match('^[A-Za-z0-9][A-Za-z0-9_.-]{0,252}$')
+          - item.name not in ['localhost', 'api_before', 'api_after']
+          - item.fqdn is match('^[A-Za-z0-9][A-Za-z0-9_.-]{0,252}$')
+          - item.ip is match('^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$')
+      loop: "{{ mistral_diag_controllers }}"
+
+    - name: Create controller inventory using IP addresses and existing keys
+      ansible.builtin.add_host:
+        name: "{{ item.name }}"
+        groups: mistral_diag_nodes
+        ansible_host: "{{ item.ip }}"
+        mistral_diag_expected_fqdn: "{{ item.fqdn }}"
+        ansible_connection: ssh
+        ansible_python_interpreter: "{{ mistral_diag_remote_python | default('/usr/bin/python3') }}"
+        ansible_ssh_common_args: "-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2"
+      loop: "{{ mistral_diag_controllers }}"
+
+    - name: Create private artifacts directory as in collect_v2
+      ansible.builtin.file:
+        path: "{{ mistral_diag_output_parent | default(playbook_dir ~ '/artifacts') }}"
+        state: directory
+        mode: '0700'
+
+    - name: Allocate a unique directory without overwriting previous evidence
+      ansible.builtin.tempfile:
+        path: "{{ mistral_diag_output_parent | default(playbook_dir ~ '/artifacts') }}"
+        state: directory
+        prefix: mistral-diag-
+      register: mistral_diag_directory
+
+    - name: Share paths and selected identities
+      ansible.builtin.set_fact:
+        mistral_diag_run_dir: "{{ mistral_diag_directory.path }}"
+        mistral_diag_script: "{{ mistral_diag_directory.path }}/collector.py"
+        mistral_diag_targets: "{{ mistral_diag_controllers | map(attribute='name') | list }}"
+        mistral_diag_operator_python: "{{ ansible_playbook_python }}"
+
+    - name: Materialize embedded collector privately
+      ansible.builtin.copy:
+        dest: "{{ mistral_diag_script }}"
+        content: "{{ mistral_diag_source }}"
+        mode: '0700'
+      no_log: true
+
+    - name: Validate public settings and calculate a fresh log window
+      ansible.builtin.command:
+        argv:
+          - "{{ mistral_diag_operator_python }}"
+          - "{{ mistral_diag_script }}"
+          - validate
+          - --config
+          - "{{ mistral_diag_defaults | combine(mistral_diag | default({})) | to_json }}"
+      register: mistral_diag_validated
+      changed_when: false
+
+    - name: Share normalized settings between plays
+      ansible.builtin.set_fact:
+        mistral_diag_config: "{{ mistral_diag_validated.stdout | from_json }}"
+
+    - name: Compare VIP and API replicas and collect the first execution snapshot
+      ansible.builtin.command:
+        argv:
+          - "{{ mistral_diag_operator_python }}"
+          - "{{ mistral_diag_script }}"
+          - api
+          - --config
+          - "{{ mistral_diag_config | to_json }}"
+      register: mistral_diag_before
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Preserve the first snapshot including authentication or API failures
+      ansible.builtin.copy:
+        dest: "{{ mistral_diag_run_dir }}/api_before.json"
+        mode: '0600'
+        content: >-
+          {{ {'transport': {'rc': mistral_diag_before.rc | default(1),
+                            'msg': mistral_diag_before.msg | default('')},
+              'report': mistral_diag_before.stdout | default('')} | to_nice_json }}
+      no_log: true
+
+- name: Collect read-only controller evidence without contacting compute hosts
+  hosts: mistral_diag_nodes
+  gather_facts: false
+  become: false
+  ignore_unreachable: true
+  tasks:
+    - name: Require operator initialization
+      ansible.builtin.assert:
+        that:
+          - hostvars['localhost'].mistral_diag_script is defined
+        fail_msg: "Do not exclude localhost with --limit."
+
+    - name: Verify SSH reachability and actual host identity without sudo
+      ansible.builtin.raw: hostname -f
+      register: mistral_diag_identity
+      changed_when: false
+      failed_when: false
+      ignore_errors: true
+      no_log: true
+
+    - name: Check exact expected identity before privileged reads
+      ansible.builtin.set_fact:
+        mistral_diag_identity_ok: >-
+          {{ not (mistral_diag_identity.unreachable | default(false))
+             and (mistral_diag_identity.rc | default(1)) == 0
+             and (mistral_diag_identity.stdout | default('') | trim | lower)
+                 == (mistral_diag_expected_fqdn | lower) }}
+
+    - name: Collect bounded logs and API dependencies using sudo only on controllers
+      ansible.builtin.script:
+        cmd: >-
+          {{ hostvars['localhost'].mistral_diag_script | quote }} host --config
+          {{ hostvars['localhost'].mistral_diag_config | to_json | quote }}
+        executable: "{{ mistral_diag_remote_python | default('/usr/bin/python3') }}"
+      become: "{{ mistral_diag_become | default(true) | bool }}"
+      register: mistral_diag_host_result
+      changed_when: false
+      failed_when: false
+      ignore_errors: true
+      no_log: true
+      when: mistral_diag_identity_ok | bool
+
+    - name: Preserve every host outcome on the operator even when SSH or sudo failed
+      vars:
+        ansible_connection: local
+        ansible_python_interpreter: "{{ hostvars['localhost'].mistral_diag_operator_python }}"
+      ansible.builtin.copy:
+        dest: "{{ hostvars['localhost'].mistral_diag_run_dir }}/{{ inventory_hostname }}.json"
+        mode: '0600'
+        content: >-
+          {{ {'transport': {'rc': (mistral_diag_host_result.rc | default(1)) if (mistral_diag_identity_ok | bool) else 1,
+                            'unreachable': (mistral_diag_identity.unreachable | default(false)) or (mistral_diag_host_result.unreachable | default(false)),
+                            'identity_verified': mistral_diag_identity_ok | bool,
+                            'expected_fqdn': mistral_diag_expected_fqdn,
+                            'observed_fqdn': mistral_diag_identity.stdout | default('') | trim,
+                            'ip': hostvars[inventory_hostname].ansible_host,
+                            'msg': (mistral_diag_host_result.msg | default('')) if (mistral_diag_identity_ok | bool) else (mistral_diag_identity.msg | default('SSH/FQDN preflight failed')),
+                            'stderr': mistral_diag_host_result.stderr | default('')},
+              'report': mistral_diag_host_result.stdout | default('')} | to_nice_json }}
+      delegate_to: localhost
+      become: false
+      no_log: true
+
+- name: Collect the second snapshot and produce one private TXT report
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Re-read API replicas and retain exact executions discovered earlier
+      ansible.builtin.command:
+        argv:
+          - "{{ mistral_diag_operator_python }}"
+          - "{{ mistral_diag_script }}"
+          - api
+          - --config
+          - "{{ mistral_diag_config | to_json }}"
+          - --previous
+          - "{{ mistral_diag_run_dir }}/api_before.json"
+      register: mistral_diag_after
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Preserve the second snapshot even when the API is unavailable
+      ansible.builtin.copy:
+        dest: "{{ mistral_diag_run_dir }}/api_after.json"
+        mode: '0600'
+        content: >-
+          {{ {'transport': {'rc': mistral_diag_after.rc | default(1),
+                            'msg': mistral_diag_after.msg | default('')},
+              'report': mistral_diag_after.stdout | default('')} | to_nice_json }}
+      no_log: true
+
+    - name: Combine all evidence including unreachable or missing sections
+      ansible.builtin.command:
+        argv:
+          - "{{ mistral_diag_operator_python }}"
+          - "{{ mistral_diag_script }}"
+          - report
+          - --directory
+          - "{{ mistral_diag_run_dir }}"
+          - --targets
+          - "{{ mistral_diag_targets | to_json }}"
+      register: mistral_diag_report
+      changed_when: true
+
+    - name: Verify the output path before removing this run's temporary files
+      ansible.builtin.assert:
+        that:
+          - mistral_diag_run_dir | basename is match('^mistral-diag-[A-Za-z0-9_-]+$')
+          - (mistral_diag_report.stdout | from_json).report == mistral_diag_run_dir ~ '.txt'
+
+    - name: Remove only this run's temporary evidence after the TXT was written
+      ansible.builtin.file:
+        path: "{{ mistral_diag_run_dir }}"
+        state: absent
+
+    - name: Show the report path and collection completeness
+      ansible.builtin.debug:
+        msg: "{{ mistral_diag_report.stdout | from_json }}"
