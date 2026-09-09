@@ -268,6 +268,103 @@ notification → fencing request → node UUID для каждого; один �
 чистоты. Автоматическая очистка/доказуемый API-only возврат после аварии в эту базу
 не добавлены; аварийный возврат остаётся ручным.
 
+### 6.1. Что означает PAUSED и когда можно продолжать
+
+В базовой линии `0809` этот workflow всегда делает ручную паузу перед
+`operator_inspection_gate`: после планового выключения, после аварии и даже
+если хост уже включён. `stopped_instance_ids: []` не отключает паузу; пустой
+manifest означает, что action не должен запускать ВМ. После выключения с
+`live_migrate` ВМ остаются на хостах назначения: возврат compute в обслуживание
+не мигрирует их обратно. После режима `stop` передают точный manifest из результата
+выключения; его не заменяют на `[]`, если требуется запуск остановленных ВМ.
+
+Следующие команды выполняются на `ultra1-0` обычным пользователем с рабочим
+OpenStack RC. Здесь нужен UUID уже созданного `power_ops.power_on_and_return`,
+а не ID планового выключения или Masakari notification. Для другого хоста
+измените имя и segment; UUID вводите без пробелов и переносов строки.
+
+```bash
+read -r -p 'UUID существующего power_on_and_return: ' POWEROPS_RETURN_EXEC
+POWEROPS_RETURN_HOST=ultra1-2.ultra1.test.pvs.un.sbt
+POWEROPS_RETURN_SEGMENT=b045da78-bc53-435a-937e-f12d41a217b1
+timeout 30s openstack workflow execution show "$POWEROPS_RETURN_EXEC"
+timeout 30s openstack workflow execution input show "$POWEROPS_RETURN_EXEC"
+timeout 30s openstack task execution list "$POWEROPS_RETURN_EXEC"
+timeout 30s openstack baremetal node show "$POWEROPS_RETURN_HOST" -f yaml -c uuid -c name -c power_state -c target_power_state -c last_error
+timeout 30s openstack compute service list --host "$POWEROPS_RETURN_HOST" --service nova-compute --long
+timeout 30s openstack segment host list "$POWEROPS_RETURN_SEGMENT"
+timeout 30s openstack server list --all-projects --host "$POWEROPS_RETURN_HOST" --long
+```
+
+Перед продолжением должны быть согласованы все условия:
+
+- execution относится к нужным host/segment и находится в `PAUSED`;
+  `power_on_for_inspection = SUCCESS`, `operator_inspection_gate = IDLE`,
+  `return_to_service` ещё не выполнялся;
+- у точного Ironic node устойчивое `power on`, `target_power_state=null`,
+  `last_error=null`; Nova compute — `disabled/up`, Masakari host —
+  `on_maintenance=true`. Одного старого снимка недостаточно: перечитайте состояние;
+- нет другой незавершённой операции для этого хоста; размещение и состояние
+  ВМ согласованы с результатом предыдущего выключения/эвакуации и manifest;
+- оператор действительно завершил проверку безопасности возврата, включая
+  отсутствие старых копий эвакуированных ВМ и готовность storage/network.
+  Пустой Nova server list, `power on` и `up` сами по себе этого не доказывают.
+
+Здесь нет SSH-проверок. В `0809` перечисленные OpenStack API не дают полного
+доказательства отсутствия stale domains после аварии. Если такое доказательство
+не получено по принятому регламенту, оставьте workflow в `PAUSED` и не передавайте
+подтверждение. Статус паузы — не повод обходить эту проверку.
+
+### 6.2. После проверки: разрешить возврат и проверить результат
+
+Это **изменяющая операция**, не диагностика. Выполняйте только после условий
+раздела 6.1. Продолжите тот же execution один раз, передав Boolean `true`
+в environment, а не строку `"true"` и не новый workflow input:
+
+```bash
+openstack workflow execution update "$POWEROPS_RETURN_EXEC" --state RUNNING --env '{"stale_domains_checked":true}'
+```
+
+Синтаксис `workflow execution update`, `--state` и `--env` сверён с
+[регистрацией OSC-команд](https://github.com/openstack/python-mistralclient/blob/stable/2025.1/setup.cfg)
+и [Update в python-mistralclient 2025.1](https://github.com/openstack/python-mistralclient/blob/stable/2025.1/mistralclient/commands/v2/executions.py).
+В поставленном Mistral переход в `RUNNING` передаёт environment в
+`resume_workflow`. Простой resume без подтверждения не заменяет проверку:
+`ReturnToServiceAction` отклоняет отсутствующий или не-Boolean флаг.
+
+Action заново получает блокировку и проверяет питание, Nova и maintenance;
+при непустом manifest запускает только перечисленные ВМ, затем включает Nova
+scheduling и снимает maintenance Masakari. С `[]` запуск ВМ пропускается.
+Новый `workflow execution create`, прямой action, `task execution rerun`,
+ручное выставление `SUCCESS` и ручные enable/maintenance-команды для штатного
+продолжения не нужны.
+
+После update перечитайте тот же execution и фактическое состояние:
+
+```bash
+timeout 30s openstack workflow execution show "$POWEROPS_RETURN_EXEC"
+timeout 30s openstack task execution list "$POWEROPS_RETURN_EXEC"
+timeout 30s openstack workflow execution output show "$POWEROPS_RETURN_EXEC"
+timeout 30s openstack baremetal node show "$POWEROPS_RETURN_HOST" -f yaml -c uuid -c name -c power_state -c target_power_state -c last_error
+timeout 30s openstack compute service list --host "$POWEROPS_RETURN_HOST" --service nova-compute --long
+timeout 30s openstack segment host list "$POWEROPS_RETURN_SEGMENT"
+```
+
+Ожидаемый итог: execution и `return_to_service` — `SUCCESS`, Ironic — `power on`
+без pending target/error, Nova — `enabled/up`, Masakari —
+`on_maintenance=false`. В output — нужный `host`,
+`operation=return_to_service`, `nova_enabled=true`,
+`masakari_maintenance=false`; при пустом manifest — `stopped_instance_ids=[]`.
+При непустом manifest дополнительно проверьте каждую ВМ по UUID: нужный host,
+`ACTIVE`, `task_state=null`; состояние гостевых приложений проверяется отдельно.
+
+Если update вернул `504`, timeout или связь оборвалась, результат запроса
+неизвестен: сначала восстановите доступ к API и перечитайте этот UUID и tasks.
+Не повторяйте update/create вслепую. При `ERROR` сохраните `state_info` и результаты
+задач, проверьте фактические Nova/Masakari/Ironic состояния и устраните причину;
+ошибка не разрешает вручную снять защитные статусы. При продолжающемся `RUNNING`
+наблюдайте существующий execution, не запускайте второй возврат.
+
 ## 7. Ошибки, конкуренция и трактовка статусов
 
 | Наблюдение | Правильная трактовка |
