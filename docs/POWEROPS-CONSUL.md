@@ -102,16 +102,75 @@ Masakari должна быть одинаково осмысленной на в
 
 ## 3. Матрица: когда появляется решение recovery
 
-Цепочка генерации:
+Матрица генерируется автоматически **Ansible при deploy/reconfigure роли
+`masakari`**, а не самим Consul при аварии. Во время работы hostmonitor сопоставляет
+наблюдаемые состояния с уже подготовленными правилами. Изменение globals само
+по себе не изменяет доставленный файл.
+
+### 3.1. Как появляется файл: от Ansible-задачи до контейнера
+
+Все пути в следующей таблице — относительно Kolla-Ansible. Номера строк
+соответствуют архиву `0809`; при изменении файлов ищите также имя задачи/функции.
+
+| Место в исходниках | Роль в генерации |
+| --- | --- |
+| `ansible/roles/masakari/tasks/deploy.yml` | Подключает `config.yml`; `tasks/reconfigure.yml` подключает этот `deploy.yml` |
+| `ansible/roles/masakari/tasks/config.yml:92` | Задача **`Copying over matrix.yaml`** рендерит шаблон для `masakari-hostmonitor` |
+| `ansible/roles/masakari/templates/matrix.yaml.j2:1` | Передаёт настройки фильтру и записывает полученные `sequence`, `health`, `action` в YAML |
+| `ansible/filter_plugins/masakari_consul.py:20` | Регистрирует Ansible-фильтр `masakari_consul_matrix` как вызов `build_matrix` |
+| `kolla_ansible/masakari_consul.py:140` | Функция `build_matrix()` рассчитывает сочетания состояний и действия |
+| `ansible/roles/masakari/templates/masakari-hostmonitor.json.j2:17` | Описывает копирование матрицы из container config directory в `/etc/masakari-monitors/matrix.yaml` |
+| `ansible/roles/masakari/templates/masakari-monitors.conf.j2:65` | Задаёт `[consul] matrix_config_file` для hostmonitor |
+
+У задачи `Copying over matrix.yaml` одновременно должны выполняться три условия:
+
+1. `masakari-hostmonitor` включён и назначен данному inventory host:
+   `service | service_enabled_and_mapped_to_host`.
+2. `enable_consul | bool` — истина.
+3. `masakari_hostmonitor_driver == 'consul'`.
+
+Генерация находится именно в роли **Masakari**. Запуск только роли Consul
+не выполняет эту задачу. Роль Consul влияет на входной `consul_networks`, в том
+числе на per-host `enabled`, но не записывает матрицу hostmonitor; ограничения
+пересчёта сетей описаны в разделе 2.
+
+Вызов генератора в начале `matrix.yaml.j2`:
+
+```jinja
+{% set generated_matrix =
+    consul_networks |
+    masakari_consul_matrix(
+        policy=masakari_consul_matrix_policy,
+        down_threshold=masakari_consul_down_threshold,
+        custom_recovery_states=masakari_consul_custom_recovery_states
+    )
+%}
+```
+
+Сам фильтр вычисляется при рендеринге Ansible-шаблона. Он не опрашивает Consul
+или OpenStack: строит таблицу правил из переданного набора сетей и политики.
+
+Полная последовательность:
 
 ```text
 consul_networks + masakari_consul_* в Ansible
-    → filter masakari_consul_matrix
+    → роль masakari: config.yml / Copying over matrix.yaml
+    → шаблон matrix.yaml.j2 вызывает filter masakari_consul_matrix
     → kolla_ansible/masakari_consul.py:build_matrix
-    → roles/masakari/templates/matrix.yaml.j2
+    → шаблон записывает результат в YAML
     → /etc/kolla/masakari-hostmonitor/matrix.yaml на хосте (обычный путь)
     → /etc/masakari-monitors/matrix.yaml в контейнере
+    → hostmonitor использует файл из [consul] matrix_config_file
 ```
+
+Точный host-путь задачи —
+`{{ node_config_directory }}/masakari-hostmonitor/matrix.yaml`.
+`/etc/kolla/...` выше — обычное значение, а не жёстко заданный каталог.
+Копирование в целевой путь внутри контейнера выполняется по Kolla `config.json`
+при применении контейнерной конфигурации. Наличие нового файла на хосте ещё
+не доказывает его доставку и использование уже работающим процессом.
+
+### 3.2. Из каких сетей и правил строится матрица
 
 В `sequence` входят только сети с `enabled=true` и `masakari_monitor=true`;
 порядок определяется `masakari_order`. Допустимы уникальные имена `manage`,
@@ -151,6 +210,61 @@ consul_networks + masakari_consul_* в Ansible
 перестать проходить генерацию. Пустой custom-набор не создаёт recovery ни для
 одной строки. Генератор также **не запрещает recovery для all-up**; это обязанность
 оператора при проектировании политики, а не существующая защита фильтра.
+
+### 3.3. Как выглядит результат и как его проверить
+
+Для `masakari_consul_matrix_policy: "all_down"` и трёх участвующих сетей
+`manage`, `tenant`, `storage` с порядком 10, 20, 30 содержательная часть
+сгенерированного файла будет такой (без служебного заголовка Ansible):
+
+```yaml
+sequence: ["manage", "tenant", "storage"]
+matrix:
+  - health: ["up", "up", "up"]
+    action: []
+  - health: ["up", "up", "down"]
+    action: []
+  - health: ["up", "down", "up"]
+    action: []
+  - health: ["up", "down", "down"]
+    action: []
+  - health: ["down", "up", "up"]
+    action: []
+  - health: ["down", "up", "down"]
+    action: []
+  - health: ["down", "down", "up"]
+    action: []
+  - health: ["down", "down", "down"]
+    action: ["recovery"]
+```
+
+Позиции в `health` всегда соответствуют порядку `sequence`. Это **пример
+вычисленного результата для указанных входных параметров**, не вывод с текущего
+стенда. Если участвует только `manage`, будут две строки, и `all_down` разрешит
+recovery при `health: ["down"]`. Если участвуют две сети — четыре строки.
+
+На доступном узле с hostmonitor прочитайте доставленный результат:
+
+```bash
+sudo -n podman exec masakari_hostmonitor sed -n '1,160p' /etc/masakari-monitors/matrix.yaml
+```
+
+Для сравнения с файлом на хосте, при обычном `node_config_directory`:
+
+```bash
+sudo -n sed -n '1,160p' /etc/kolla/masakari-hostmonitor/matrix.yaml
+```
+
+Проверяйте фактический `[consul] matrix_config_file`, состав и порядок `sequence`,
+число строк и строки с `recovery`. Если путь переопределён, читайте именно его.
+Повторите проверку на каждом hostmonitor; команда и пример не подтверждают
+автоматически одинаковую конфигурацию всех реплик. Дополнительные проверки
+INI, endpoint и версии процесса приведены в разделе 6.
+
+Итог: изменять нужно входные настройки Ansible, а не редактировать готовую
+`matrix.yaml`. При следующем выполнении задачи ручные правки файла будут
+перезаписаны. Сам deploy/reconfigure может затронуть контейнеры; его запуск
+для применения изменений — отдельная операция, не диагностическая команда.
 
 ## 4. Где задаются параметры
 
@@ -432,6 +546,6 @@ timeout 30s openstack notification list --filters "source_host_uuid=$HA_HOST" --
 
 При подготовке пройдены 11 unit tests генератора; отдельно таблица документа
 сверена с `build_matrix`, отрендерены настоящие Jinja-шаблоны и проверено покрытие
-28 верхнеуровневых Consul globals. 32 использованных файла Consul/Masakari
+28 верхнеуровневых Consul globals. 34 использованных файла Consul/Masakari
 побайтно совпадают с архивом `0809`. Это локальные проверки исходников,
 не запуск Consul, не тест quorum и не приёмка аварийного сценария.
