@@ -19,6 +19,34 @@
 SSH-порт из inventory: {{ report.ssh.inventory_port | default('не определён', true) }}.
 SSH-доступ и новое подключение **не проверялись**.
 
+### Проверка firewalld
+
+Проверки запускаются автоматически задачей сбора. Пакеты не устанавливались,
+служба не запускалась. `неизвестно` означает недостаток достоверных данных.
+
+| Пакет (установленная RPM-база) | Установлен | Версия / release / архитектура |
+| --- | --- | --- |
+{% for name, package in report.firewalld.packages | dictsort %}
+| {{ name }} | {{ 'да' if package.installed == true else ('нет' if package.installed == false else 'неизвестно') }} | {% for version in package.versions %}{{ version.version }} / {{ version.release }} / {{ version.arch }}{% if not loop.last %}; {% endif %}{% else %}—{% endfor %} |
+{% endfor %}
+
+Версия `firewall-cmd`: {{ report.firewalld.cli_version | default('неизвестно', true) }}.
+
+| Свойство firewalld.service | Наблюдаемое значение |
+| --- | --- |
+{% for field in ['load_state', 'active_state', 'sub_state', 'unit_file_state'] %}
+| {{ field }} | {{ report.firewalld.service[field] | default('неизвестно', true) }} |
+{% endfor %}
+
+| API-проверка | Успешна |
+| --- | --- |
+{% for name, value in report.firewalld.api | dictsort %}
+| {{ name }} | {{ 'да' if value == true else ('нет' if value == false else 'неизвестно') }} |
+{% endfor %}
+
+Запросы policies проверяют возможность **чтения**, не права изменения правил.
+Ошибка API сама по себе не доказывает несовместимость версии.
+
 ### Предварительные потоки
 
 | Поток | Протокол/порт | Назначение | Источники |

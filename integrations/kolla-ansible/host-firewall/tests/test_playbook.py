@@ -3,6 +3,7 @@ from pathlib import Path
 import unittest
 
 from support import AnsibleFixture
+from firewalld_fixtures import command
 
 
 class ProjectionTests(AnsibleFixture):
@@ -142,12 +143,36 @@ class PlaybookTests(AnsibleFixture):
         markdown = self.report_path.with_suffix('.md')
         self.assertEqual(0o600, markdown.stat().st_mode & 0o777)
         self.assertIn('APPLY_NOT_IMPLEMENTED', markdown.read_text())
+        self.assertIn('firewalld', markdown.read_text())
+        self.assertIn('1.3.4', markdown.read_text())
+        self.assertTrue(bundle['reports']['node-a']['firewalld']['packages']['firewalld']['installed'])
         first = self.report_path.read_bytes()
         first_path = self.report_path
         self.assert_success(self.run_play('host-firewall.yml'))
         self.assertEqual(first, first_path.read_bytes())
         self.assertEqual(2, len(list((self.tree / 'artifacts').glob('host-firewall-*/report.json'))))
         self.assertEqual('owned by another component\n', foreign.read_text())
+
+    def test_absent_package_is_reported_and_other_hosts_still_collected(self):
+        self.observation['commands']['firewalld_package'] = command(
+            'package firewalld is not installed\n', rc=1)
+        self.write_inventory()
+        self.assert_success(self.run_play('host-firewall.yml'))
+        bundle = self.read_bundle()
+        self.assertEqual(['lb', 'node-a'], bundle['selected_hosts'])
+        for report in bundle['reports'].values():
+            self.assertEqual('ok', report['collection_status'])
+            self.assertIn({'code': 'FIREWALLD_PACKAGE_MISSING', 'subject': 'firewalld'}, report['blockers'])
+            self.assertFalse(report['apply_ready'])
+        self.assertIn('FIREWALLD_PACKAGE_MISSING', self.report_path.with_suffix('.md').read_text())
+
+    def test_api_timeout_is_saved_without_aborting_report(self):
+        self.observation['commands']['firewalld_runtime_policies'] = command(rc=-9, timed_out=True)
+        self.write_inventory()
+        self.assert_success(self.run_play('host-firewall.yml'))
+        bundle = self.read_bundle()
+        self.assertFalse(bundle['collection_complete'])
+        self.assertIsNone(bundle['reports']['node-a']['firewalld']['api']['runtime_policies'])
 
     def test_apply_fails_before_remote_probe(self):
         result = self.run_play('host-firewall.yml', {'host_firewall_mode': 'apply'})

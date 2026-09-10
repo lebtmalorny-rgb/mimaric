@@ -6,11 +6,106 @@ import re
 # Kept explicit on the controller; the contract test compares this set with the
 # remote collector, so adding a measurement cannot silently bypass completeness.
 EXPECTED_COMMANDS = frozenset((
+    'firewalld_package', 'firewalld_python_package', 'firewalld_version', 'firewalld_service',
     'addresses', 'routes_v4', 'routes_v6', 'ss', 'firewalld_state',
     'firewalld_active_zones', 'firewalld_runtime_zones', 'firewalld_permanent_zones',
     'firewalld_runtime_policies', 'firewalld_permanent_policies', 'nft',
     'iptables', 'ip6tables', 'services', 'bridge_netfilter',
 ))
+
+
+def complete_result(result):
+    """An error may be evidence, but missing/truncated output is not."""
+    return (isinstance(result, dict) and result.get('available') is True
+            and result.get('timed_out') is False and result.get('truncated') is False
+            and type(result.get('rc')) is int
+            and isinstance(result.get('stdout'), str) and isinstance(result.get('stderr'), str))
+
+
+def installed_rpm(result, name):
+    """Query the installed RPM database, never a repository or package search."""
+    unknown = {'installed': None, 'versions': []}
+    if not complete_result(result) or result['stderr'].strip():
+        return unknown
+    output = result['stdout'].strip()
+    # LC_ALL=C is fixed in the probe. Any other rc=1 (e.g. rpmdb failure)
+    # remains unknown, not a false assertion that the package is absent.
+    if result['rc'] == 1 and output == 'package %s is not installed' % name:
+        return {'installed': False, 'versions': []}
+    if result['rc'] != 0 or not output:
+        return unknown
+    versions = []
+    for line in output.splitlines():
+        fields = line.split('\t')
+        if (len(fields) != 4 or fields[0] != name or
+                not all(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._+~^:-]*', f) for f in fields[1:])):
+            return unknown
+        versions.append(dict(zip(('version', 'release', 'arch'), fields[1:])))
+    return {'installed': True, 'versions': versions}
+
+
+def firewalld_prerequisites(commands, block):
+    """Report observed prerequisites; this is not an authorization to apply."""
+    packages = {}
+    for name, key in (('firewalld', 'firewalld_package'),
+                      ('python3-firewall', 'firewalld_python_package')):
+        packages[name] = installed_rpm(commands.get(key), name)
+        installed = packages[name]['installed']
+        if installed is not True:
+            block('FIREWALLD_PACKAGE_MISSING' if installed is False else 'FIREWALLD_PACKAGE_UNKNOWN', name)
+
+    version = None
+    result = commands.get('firewalld_version')
+    if complete_result(result) and result['rc'] == 0 and not result['stderr'].strip():
+        value = result['stdout'].strip()
+        if re.fullmatch(r'[0-9]+(?:\.[0-9]+)+(?:[-+][A-Za-z0-9._-]+)?', value):
+            version = value
+    if version is None:
+        block('FIREWALLD_VERSION_UNKNOWN')
+
+    service = dict.fromkeys(('load_state', 'active_state', 'sub_state', 'unit_file_state',
+                             'running', 'enabled', 'masked'))
+    result = commands.get('firewalld_service')
+    if complete_result(result) and result['rc'] == 0 and not result['stderr'].strip():
+        pairs = [line.split('=', 1) for line in result['stdout'].splitlines() if line]
+        fields = ('Id', 'LoadState', 'ActiveState', 'SubState', 'UnitFileState')
+        if (len(pairs) == len(fields) and all(len(p) == 2 for p in pairs)
+                and {p[0] for p in pairs} == set(fields)):
+            values = dict(pairs)
+            if (values['Id'] == 'firewalld.service'
+                    and all(re.fullmatch(r'[a-z][a-z-]*', values[f]) for f in fields[1:4])
+                    and re.fullmatch(r'[a-z-]*', values['UnitFileState'])):
+                service.update(zip(('load_state', 'active_state', 'sub_state', 'unit_file_state'),
+                                   (values[f] for f in fields[1:])))
+                service['running'] = values['ActiveState'] == 'active' and values['SubState'] == 'running'
+                service['enabled'] = values['UnitFileState'] == 'enabled'
+                service['masked'] = (values['LoadState'] == 'masked' or
+                                     values['UnitFileState'] in ('masked', 'masked-runtime'))
+    if service['load_state'] is None:
+        block('FIREWALLD_SERVICE_UNKNOWN')
+    else:
+        if service['load_state'] != 'loaded':
+            block('FIREWALLD_NOT_LOADED')
+        if not service['running']:
+            block('FIREWALLD_NOT_RUNNING')
+        if not service['enabled']:
+            block('FIREWALLD_NOT_ENABLED')
+        if service['masked']:
+            block('FIREWALLD_MASKED')
+
+    api = {}
+    for name in ('state', 'runtime_policies', 'permanent_policies'):
+        result = commands.get('firewalld_' + name)
+        usable = None
+        if complete_result(result):
+            if result['rc'] != 0:
+                usable = False
+            elif not result['stderr'].strip() and (name != 'state' or result['stdout'].strip() == 'running'):
+                usable = True
+        api[name] = usable
+        if usable is not True:
+            block('FIREWALLD_API_UNAVAILABLE' if usable is False else 'FIREWALLD_API_UNKNOWN', name)
+    return {'packages': packages, 'cli_version': version, 'service': service, 'api': api}
 
 
 def strict_bool(value):
@@ -184,11 +279,13 @@ def build_report(host, model, catalog, observation):
             block('PROBE_TRUNCATED', name)
         if result.get('rc') != 0:
             block('PROBE_FAILED', name)
+    firewalld = firewalld_prerequisites(commands, block)
     return {
         'schema_version': 1, 'host': host, 'enabled_flags': flags,
         'conditions': model.get('conditions', {}),
         'candidate_flows': sorted(candidates, key=lambda f: (f['service'], f['id'])),
         'blockers': sorted(blockers, key=lambda b: (b['code'], b['subject'])),
         'observations': safe_observation, 'apply_ready': False,
+        'firewalld': firewalld,
         'ssh': {'inventory_port': ssh_port, 'access_verified': False},
     }

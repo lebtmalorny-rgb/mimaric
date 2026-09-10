@@ -8,6 +8,13 @@ import time
 
 
 COMMANDS = {
+    'firewalld_package': ['rpm', '-q', '--queryformat',
+                          '%{NAME}\t%{VERSION}\t%{RELEASE}\t%{ARCH}\n', 'firewalld'],
+    'firewalld_python_package': ['rpm', '-q', '--queryformat',
+                                 '%{NAME}\t%{VERSION}\t%{RELEASE}\t%{ARCH}\n', 'python3-firewall'],
+    'firewalld_version': ['firewall-cmd', '--version'],
+    'firewalld_service': ['systemctl', 'show', 'firewalld.service',
+                          '--property=Id,LoadState,ActiveState,SubState,UnitFileState'],
     'addresses': ['ip', '-j', 'address', 'show'],
     'routes_v4': ['ip', '-j', '-4', 'route', 'show', 'table', 'all'],
     'routes_v6': ['ip', '-j', '-6', 'route', 'show', 'table', 'all'],

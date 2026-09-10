@@ -13,6 +13,8 @@
   no_log: true
 
 - name: Collect bounded network and firewall observations
+  # Includes installed RPM versions, unit state, CLI version and policy queries.
+  # Missing prerequisites are report findings; never install/start firewalld here.
   powerops_firewall_probe:
     timeout: "{{ host_firewall_probe_timeout }}"
     max_bytes: "{{ host_firewall_probe_max_bytes }}"

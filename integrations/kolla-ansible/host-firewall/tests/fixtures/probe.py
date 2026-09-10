@@ -2,7 +2,6 @@
 import json
 import os
 from ansible.module_utils.basic import AnsibleModule
-from ansible.module_utils.powerops_firewall_probe import COMMANDS
 
 module = AnsibleModule(argument_spec={
     'timeout': {'type': 'int'}, 'max_bytes': {'type': 'int'},
@@ -10,20 +9,6 @@ module = AnsibleModule(argument_spec={
 marker = os.environ['POWEROPS_TEST_PROBE_MARKER']
 with open(marker, 'a') as stream:
     stream.write('probe\n')
-observation = {'timestamp': '2026-09-10T10:00:00+00:00', 'commands': {
-    'addresses': {'argv': ['ip', '-j', 'address', 'show'], 'rc': 0,
-                  'available': True, 'truncated': False, 'timed_out': False,
-                  'stderr': '', 'stdout': json.dumps([{'ifname': 'ethapi', 'addr_info': [
-                      {'family': 'inet', 'local': '192.0.2.2', 'scope': 'global'},
-                      {'family': 'inet', 'local': '192.0.2.3', 'scope': 'global'},
-                  ]}])},
-    'nft': {'argv': ['nft', '-j', 'list', 'ruleset'], 'rc': 0,
-            'available': True, 'truncated': False, 'timed_out': False,
-            'stderr': '', 'stdout': '{"nftables": []}'},
-}}
-for name, argv in COMMANDS.items():
-    observation['commands'].setdefault(name, {
-        'argv': argv, 'rc': 0, 'available': True, 'truncated': False,
-        'timed_out': False, 'stdout': '', 'stderr': '',
-    })
+with open(os.environ['POWEROPS_TEST_OBSERVATION']) as stream:
+    observation = json.load(stream)
 module.exit_json(changed=False, snapshot=observation)

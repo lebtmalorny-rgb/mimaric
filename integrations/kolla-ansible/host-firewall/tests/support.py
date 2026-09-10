@@ -9,6 +9,8 @@ import sys
 import tempfile
 import unittest
 
+from firewalld_fixtures import installed_firewalld
+
 ROOT = Path(__file__).resolve().parents[1]
 _spec = importlib.util.spec_from_file_location(
     'probe_contract', ROOT / 'ansible/module_utils/powerops_firewall_probe.py')
@@ -41,6 +43,7 @@ class AnsibleFixture(unittest.TestCase):
                 'argv': argv, 'rc': 0, 'available': True, 'truncated': False,
                 'timed_out': False, 'stdout': '', 'stderr': '',
             })
+        self.observation['commands'].update(installed_firewalld())
         self.inventory_data = {
             'all': {'vars': {
                 'ansible_connection': 'local', 'ansible_python_interpreter': sys.executable,
@@ -73,13 +76,15 @@ class AnsibleFixture(unittest.TestCase):
         self.env = dict(os.environ, ANSIBLE_CONFIG=str(self.cfg),
                         ANSIBLE_LOCAL_TEMP=str(self.base / 'local-tmp'),
                         ANSIBLE_LOG_PATH=str(self.base / 'ansible.log'),
-                        ANSIBLE_NOCOLOR='1', ANSIBLE_STDOUT_CALLBACK='default')
+                        ANSIBLE_NOCOLOR='1', ANSIBLE_STDOUT_CALLBACK='default',
+                        POWEROPS_TEST_OBSERVATION=str(self.base / 'observation.json'))
         for key in ('ANSIBLE_CALLBACK_PLUGINS', 'ANSIBLE_CALLBACKS_ENABLED',
                     'ANSIBLE_INVENTORY', 'ANSIBLE_LIBRARY', 'ANSIBLE_ACTION_PLUGINS'):
             self.env.pop(key, None)
 
     def write_inventory(self):
         self.inventory.write_text(json.dumps(self.inventory_data))
+        (self.base / 'observation.json').write_text(json.dumps(self.observation))
 
     def run_play(self, name, extra=None, options=()):
         command = [shutil.which('ansible-playbook'), '-i', str(self.inventory), str(self.playdir / name)]

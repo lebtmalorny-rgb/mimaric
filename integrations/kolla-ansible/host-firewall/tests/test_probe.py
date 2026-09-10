@@ -83,11 +83,16 @@ class ProbeTests(unittest.TestCase):
         self.assertIn(['nft', '-j', 'list', 'ruleset'], calls)
         self.assertIn(['firewall-cmd', '--permanent', '--list-all-zones'], calls)
         self.assertIn(['firewall-cmd', '--list-all-policies'], calls)
+        self.assertIn(['firewall-cmd', '--version'], calls)
         allowed = {
             ('ip', '-j', 'address', 'show'), ('ip', '-j', '-4', 'route', 'show', 'table', 'all'),
             ('ip', '-j', '-6', 'route', 'show', 'table', 'all'), ('ss', '-H', '-lntu'),
             ('nft', '-j', 'list', 'ruleset'), ('iptables-save',), ('ip6tables-save',),
             ('firewall-cmd', '--state'), ('firewall-cmd', '--get-active-zones'),
+            ('firewall-cmd', '--version'),
+            ('rpm', '-q', '--queryformat', '%{NAME}\t%{VERSION}\t%{RELEASE}\t%{ARCH}\n', 'firewalld'),
+            ('rpm', '-q', '--queryformat', '%{NAME}\t%{VERSION}\t%{RELEASE}\t%{ARCH}\n', 'python3-firewall'),
+            ('systemctl', 'show', 'firewalld.service', '--property=Id,LoadState,ActiveState,SubState,UnitFileState'),
             ('firewall-cmd', '--list-all-zones'), ('firewall-cmd', '--permanent', '--list-all-zones'),
             ('firewall-cmd', '--list-all-policies'), ('firewall-cmd', '--permanent', '--list-all-policies'),
             ('systemctl', 'show', 'firewalld.service', 'nftables.service', '--property=Id,ActiveState,SubState,UnitFileState'),
