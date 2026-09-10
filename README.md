@@ -41,6 +41,9 @@ ansible-playbook collect-mistral.yml
 - [ADR-0001: локальный disk-monitor](docs/adr/0001-local-disk-monitor.md) —
   предложенная интеграция локальных проверок ФС/диска с Consul и hostmonitor.
   Не реализовано; автоматическое восстановление не включено.
+- [ADR-0002: firewall хостов Kolla-Ansible](docs/adr/0002-host-firewall.md) —
+  концепция отдельного playbook с каталогом потоков всех включённых сервисов,
+  сохранением SSH, предварительным отчётом и откатом. Не реализовано.
 
 ## База и порядок применения
 
