@@ -17,6 +17,7 @@
 | Пользователи, роли и аутентификация | [POWEROPS-AUTHENTICATION.md](docs/POWEROPS-AUTHENTICATION.md) |
 | Ironic, Ansible-роли и enroll | [POWEROPS-IRONIC-ENROLLMENT.md](docs/POWEROPS-IRONIC-ENROLLMENT.md) |
 | Consul, матрица и её генерация | [POWEROPS-CONSUL.md](docs/POWEROPS-CONSUL.md) |
+| FRR, VIP anycast, BGP и роль loadbalancer | [POWEROPS-FRR-VIP-ANYCAST.md](docs/POWEROPS-FRR-VIP-ANYCAST.md) |
 | Команды для разбора отдельных проблем | [POWEROPS-TROUBLESHOOTING-COMMANDS.md](docs/POWEROPS-TROUBLESHOOTING-COMMANDS.md) |
 | Универсальный сбор PowerOps | [collect-v2.yml](tools/diagnostics/collect-v2.yml) |
 | Медленный Mistral, 504, зависшие executions | [collect-mistral.yml](tools/diagnostics/collect-mistral.yml) |
