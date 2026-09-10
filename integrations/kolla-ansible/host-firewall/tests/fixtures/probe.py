@@ -2,6 +2,7 @@
 import json
 import os
 from ansible.module_utils.basic import AnsibleModule
+from ansible.module_utils.powerops_firewall_probe import COMMANDS
 
 module = AnsibleModule(argument_spec={
     'timeout': {'type': 'int'}, 'max_bytes': {'type': 'int'},
@@ -20,4 +21,9 @@ observation = {'timestamp': '2026-09-10T10:00:00+00:00', 'commands': {
             'available': True, 'truncated': False, 'timed_out': False,
             'stderr': '', 'stdout': '{"nftables": []}'},
 }}
+for name, argv in COMMANDS.items():
+    observation['commands'].setdefault(name, {
+        'argv': argv, 'rc': 0, 'available': True, 'truncated': False,
+        'timed_out': False, 'stdout': '', 'stderr': '',
+    })
 module.exit_json(changed=False, snapshot=observation)

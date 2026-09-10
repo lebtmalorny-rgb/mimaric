@@ -97,6 +97,13 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(len(calls), len(result['commands']))
         self.assertIn('timestamp', result)
 
+    def test_model_and_collector_agree_on_required_measurements(self):
+        spec = importlib.util.spec_from_file_location(
+            'model_contract', MODULE.with_name('powerops_firewall_model.py'))
+        model = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(model)
+        self.assertEqual(set(self.module.COMMANDS), model.EXPECTED_COMMANDS)
+
 
 if __name__ == '__main__':
     unittest.main()

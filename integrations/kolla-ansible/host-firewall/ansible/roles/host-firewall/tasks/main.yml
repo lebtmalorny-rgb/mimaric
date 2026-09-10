@@ -1,4 +1,13 @@
 ---
+- name: Enforce the report-only boundary within the role
+  ansible.builtin.assert:
+    that:
+      - host_firewall_mode == 'report'
+      - ansible_version.full is version('2.18', '>=')
+      - ansible_version.full is version('2.19', '<')
+    fail_msg: "Report-only delivery requires ansible-core 2.18.x; apply is not implemented."
+  any_errors_fatal: true
+
 - name: Load the preliminary flow catalog
   ansible.builtin.include_vars: catalog.yml
   no_log: true
@@ -12,6 +21,12 @@
   ignore_errors: true
   ignore_unreachable: true
   no_log: true
+  # Keep the remote boundary even if preflight/role assertions are skipped with
+  # CLI task selection. No mode except report is allowed to contact a host.
+  when:
+    - host_firewall_mode == 'report'
+    - ansible_version.full is version('2.18', '>=')
+    - ansible_version.full is version('2.19', '<')
 
 - name: Project only selected Kolla variables on the controller
   powerops_firewall_model:

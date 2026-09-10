@@ -58,6 +58,15 @@ class ProjectionTests(AnsibleFixture):
         self.assertEqual(8989, report['candidate_flows'][0]['port'])
         self.assertNotIn('broken_unrelated_variable', json.dumps(report))
 
+    def test_missing_measurement_makes_collection_incomplete(self):
+        self.observation['commands'].pop('ss', None)
+        self.write_inventory()
+        self.project()
+        bundle = json.loads((self.playdir / 'projection.json').read_text())
+        self.assertFalse(bundle['collection_complete'])
+        self.assertIn({'code': 'PROBE_MISSING', 'subject': 'ss'},
+                      bundle['reports']['node-a']['blockers'])
+
     def test_unresolved_selected_value_does_not_abort_or_leak(self):
         report = self.project({'mistral_api_listen_port': '{{ missing_secret_value }}'})
         self.assertEqual([], report['candidate_flows'])
@@ -74,10 +83,40 @@ class ProjectionTests(AnsibleFixture):
         report = self.project({'enable_haproxy': False})
         self.assertEqual([], report['candidate_flows'])
 
+    def test_keystone_external_backend_requires_resolved_enabled_external_vip(self):
+        baremetal = self.inventory_data['all']['children']['baremetal']['children']
+        baremetal['keystone'] = {'hosts': {'node-a': {}}}
+        self.write_inventory()
+        for setting in (False, '{{ missing_external_vip_setting }}', None, True, 'missing'):
+            with self.subTest(setting=setting):
+                extra = {'enable_mistral': False, 'enable_keystone': True,
+                         'keystone_internal_listen_port': 15001, 'keystone_public_listen_port': 15000}
+                if setting != 'missing':
+                    extra['haproxy_enable_external_vip'] = setting
+                report = self.project(extra)
+                expected = [15000, 15001] if setting is True else [15001]
+                self.assertEqual(expected, sorted(f['port'] for f in report['candidate_flows']))
+                self.assertNotIn('missing_external_vip_setting', json.dumps(report))
+
     def test_address_not_observed_on_interface_is_not_used(self):
         report = self.project({'api_interface_address': '192.0.2.100'})
         self.assertEqual([], report['candidate_flows'])
         self.assertIn('UNRESOLVED_VARIABLE', {b['code'] for b in report['blockers']})
+
+    def test_failed_explicit_address_never_falls_back_to_observed_address(self):
+        self.observation['commands']['addresses']['stdout'] = json.dumps([
+            {'ifname': 'ethapi', 'addr_info': [
+                {'family': 'inet', 'local': '192.0.2.3', 'scope': 'global'},
+            ]},
+        ])
+        self.write_inventory()
+        for override in ('{{ missing_binding_address }}', None):
+            with self.subTest(override=override):
+                report = self.project({'api_interface_address': override})
+                self.assertEqual([], report['candidate_flows'])
+                self.assertIn({'code': 'UNRESOLVED_VARIABLE', 'subject': 'api_interface_address'},
+                              report['blockers'])
+                self.assertNotIn('missing_binding_address', json.dumps(report))
 
 
 class PlaybookTests(AnsibleFixture):
@@ -94,6 +133,7 @@ class PlaybookTests(AnsibleFixture):
         self.assert_success(result)
         bundle = self.read_bundle()
         self.assertFalse(bundle['apply_ready'])
+        self.assertTrue(bundle['collection_complete'])
         self.assertEqual(['lb', 'node-a'], bundle['selected_hosts'])
         self.assertEqual(['outside'], bundle['not_selected_hosts'])
         self.assertEqual(8989, bundle['reports']['node-a']['candidate_flows'][0]['port'])
@@ -111,6 +151,20 @@ class PlaybookTests(AnsibleFixture):
 
     def test_apply_fails_before_remote_probe(self):
         result = self.run_play('host-firewall.yml', {'host_firewall_mode': 'apply'})
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse((self.base / 'probe-called').exists())
+        self.assertFalse((self.tree / 'artifacts').exists())
+
+    def test_skipping_preflight_does_not_allow_apply_probe(self):
+        result = self.run_play('host-firewall.yml', {'host_firewall_mode': 'apply'},
+                               options=('--skip-tags', 'always'))
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse((self.base / 'probe-called').exists())
+        self.assertFalse((self.tree / 'artifacts').exists())
+
+    def test_start_at_probe_in_apply_cannot_produce_a_successful_report(self):
+        result = self.run_play('host-firewall.yml', {'host_firewall_mode': 'apply'}, options=(
+            '--start-at-task', 'host-firewall : Collect bounded network and firewall observations'))
         self.assertNotEqual(0, result.returncode)
         self.assertFalse((self.base / 'probe-called').exists())
         self.assertFalse((self.tree / 'artifacts').exists())

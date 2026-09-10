@@ -3,6 +3,16 @@ import ipaddress
 import re
 
 
+# Kept explicit on the controller; the contract test compares this set with the
+# remote collector, so adding a measurement cannot silently bypass completeness.
+EXPECTED_COMMANDS = frozenset((
+    'addresses', 'routes_v4', 'routes_v6', 'ss', 'firewalld_state',
+    'firewalld_active_zones', 'firewalld_runtime_zones', 'firewalld_permanent_zones',
+    'firewalld_runtime_policies', 'firewalld_permanent_policies', 'nft',
+    'iptables', 'ip6tables', 'services', 'bridge_netfilter',
+))
+
+
 def strict_bool(value):
     if isinstance(value, bool):
         return value
@@ -113,6 +123,16 @@ def build_report(host, model, catalog, observation):
             if flow['protocol'] not in ('tcp', 'udp'):
                 block('INVALID_CATALOG', service)
                 continue
+            conditions_met = True
+            for condition in flow.get('required_conditions', []):
+                try:
+                    enabled = strict_bool(model.get('conditions', {}).get(condition))
+                except ValueError:
+                    enabled = False
+                    block('UNRESOLVED_FLOW_CONDITION', condition)
+                conditions_met = conditions_met and enabled
+            if not conditions_met:
+                continue
             destinations = group_members(flow['destination_group'])
             if host not in destinations:
                 continue
@@ -152,6 +172,8 @@ def build_report(host, model, catalog, observation):
     commands = observation.get('commands', {})
     if not commands:
         block('OBSERVATION_MISSING')
+    for name in sorted(EXPECTED_COMMANDS - commands.keys()):
+        block('PROBE_MISSING', name)
     for name, result in sorted(commands.items()):
         safe_observation['commands'][name] = {k: result.get(k) for k in fields}
         if not result.get('available'):
@@ -164,6 +186,7 @@ def build_report(host, model, catalog, observation):
             block('PROBE_FAILED', name)
     return {
         'schema_version': 1, 'host': host, 'enabled_flags': flags,
+        'conditions': model.get('conditions', {}),
         'candidate_flows': sorted(candidates, key=lambda f: (f['service'], f['id'])),
         'blockers': sorted(blockers, key=lambda b: (b['code'], b['subject'])),
         'observations': safe_observation, 'apply_ready': False,

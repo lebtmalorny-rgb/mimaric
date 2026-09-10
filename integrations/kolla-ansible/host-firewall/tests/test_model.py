@@ -136,6 +136,11 @@ class ModelTests(unittest.TestCase):
             observation['commands']['ss'].update(changes)
             self.assertIn(code, self.codes(self.report(observation=observation)))
 
+    def test_missing_measurements_are_not_silent_success(self):
+        report = self.report()
+        self.assertIn({'code': 'PROBE_MISSING', 'subject': 'addresses'}, report['blockers'])
+        self.assertNotIn({'code': 'PROBE_MISSING', 'subject': 'ss'}, report['blockers'])
+
     def test_observed_listener_is_not_an_automatic_allow(self):
         _, _, observation = fixture()
         observation['commands']['ss']['stdout'] = 'tcp LISTEN 0 128 0.0.0.0:12345'

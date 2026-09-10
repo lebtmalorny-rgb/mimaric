@@ -1,5 +1,6 @@
 """Disposable Ansible fixtures, without production connections or firewall calls."""
 import json
+import importlib.util
 import os
 from pathlib import Path
 import shutil
@@ -9,6 +10,10 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+_spec = importlib.util.spec_from_file_location(
+    'probe_contract', ROOT / 'ansible/module_utils/powerops_firewall_probe.py')
+_probe = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_probe)
 
 
 class AnsibleFixture(unittest.TestCase):
@@ -31,6 +36,11 @@ class AnsibleFixture(unittest.TestCase):
                 ]}]),
             }},
         }
+        for name, argv in _probe.COMMANDS.items():
+            self.observation['commands'].setdefault(name, {
+                'argv': argv, 'rc': 0, 'available': True, 'truncated': False,
+                'timed_out': False, 'stdout': '', 'stderr': '',
+            })
         self.inventory_data = {
             'all': {'vars': {
                 'ansible_connection': 'local', 'ansible_python_interpreter': sys.executable,

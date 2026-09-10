@@ -30,6 +30,12 @@ class ActionModule(ActionBase):
             return dict(result, failed=True, msg='Unknown report stage')
         catalog = task_vars.get('host_firewall_catalog', {})
         try:
+            # Task selection may skip both assertions. Never aggregate a report
+            # that could be mistaken for successful handling of an apply request.
+            mode = self._templar.template(task_vars.get('host_firewall_mode', 'report'),
+                                          fail_on_undefined=True, disable_lookups=True)
+            if mode != 'report':
+                return dict(result, failed=True, msg='Only report mode is implemented')
             if stage == 'project':
                 result['model'] = self.project(task_vars, catalog)
             else:
@@ -61,11 +67,17 @@ class ActionModule(ActionBase):
             except ValueError:
                 flags[key] = None
         ports = {}
+        conditions = {}
         for service in catalog.get('services', {}).values():
             if flags.get(service['enable_flag']) is True:
                 for flow in service['flows']:
                     key = flow['port_var']
                     ports[key] = resolve(key)
+                    for condition in flow.get('required_conditions', []):
+                        try:
+                            conditions[condition] = _model.strict_bool(resolve(condition))
+                        except ValueError:
+                            conditions[condition] = None
 
         host = values['inventory_hostname']
         groups = {key: list(members) for key, members in values.get('groups', {}).items()}
@@ -74,18 +86,23 @@ class ActionModule(ActionBase):
         family = resolve('api_address_family')
         override = None
         raw = values.get('api_interface_address')
-        if raw is not None and not (
+        explicit_override = 'api_interface_address' in values and not (
             isinstance(raw, str) and re.fullmatch(r"\{\{\s*(['\"])api\1\s*\|\s*kolla_address\s*\}\}", raw)
-        ):
+        )
+        if explicit_override:
             override = resolve('api_interface_address')
         vips = [resolve(name, '') for name in
                 ('kolla_internal_vip_address', 'kolla_external_vip_address')]
-        address = self.observed_address(observation, interface, family, override, vips)
+        # None from an explicit setting is a failed/null override, not permission
+        # to select a different address automatically.
+        address = None if explicit_override and override is None else self.observed_address(
+            observation, interface, family, override, vips)
         if address is None:
             unresolved.append('api_interface_address')
         ssh_key = 'ansible_port' if 'ansible_port' in values else 'ansible_ssh_port'
         return {
             'enabled_flags': flags, 'groups': groups, 'ports': ports,
+            'conditions': conditions,
             'network_addresses': {host: {'api': address}},
             'ssh_port': resolve(ssh_key), 'unresolved_names': sorted(set(unresolved)),
         }

@@ -17,6 +17,9 @@ host_firewall_catalog:
           network: api
           source_groups: [loadbalancer]
         - id: keystone-public-backend
+          # haproxy_single_service_split.cfg.j2 excludes external backends when
+          # the external VIP is disabled, independently of enable_keystone.
+          required_conditions: [haproxy_enable_external_vip]
           protocol: tcp
           port_var: keystone_public_listen_port
           destination_group: keystone
