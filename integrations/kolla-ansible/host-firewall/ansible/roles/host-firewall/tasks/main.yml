@@ -1,0 +1,21 @@
+---
+- name: Load the preliminary flow catalog
+  ansible.builtin.include_vars: catalog.yml
+  no_log: true
+
+- name: Collect bounded network and firewall observations
+  powerops_firewall_probe:
+    timeout: "{{ host_firewall_probe_timeout }}"
+    max_bytes: "{{ host_firewall_probe_max_bytes }}"
+  become: "{{ host_firewall_become }}"
+  register: host_firewall_observation
+  ignore_errors: true
+  ignore_unreachable: true
+  no_log: true
+
+- name: Project only selected Kolla variables on the controller
+  powerops_firewall_model:
+    stage: project
+  register: host_firewall_projection
+  ignore_errors: true
+  no_log: true

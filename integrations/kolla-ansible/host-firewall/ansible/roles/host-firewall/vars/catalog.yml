@@ -1,0 +1,60 @@
+---
+# Preliminary backend flows only. No entry asserts complete service coverage.
+# Source: kolla-ansible-enroll-ironic-patch-3_0809.zip, roles/*/defaults/main.yml.
+host_firewall_catalog:
+  schema_version: 1
+  services:
+    keystone:
+      enable_flag: enable_keystone
+      required_flags: [enable_haproxy]
+      coverage: partial
+      source_evidence: 0809 ansible/roles/keystone/defaults/main.yml
+      flows:
+        - id: keystone-internal-backend
+          protocol: tcp
+          port_var: keystone_internal_listen_port
+          destination_group: keystone
+          network: api
+          source_groups: [loadbalancer]
+        - id: keystone-public-backend
+          protocol: tcp
+          port_var: keystone_public_listen_port
+          destination_group: keystone
+          network: api
+          source_groups: [loadbalancer]
+    mistral:
+      enable_flag: enable_mistral
+      required_flags: [enable_haproxy]
+      coverage: partial
+      source_evidence: 0809 ansible/roles/mistral/defaults/main.yml
+      flows:
+        - id: mistral-api-backend
+          protocol: tcp
+          port_var: mistral_api_listen_port
+          destination_group: mistral-api
+          network: api
+          source_groups: [loadbalancer]
+    masakari:
+      enable_flag: enable_masakari
+      required_flags: [enable_haproxy]
+      coverage: partial
+      source_evidence: 0809 ansible/roles/masakari/defaults/main.yml
+      flows:
+        - id: masakari-api-backend
+          protocol: tcp
+          port_var: masakari_api_listen_port
+          destination_group: masakari-api
+          network: api
+          source_groups: [loadbalancer]
+    ironic:
+      enable_flag: enable_ironic
+      required_flags: [enable_haproxy]
+      coverage: partial
+      source_evidence: 0809 ansible/roles/ironic/defaults/main.yml
+      flows:
+        - id: ironic-api-backend
+          protocol: tcp
+          port_var: ironic_api_listen_port
+          destination_group: ironic-api
+          network: api
+          source_groups: [loadbalancer]

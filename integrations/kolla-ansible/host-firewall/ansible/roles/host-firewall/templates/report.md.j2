@@ -1,0 +1,64 @@
+# Host firewall — предварительный отчёт
+
+Сформирован: {{ host_firewall_report.bundle.generated_at }}.
+
+Режим: **report-only**. `apply_ready: false`.
+Правила не менялись. Применение, default-deny и откат не реализованы.
+Матрица ниже — кандидаты для анализа, не готовые разрешения firewall.
+Полнота сбора выбранных хостов: {{ host_firewall_report.bundle.collection_complete }}.
+
+Выбраны: {{ host_firewall_report.bundle.selected_hosts | join(', ') }}.
+Не выбраны из inventory: {{ host_firewall_report.bundle.not_selected_hosts | join(', ') }}.
+Успешный сбор не доказывает полноту каталога или работоспособность соединений.
+
+{% for host, report in host_firewall_report.bundle.reports | dictsort %}
+## {{ host }}
+
+Сбор: {{ report.collection_status }}.
+Время наблюдения: {{ report.observations.timestamp | default('нет', true) }}.
+SSH-порт из inventory: {{ report.ssh.inventory_port | default('не определён', true) }}.
+SSH-доступ и новое подключение **не проверялись**.
+
+### Предварительные потоки
+
+| Поток | Протокол/порт | Назначение | Источники |
+| --- | --- | --- | --- |
+{% for flow in report.candidate_flows %}
+| {{ flow.id }} | {{ flow.protocol }}/{{ flow.port }} | {{ flow.destination }} | {% for source in flow.sources %}{{ source.host }} ({{ source.address }}){% if not loop.last %}, {% endif %}{% endfor %} |
+{% endfor %}
+{% if not report.candidate_flows %}
+
+Нет подтверждённых кандидатов. Это **не означает отсутствие нужных соединений**.
+{% endif %}
+
+### Блокировки и недостающие сведения
+
+{% for blocker in report.blockers %}
+- `{{ blocker.code }}`{% if blocker.subject %}: {{ blocker.subject }}{% endif %}.
+{% endfor %}
+
+### Флаги включения
+
+{% for name, value in report.enabled_flags | dictsort %}
+- `{{ name }}`: {{ value }}.
+{% endfor %}
+
+### Результаты команд
+
+| Проверка | RC | Доступна | Timeout | Вывод обрезан |
+| --- | --- | --- | --- | --- |
+{% for name, result in report.observations.commands | dictsort %}
+| {{ name }} | {{ result.rc }} | {{ result.available }} | {{ result.timed_out }} | {{ result.truncated }} |
+{% endfor %}
+
+{% endfor %}
+## Ограничения
+
+- Каталог содержит только предварительные API backend-потоки четырёх сервисов.
+- `UNKNOWN_ENABLED_FLAG` включает непокрытые сервисы и переключатели режимов.
+- `PARTIAL_SERVICE_COVERAGE` означает, что описаны не все связи сервиса.
+- `PROBE_*` и `OBSERVATION_MISSING` означают неполное наблюдение, не пустой firewall.
+- Правила и слушающие порты сохранены отдельно от матрицы в `report.json`.
+- Конфликты правил, Security Groups, разрешённость трафика и владельцы цепочек
+  автоматически не анализировались. SSH и сетевые сервисы не перезапускались.
+- Не включать ограничительную политику на основании этого отчёта.

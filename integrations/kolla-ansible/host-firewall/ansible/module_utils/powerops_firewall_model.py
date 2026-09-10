@@ -99,6 +99,12 @@ def build_report(host, model, catalog, observation):
             continue
         # No catalog entry in this delivery can declare complete service coverage.
         block('PARTIAL_SERVICE_COVERAGE', service)
+        requirements = spec.get('required_flags', [])
+        for required in requirements:
+            if required not in flags:
+                block('MISSING_ENABLE_FLAG', required)
+        if any(flags.get(required) is not True for required in requirements):
+            continue
         for flow in spec['flows']:
             required = ('id', 'protocol', 'port_var', 'destination_group', 'network')
             if not isinstance(flow, dict) or not all(isinstance(flow.get(k), str) for k in required):

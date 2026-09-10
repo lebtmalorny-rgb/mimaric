@@ -1,0 +1,6 @@
+---
+host_firewall_mode: report
+host_firewall_probe_timeout: 10
+host_firewall_probe_max_bytes: 262144
+host_firewall_become: true
+host_firewall_output_dir: "{{ playbook_dir | dirname }}/artifacts"
