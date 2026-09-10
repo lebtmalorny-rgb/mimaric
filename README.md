@@ -10,6 +10,7 @@
 
 | Задача | Файл / каталог |
 |---|---|
+| Ultra: короткие команды выключения и перезагрузки | [ULTRA-POWER-COMMANDS.md](docs/ULTRA-POWER-COMMANDS.md) |
 | Общее устройство и сценарии | [POWEROPS-OVERVIEW.md](docs/POWEROPS-OVERVIEW.md) |
 | Ручная диагностика всей цепочки | [POWEROPS-DIAGNOSTICS.md](docs/POWEROPS-DIAGNOSTICS.md) |
 | Globals, Jinja, задержки и тайминги | [POWEROPS-CONFIGURATION.md](docs/POWEROPS-CONFIGURATION.md) |
