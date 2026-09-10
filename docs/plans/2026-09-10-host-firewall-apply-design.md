@@ -1,12 +1,13 @@
 # Host firewall: дизайн apply и rollback через firewalld
 
 - Дата: 10 сентября 2026 года.
-- Статус: **предложение для согласования перед реализацией**.
+- Статус: **согласовано пользователем 10 сентября 2026 года**.
 - Основа: [ADR-0002](../adr/0002-host-firewall.md), Kolla-Ansible `0809` и
   [существующий report](../../integrations/kolla-ansible/host-firewall/README.md).
 - Уже согласовано: отдельный playbook, firewalld, сохранение SSH с любых
   источников, отсутствие автоматической установки и запуска firewalld.
 - На стенде изменений нет; код apply/rollback пока отсутствует.
+- Порядок реализации: [implementation plan](2026-09-10-host-firewall-apply.md).
 
 ## 1. Результат и границы
 
