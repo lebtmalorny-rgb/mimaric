@@ -1,5 +1,10 @@
 # Host firewall: implementation plan первого этапа
 
+Исторический план первого этапа. Сохранение отчётов на controller удалено
+по запросу пользователя 11 сентября. Теперь `report` выводит сводку и `plan_id`
+в консоль; файлы отчёта не создаются. Актуальный интерфейс — в
+[инструкции](../../integrations/kolla-ansible/host-firewall/README.md#apply).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > `superpowers:executing-plans` for inline execution, or
 > `superpowers:subagent-driven-development` if that execution mode is selected.

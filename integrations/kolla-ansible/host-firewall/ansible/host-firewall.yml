@@ -22,69 +22,28 @@
     - role: host-firewall
       when: host_firewall_mode | default('report') == 'report' or host_firewall_admission.operation | default('') == 'apply'
   post_tasks:
-    - name: Aggregate and save a private report on the controller
+    - name: Aggregate selected hosts in controller memory
+      powerops_firewall_model:
+        stage: aggregate
+        hosts: "{{ ansible_play_hosts_all }}"
+      register: host_firewall_report
       run_once: true
       become: false
       no_log: true
-      check_mode: false
       when: host_firewall_mode | default('report') == 'report' or host_firewall_admission.operation | default('') == 'apply'
-      block:
-        - name: Aggregate selected hosts including failed observations
-          powerops_firewall_model:
-            stage: aggregate
-            hosts: "{{ ansible_play_hosts_all }}"
-          register: host_firewall_report
 
-        - name: Inspect report parent without changing its permissions
-          ansible.builtin.stat:
-            path: "{{ host_firewall_output_dir }}"
-            follow: false
-          delegate_to: localhost
-          register: host_firewall_parent
+    - name: Validate every selected host plan before the first mutation
+      powerops_firewall_admission:
+        require_fresh: true
+      register: host_firewall_admission
+      any_errors_fatal: true
+      when: host_firewall_mode | default('report') == 'apply' and host_firewall_admission.operation | default('') == 'apply'
 
-        - name: Reject non-directory or symlink report parent
-          ansible.builtin.assert:
-            that:
-              - host_firewall_output_dir is string
-              - host_firewall_output_dir.startswith('/')
-              - host_firewall_output_dir != '/'
-              - not host_firewall_parent.stat.exists or (host_firewall_parent.stat.isdir and not host_firewall_parent.stat.islnk)
-
-        - name: Create report parent if absent
-          ansible.builtin.file:
-            path: "{{ host_firewall_output_dir }}"
-            state: directory
-            mode: '0700'
-          when: not host_firewall_parent.stat.exists
-          delegate_to: localhost
-
-        - name: Allocate a unique private report directory
-          ansible.builtin.tempfile:
-            state: directory
-            path: "{{ host_firewall_output_dir }}"
-            prefix: host-firewall-
-          register: host_firewall_artifact
-          delegate_to: localhost
-
-        - name: Save structured report
-          ansible.builtin.copy:
-            content: "{{ host_firewall_report.bundle | to_nice_json }}\n"
-            dest: "{{ host_firewall_artifact.path }}/report.json"
-            mode: '0600'
-          delegate_to: localhost
-
-        - name: Save readable report
-          ansible.builtin.template:
-            src: roles/host-firewall/templates/report.md.j2
-            dest: "{{ host_firewall_artifact.path }}/report.md"
-            mode: '0600'
-          delegate_to: localhost
-
-    - name: Show report location and safety boundary
+    - name: Show firewall plan summary without saving report files
       ansible.builtin.debug:
-        msg: "Report: {{ host_firewall_artifact.path }}/report.md; restrictive apply requires a complete, revalidated catalog."
+        msg: "{{ host_firewall_report.summary }}"
       run_once: true
-      when: host_firewall_artifact.path is defined
+      when: host_firewall_mode | default('report') == 'report'
 
 - name: Apply or restore owned firewalld rules one host at a time
   hosts: "{{ host_firewall_hosts | default('baremetal') if host_firewall_mode | default('report') != 'report' else [] }}"

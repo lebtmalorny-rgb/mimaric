@@ -1,5 +1,11 @@
 # Host firewall apply/rollback Implementation Plan
 
+Исторический план. Механизм применения и отката реализован; полнота каталога
+и стендовая проверка остаются отдельными работами. Уточнение от 11 сентября:
+сохранение отчётов на controller удалено, apply использует `plan_id` консольной
+сводки и свежий расчёт в памяти. Актуальный порядок запуска — в
+[инструкции](../../integrations/kolla-ansible/host-firewall/README.md#apply).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > `superpowers:executing-plans` for inline execution, or
 > `superpowers:subagent-driven-development` if the user selects delegation.

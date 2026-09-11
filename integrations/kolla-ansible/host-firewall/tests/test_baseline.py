@@ -60,7 +60,7 @@ class Baseline0809Tests(AnsibleFixture):
             'host_firewall_become': False,
         })
         self.assert_success(result)
-        bundle = self.read_bundle()
+        bundle = self.read_summary()
         self.assertEqual(18989, bundle['reports']['node-a']['candidate_flows'][0]['port'])
         for relative, digest in before.items():
             self.assertEqual(digest, hashlib.sha256((self.tree / relative).read_bytes()).hexdigest(), str(relative))

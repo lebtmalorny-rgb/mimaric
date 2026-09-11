@@ -47,6 +47,17 @@ class ActionModule(ActionBase):
                 result['bundle'] = self.aggregate(task_vars, catalog)
                 result['bundle']['catalog_digest'] = _plan.canonical_digest(catalog)
                 result['bundle']['plan_id'] = _plan.report_digest(result['bundle'])
+                # Only selected model fields may reach normal Ansible output.
+                # Raw command output and full task/host variables stay in memory.
+                bundle = result['bundle']
+                result['summary'] = {key: bundle[key] for key in (
+                    'schema_version', 'mode', 'apply_ready', 'generated_at',
+                    'plan_id', 'selected_hosts', 'not_selected_hosts', 'collection_complete')}
+                result['summary']['reports'] = {
+                    host: {key: report[key] for key in (
+                        'host', 'collection_status', 'ssh', 'candidate_flows',
+                        'blockers', 'firewalld', 'apply_ready')}
+                    for host, report in bundle['reports'].items()}
         except Exception:
             # Exception text from templating can include passwords or expressions.
             return dict(result, failed=True, msg='Report model failed; check input schema and selected variables')

@@ -1,6 +1,5 @@
 """Controller-side admission before copying helpers or changing a host."""
 import importlib.util
-import json
 from pathlib import Path
 import re
 
@@ -47,39 +46,39 @@ class ActionModule(ActionBase):
                 if not reload_allowed:
                     raise ValueError('INITIAL_RELOAD_APPROVAL_REQUIRED')
                 return dict(result, allowed=True, operation='prepare')
-            path = get('host_firewall_plan_file', '')
+            if get('host_firewall_plan_file', ''):
+                raise ValueError('REPORT_FILES_NOT_SUPPORTED')
             plan_id = get('host_firewall_plan_id', '')
-            if not isinstance(path, str) or not path or not isinstance(plan_id, str):
-                raise ValueError('APPROVED_REPORT_REQUIRED')
-            file = Path(path)
-            if file.is_symlink() or not file.is_file() or file.stat().st_size > 4194304:
-                raise ValueError('INVALID_REPORT_FILE')
-            bundle = json.loads(file.read_text())
-            if sorted(bundle['selected_hosts']) != sorted(values['ansible_play_hosts_all']):
-                raise ValueError('REPORT_HOST_SELECTION_CHANGED')
-            if set(bundle['reports']) != set(bundle['selected_hosts']):
-                raise ValueError('INCOMPLETE_HOST_REPORTS')
-            for host, report in bundle['reports'].items():
-                if report['host'] != host:
-                    raise ValueError('REPORT_HOST_MISMATCH')
-                _plan.rules_from_report(report)
-            if _plan.report_digest(bundle) != plan_id:
-                raise ValueError('REPORT_DIGEST_MISMATCH')
+            if not isinstance(plan_id, str) or not re.fullmatch(r'[0-9a-f]{64}', plan_id):
+                raise ValueError('REVIEWED_PLAN_ID_REQUIRED')
             checks = get('host_firewall_verification_checks', [])
             if not isinstance(checks, list) or not checks:
                 raise ValueError('SERVICE_VERIFICATION_REQUIRED')
             required_checks = _verify.validate_checks(checks)
+            report = {}
             if self._task.args.get('require_fresh', False):
                 fresh = values.get('host_firewall_report', {}).get('bundle', {})
-                if not fresh.get('collection_complete') or _plan.report_digest(fresh) != plan_id:
+                if not fresh.get('collection_complete'):
+                    raise ValueError('FRESH_COLLECTION_INCOMPLETE')
+                if sorted(fresh['selected_hosts']) != sorted(values['ansible_play_hosts_all']):
+                    raise ValueError('REPORT_HOST_SELECTION_CHANGED')
+                if set(fresh['reports']) != set(fresh['selected_hosts']):
+                    raise ValueError('INCOMPLETE_HOST_REPORTS')
+                if _plan.report_digest(fresh) != plan_id:
                     raise ValueError('FRESH_REPORT_MISMATCH')
-                for report in fresh['reports'].values():
-                    _plan.rules_from_report(report)
+                # Validate the whole selected batch before the first mutation,
+                # including blockers on hosts later in the serial play.
+                for host, host_report in fresh['reports'].items():
+                    if host_report['host'] != host:
+                        raise ValueError('REPORT_HOST_MISMATCH')
+                    _plan.rules_from_report(host_report)
+                report = {key: fresh['reports'][values['inventory_hostname']][key]
+                          for key in ('host', 'ssh', 'candidate_flows', 'blockers')}
             timeout = get('host_firewall_rollback_timeout', 300)
             if type(timeout) is not int or not 60 <= timeout <= 900:
                 raise ValueError('INVALID_ROLLBACK_TIMEOUT')
             return dict(result, allowed=True, operation='apply', plan_id=plan_id,
-                        report=bundle['reports'][values['inventory_hostname']],
+                        report=report,
                         checks=checks, required_checks=required_checks, rollback_timeout=timeout)
         except Exception as exc:
             # Emit only our fixed identifiers, never paths, expressions or secrets.

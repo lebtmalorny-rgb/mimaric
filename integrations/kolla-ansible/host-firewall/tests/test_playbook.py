@@ -127,30 +127,34 @@ class PlaybookTests(AnsibleFixture):
         self.install_probe_fixture()
         self.env['POWEROPS_TEST_PROBE_MARKER'] = str(self.base / 'probe-called')
 
-    def test_read_only_report_permissions_and_repeat_run(self):
+    def test_report_outputs_plan_identifier_without_saving_controller_files(self):
+        output = self.base / 'must-not-be-created'
+        result = self.run_play('host-firewall.yml', {'host_firewall_output_dir': str(output)})
+        self.assert_success(result)
+        self.assertFalse(output.exists(), 'Report must not create controller files')
+        self.assertFalse((self.tree / 'artifacts').exists())
+        self.assertIn('plan_id', result.stdout)
+        self.assertNotIn('"observations":', result.stdout)
+
+    def test_read_only_console_summary_and_repeat_run(self):
         foreign = self.base / 'foreign-firewall.rules'
         foreign.write_text('owned by another component\n')
         result = self.run_play('host-firewall.yml')
         self.assert_success(result)
-        bundle = self.read_bundle()
+        bundle = self.read_summary()
         self.assertFalse(bundle['apply_ready'])
         self.assertTrue(bundle['collection_complete'])
         self.assertEqual(['lb', 'node-a'], bundle['selected_hosts'])
         self.assertEqual(['outside'], bundle['not_selected_hosts'])
         self.assertEqual(8989, bundle['reports']['node-a']['candidate_flows'][0]['port'])
-        self.assertEqual(0o600, self.report_path.stat().st_mode & 0o777)
-        self.assertEqual(0o700, self.report_path.parent.stat().st_mode & 0o777)
-        markdown = self.report_path.with_suffix('.md')
-        self.assertEqual(0o600, markdown.stat().st_mode & 0o777)
-        self.assertIn('APPLY_REQUIRES_VERIFICATION', markdown.read_text())
-        self.assertIn('firewalld', markdown.read_text())
-        self.assertIn('1.3.4', markdown.read_text())
+        self.assertIn('APPLY_REQUIRES_VERIFICATION', result.stdout)
+        self.assertIn('firewalld', result.stdout)
+        self.assertIn('1.3.4', result.stdout)
         self.assertTrue(bundle['reports']['node-a']['firewalld']['packages']['firewalld']['installed'])
-        first = self.report_path.read_bytes()
-        first_path = self.report_path
+        first_id = bundle['plan_id']
         self.assert_success(self.run_play('host-firewall.yml'))
-        self.assertEqual(first, first_path.read_bytes())
-        self.assertEqual(2, len(list((self.tree / 'artifacts').glob('host-firewall-*/report.json'))))
+        self.assertEqual(first_id, self.read_summary()['plan_id'])
+        self.assertFalse((self.tree / 'artifacts').exists())
         self.assertEqual('owned by another component\n', foreign.read_text())
 
     def test_absent_package_is_reported_and_other_hosts_still_collected(self):
@@ -158,19 +162,19 @@ class PlaybookTests(AnsibleFixture):
             'package firewalld is not installed\n', rc=1)
         self.write_inventory()
         self.assert_success(self.run_play('host-firewall.yml'))
-        bundle = self.read_bundle()
+        bundle = self.read_summary()
         self.assertEqual(['lb', 'node-a'], bundle['selected_hosts'])
         for report in bundle['reports'].values():
             self.assertEqual('ok', report['collection_status'])
             self.assertIn({'code': 'FIREWALLD_PACKAGE_MISSING', 'subject': 'firewalld'}, report['blockers'])
             self.assertFalse(report['apply_ready'])
-        self.assertIn('FIREWALLD_PACKAGE_MISSING', self.report_path.with_suffix('.md').read_text())
+        self.assertIn('FIREWALLD_PACKAGE_MISSING', self.last_result.stdout)
 
-    def test_api_timeout_is_saved_without_aborting_report(self):
+    def test_api_timeout_is_shown_without_aborting_report(self):
         self.observation['commands']['firewalld_runtime_policies'] = command(rc=-9, timed_out=True)
         self.write_inventory()
         self.assert_success(self.run_play('host-firewall.yml'))
-        bundle = self.read_bundle()
+        bundle = self.read_summary()
         self.assertFalse(bundle['collection_complete'])
         self.assertIsNone(bundle['reports']['node-a']['firewalld']['api']['runtime_policies'])
 
@@ -197,7 +201,7 @@ class PlaybookTests(AnsibleFixture):
     def test_limit_does_not_contact_excluded_hosts_or_invent_addresses(self):
         result = self.run_play('host-firewall.yml', options=('--limit', 'node-a'))
         self.assert_success(result)
-        bundle = self.read_bundle()
+        bundle = self.read_summary()
         self.assertEqual(['node-a'], bundle['selected_hosts'])
         self.assertEqual([], bundle['reports']['node-a']['candidate_flows'])
         self.assertEqual(1, len((self.base / 'probe-called').read_text().splitlines()))
@@ -205,16 +209,26 @@ class PlaybookTests(AnsibleFixture):
     def test_unreachable_host_is_retained_in_partial_report(self):
         result = self.run_play('host-firewall.yml', {'host_firewall_hosts': 'all'})
         self.assert_success(result)
-        bundle = self.read_bundle()
+        bundle = self.read_summary()
         self.assertEqual('unreachable', bundle['reports']['outside']['collection_status'])
         self.assertEqual([], bundle['reports']['outside']['candidate_flows'])
         self.assertFalse(bundle['collection_complete'])
 
-    def test_check_mode_still_collects_and_saves_report(self):
+    def test_check_mode_collects_and_displays_without_saving_report(self):
         self.assert_success(self.run_play('host-firewall.yml', options=('--check',)))
-        bundle = self.read_bundle()
+        bundle = self.read_summary()
         self.assertFalse(bundle['apply_ready'])
         self.assertTrue((self.base / 'probe-called').exists())
+        self.assertFalse((self.tree / 'artifacts').exists())
+
+    def test_raw_probe_output_stays_out_of_console_summary(self):
+        self.observation['commands']['ss']['stdout'] = 'PRIVATE_RAW_PROBE_VALUE'
+        self.write_inventory()
+        result = self.run_play('host-firewall.yml')
+        self.assert_success(result)
+        self.read_summary()
+        self.assertNotIn('PRIVATE_RAW_PROBE_VALUE', result.stdout)
+        self.assertNotIn('PRIVATE_RAW_PROBE_VALUE', (self.base / 'ansible.log').read_text())
 
 
 if __name__ == '__main__':

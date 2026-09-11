@@ -67,11 +67,12 @@ class KollaCliTests(AnsibleFixture):
     def run_cli(self, *options):
         common = [] if options == ('--help',) else [
             '--configdir', str(self.configdir), '-i', str(self.inventory)]
-        return subprocess.run([
+        self.last_result = subprocess.run([
             sys.executable, '-m', 'kolla_ansible.cmd.kolla_ansible',
             'host-firewall', *common, *options,
         ], env=self.env, cwd=self.tree, text=True,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+        return self.last_result
 
     def test_registered_command_exposes_modes_without_contacting_hosts(self):
         result = self.run_cli('--help')
@@ -88,11 +89,11 @@ class KollaCliTests(AnsibleFixture):
         (globals_d / '10-ports.yml').write_text('mistral_api_listen_port: 19000\n')
         result = self.run_cli('--limit', 'baremetal')
         self.assert_success(result)
-        self.assertEqual(19000, self.read_bundle()['reports']['node-a']['candidate_flows'][0]['port'])
+        self.assertEqual(19000, self.read_summary()['reports']['node-a']['candidate_flows'][0]['port'])
         result = self.run_cli('-e', 'mistral_api_listen_port=20000',
                               '-e', 'host_firewall_mode=rollback', '--limit', 'baremetal')
         self.assert_success(result)
-        bundle = self.read_bundle()
+        bundle = self.read_summary()
         self.assertEqual(['lb', 'node-a'], bundle['selected_hosts'])
         self.assertEqual(20000, bundle['reports']['node-a']['candidate_flows'][0]['port'])
         self.assertFalse((self.base / 'mutations').exists())
@@ -120,11 +121,11 @@ class KollaCliTests(AnsibleFixture):
         self.assertEqual([], state['runtime'])
         self.assertEqual([], state['permanent'])
 
-    def test_apply_without_approved_report_fails_before_remote_tasks(self):
+    def test_apply_without_reviewed_identifier_fails_before_remote_tasks(self):
         self.install_probe_fixture()
         result = self.run_cli('--mode', 'apply')
         self.assertNotEqual(0, result.returncode)
-        self.assertIn('APPROVED_REPORT_REQUIRED', result.stdout)
+        self.assertIn('REVIEWED_PLAN_ID_REQUIRED', result.stdout)
         self.assertFalse((self.base / 'probe-called').exists())
         self.assertFalse((self.base / 'mutations').exists())
 

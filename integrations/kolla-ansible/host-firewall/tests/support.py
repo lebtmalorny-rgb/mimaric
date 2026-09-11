@@ -2,6 +2,7 @@
 import json
 import importlib.util
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -92,9 +93,10 @@ class AnsibleFixture(unittest.TestCase):
             extra_file = self.base / 'extra.json'
             extra_file.write_text(json.dumps(extra))
             command.extend(['-e', '@' + str(extra_file)])
-        return subprocess.run(command + list(options), env=self.env, cwd=self.tree,
-                              text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                              timeout=60)
+        self.last_result = subprocess.run(command + list(options), env=self.env, cwd=self.tree,
+                                          text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                          timeout=60)
+        return self.last_result
 
     def assert_success(self, result):
         self.assertEqual(0, result.returncode, result.stdout[-12000:])
@@ -109,10 +111,15 @@ class AnsibleFixture(unittest.TestCase):
         shutil.copyfile(ROOT / 'tests/fixtures/firewall_unreachable.py',
                         self.playdir / 'connection_plugins/firewall_unreachable.py')
 
-    def read_bundle(self):
-        paths = list((self.tree / 'artifacts').glob('host-firewall-*/report.json'))
-        self.assertTrue(paths, 'No report artifact was created')
-        self.report_path = max(paths, key=lambda p: p.stat().st_mtime_ns)
-        text = self.report_path.read_text()
-        self.assertNotIn('SECRET_MUST_NOT_APPEAR', text)
-        return json.loads(text)
+    def read_summary(self):
+        self.assertNotIn('SECRET_MUST_NOT_APPEAR', self.last_result.stdout)
+        for match in re.finditer(r'\{', self.last_result.stdout):
+            try:
+                output, _ = json.JSONDecoder().raw_decode(self.last_result.stdout[match.start():])
+            except ValueError:
+                continue
+            summary = output.get('msg') if isinstance(output, dict) else None
+            if isinstance(summary, dict) and 'plan_id' in summary and 'selected_hosts' in summary:
+                self.assertNotIn('observations', json.dumps(summary))
+                return summary
+        self.fail('No console plan summary was produced')

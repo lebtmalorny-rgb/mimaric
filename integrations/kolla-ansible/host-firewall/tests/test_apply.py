@@ -10,6 +10,7 @@ class ApplyTests(AnsibleFixture):
     def setUp(self):
         super().setUp()
         self.env['POWEROPS_TEST_MUTATION_MARKER'] = str(self.base / 'mutations')
+        self.env['POWEROPS_TEST_PROBE_MARKER'] = str(self.base / 'probe-called')
         self.plan = self.base / 'approved-report.json'
 
     def install_manage_fixture(self):
@@ -40,11 +41,10 @@ class ApplyTests(AnsibleFixture):
                 self.inventory_data['all']['vars'][key] = False
         self.write_inventory()
         self.assert_success(self.run_play('host-firewall.yml', options=('--limit', 'node-a')))
-        bundle = self.read_bundle()
-        self.plan.write_text(json.dumps(bundle))
+        bundle = self.read_summary()
         shutil.copyfile(ROOT / 'tests/fixtures/transaction_os.py', self.playdir / 'library/powerops_firewall_manage.py')
         shutil.copyfile(ROOT / 'tests/fixtures/verify.py', self.playdir / 'action_plugins/powerops_firewall_verify.py')
-        return {'host_firewall_mode': 'apply', 'host_firewall_plan_file': str(self.plan),
+        return {'host_firewall_mode': 'apply',
                 'host_firewall_plan_id': bundle['plan_id'], 'host_firewall_verification_checks': [
                     {'id': 'api', 'type': 'tcp', 'host': '192.0.2.8', 'port': 443}]}
 
@@ -59,6 +59,19 @@ class ApplyTests(AnsibleFixture):
         self.assert_success(self.run_play('host-firewall.yml', values, options=('--limit', 'node-a')))
         actions = [json.loads(row)['action'] for row in (self.base / 'mutations').read_text().splitlines()]
         self.assertEqual(['inspect', 'begin'], actions[-2:])
+
+    def test_apply_accepts_reviewed_identifier_without_report_file(self):
+        values = self.prepare_apply_fixture()
+        values.pop('host_firewall_plan_file', None)
+        self.plan.unlink(missing_ok=True)
+        output = self.base / 'must-not-be-created'
+        values['host_firewall_output_dir'] = str(output)
+        result = self.run_play('host-firewall.yml', values, options=('--limit', 'node-a'))
+        self.assert_success(result)
+        self.assertFalse(output.exists())
+        state = json.loads((self.base / 'firewall.json').read_text())
+        self.assertEqual(state['runtime'], state['permanent'])
+        self.assertIn('rule priority="30000" drop', state['runtime'])
 
     def test_failed_post_apply_check_restores_runtime_without_persisting(self):
         values = self.prepare_apply_fixture()
@@ -99,17 +112,66 @@ class ApplyTests(AnsibleFixture):
         self.assert_success(result)
         self.assertFalse((self.base / 'mutations').exists())
 
-    def test_incomplete_saved_report_blocks_apply(self):
-        self.plan.write_text(json.dumps({'selected_hosts': ['lb', 'node-a'],
-            'reports': {host: {'host': host, 'ssh': {'inventory_port': 2222},
-                'candidate_flows': [], 'blockers': [
-                    {'code': 'PARTIAL_SERVICE_COVERAGE', 'subject': 'mistral'}]}
-                for host in ('lb', 'node-a')}}))
+    def test_partial_service_coverage_blocks_apply_after_fresh_collection(self):
+        self.install_probe_fixture()
+        self.assert_success(self.run_play('host-firewall.yml'))
+        summary = self.read_summary()
+        self.assertTrue(summary['collection_complete'])
+        result = self.run_play('host-firewall.yml', {
+            'host_firewall_mode': 'apply', 'host_firewall_plan_id': summary['plan_id'],
+            'host_firewall_verification_checks': [
+                {'id': 'api', 'type': 'tcp', 'host': '192.0.2.8', 'port': 443}]})
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn('REPORT_HAS_BLOCKERS', result.stdout)
+        self.assertFalse((self.base / 'mutations').exists())
+
+    def test_blocker_on_later_host_stops_the_first_mutation(self):
+        values = self.prepare_apply_fixture()
+        children = self.inventory_data['all']['children']['baremetal']['children']
+        children['loadbalancer']['hosts']['lb']['enable_unknown_service'] = True
+        self.write_inventory()
+        self.assert_success(self.run_play('host-firewall.yml'))
+        summary = self.read_summary()
+        self.assertTrue(summary['collection_complete'])
+        values['host_firewall_plan_id'] = summary['plan_id']
+        result = self.run_play('host-firewall.yml', values)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn('REPORT_HAS_BLOCKERS', result.stdout)
+        self.assertFalse((self.base / 'mutations').exists())
+
+    def test_incomplete_fresh_collection_stops_all_mutations(self):
+        values = self.prepare_apply_fixture()
+        self.observation['commands']['ss']['timed_out'] = True
+        self.write_inventory()
+        result = self.run_play('host-firewall.yml', values, options=('--limit', 'node-a'))
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn('FRESH_COLLECTION_INCOMPLETE', result.stdout)
+        self.assertFalse((self.base / 'mutations').exists())
+
+    def test_stale_identifier_on_later_host_stops_the_first_mutation(self):
+        values = self.prepare_apply_fixture()
+        self.assert_success(self.run_play('host-firewall.yml'))
+        summary = self.read_summary()
+        self.inventory_data['all']['vars']['host_firewall_plan_id'] = summary['plan_id']
+        children = self.inventory_data['all']['children']['baremetal']['children']
+        children['loadbalancer']['hosts']['lb']['host_firewall_plan_id'] = 'f' * 64
+        self.write_inventory()
+        values.pop('host_firewall_plan_id')
+        result = self.run_play('host-firewall.yml', values)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn('FRESH_REPORT_MISMATCH', result.stdout)
+        self.assertFalse((self.base / 'mutations').exists())
+
+    def test_legacy_report_path_is_rejected_without_reading_or_contacting_hosts(self):
+        self.plan.write_text('PRIVATE_LEGACY_REPORT')
         result = self.run_play('host-firewall.yml', {
             'host_firewall_mode': 'apply', 'host_firewall_plan_file': str(self.plan),
             'host_firewall_plan_id': 'a' * 64})
         self.assertNotEqual(0, result.returncode)
-        self.assertFalse((self.base / 'mutations').exists())
+        self.assertIn('REPORT_FILES_NOT_SUPPORTED', result.stdout)
+        self.assertNotIn('PRIVATE_LEGACY_REPORT', result.stdout)
+        self.assertFalse((self.base / 'probe-called').exists())
+        self.assertEqual('PRIVATE_LEGACY_REPORT', self.plan.read_text())
 
     def test_manual_rollback_calls_remote_restore_for_exact_transaction(self):
         self.install_manage_fixture()
