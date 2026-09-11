@@ -21,6 +21,7 @@
 | Команды для разбора отдельных проблем | [POWEROPS-TROUBLESHOOTING-COMMANDS.md](docs/POWEROPS-TROUBLESHOOTING-COMMANDS.md) |
 | Универсальный сбор PowerOps | [collect-v2.yml](tools/diagnostics/collect-v2.yml) |
 | Медленный Mistral, 504, зависшие executions | [collect-mistral.yml](tools/diagnostics/collect-mistral.yml) |
+| Python 3.11: аварийная эвакуация и плановое выключение с возвратом хоста | [Установка и запуск](tools/stand-tests/INSTALL_AND_RUN.md), [параметры и проверки](tools/stand-tests/README.md) |
 | Masakari: Nova down после fencing | [Патч и порядок применения](hotfixes/masakari-post-fence-nova-down/README.md) |
 | Horizon: исходники и зависимые патчи | [horizon/README.md](horizon/README.md) |
 
