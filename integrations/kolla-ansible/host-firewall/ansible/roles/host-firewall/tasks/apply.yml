@@ -1,0 +1,63 @@
+---
+- name: Verify fresh SSH and service endpoints before any firewall change
+  powerops_firewall_verify:
+
+- name: Read owned runtime and permanent policy plus foreign-owner digest
+  powerops_firewall_manage:
+    action: inspect
+  become: "{{ host_firewall_become }}"
+  register: host_firewall_before
+  no_log: true
+
+- name: Begin an armed host transaction with a local recovery deadline
+  powerops_firewall_manage:
+    action: begin
+    report: "{{ host_firewall_admission.report }}"
+    plan_id: "{{ host_firewall_admission.plan_id }}"
+    expected: "{{ host_firewall_before.snapshot }}"
+    required_checks: "{{ host_firewall_admission.required_checks }}"
+    rollback_timeout: "{{ host_firewall_admission.rollback_timeout }}"
+  become: "{{ host_firewall_become }}"
+  register: host_firewall_transaction
+  no_log: true
+
+- name: Show transaction identifier for recovery without revealing its nonce
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }} transaction={{ host_firewall_transaction.id }} state={{ host_firewall_transaction.state }}"
+
+- name: Apply runtime then verify and commit only this owned policy
+  when: host_firewall_transaction.state != 'COMMITTED'
+  block:
+    - name: Apply the candidate rules to runtime only
+      powerops_firewall_manage:
+        action: apply-runtime
+        txid: "{{ host_firewall_transaction.id }}"
+      become: "{{ host_firewall_become }}"
+
+    - name: Verify a new SSH connection and required service endpoints after apply
+      powerops_firewall_verify:
+      register: host_firewall_verified
+
+    - name: Record verification for this transaction and nonce
+      powerops_firewall_manage:
+        action: verify
+        txid: "{{ host_firewall_transaction.id }}"
+        nonce: "{{ host_firewall_transaction.nonce }}"
+        passed_checks: "{{ host_firewall_verified.passed_checks }}"
+      become: "{{ host_firewall_become }}"
+      no_log: true
+
+    - name: Persist only the verified owned rich rules
+      powerops_firewall_manage:
+        action: commit
+        txid: "{{ host_firewall_transaction.id }}"
+      become: "{{ host_firewall_become }}"
+  rescue:
+    - name: Restore the separate runtime and permanent snapshots
+      powerops_firewall_manage:
+        action: rollback
+        txid: "{{ host_firewall_transaction.id }}"
+      become: "{{ host_firewall_become }}"
+    - name: Stop this rollout after rollback
+      ansible.builtin.fail:
+        msg: "Firewall verification or apply failed; transaction was rolled back. No next host will be changed."

@@ -60,7 +60,7 @@ class ModelTests(unittest.TestCase):
             'evidence': '0809 roles/mistral/defaults/main.yml',
         }], report['candidate_flows'])
         self.assertFalse(report['apply_ready'])
-        self.assertIn('APPLY_NOT_IMPLEMENTED', self.codes(report))
+        self.assertIn('APPLY_REQUIRES_VERIFICATION', self.codes(report))
         self.assertIn('PARTIAL_SERVICE_COVERAGE', self.codes(report))
         self.assertEqual(2222, report['ssh']['inventory_port'])
         self.assertFalse(report['ssh']['access_verified'])

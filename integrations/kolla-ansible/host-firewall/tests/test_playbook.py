@@ -142,7 +142,7 @@ class PlaybookTests(AnsibleFixture):
         self.assertEqual(0o700, self.report_path.parent.stat().st_mode & 0o777)
         markdown = self.report_path.with_suffix('.md')
         self.assertEqual(0o600, markdown.stat().st_mode & 0o777)
-        self.assertIn('APPLY_NOT_IMPLEMENTED', markdown.read_text())
+        self.assertIn('APPLY_REQUIRES_VERIFICATION', markdown.read_text())
         self.assertIn('firewalld', markdown.read_text())
         self.assertIn('1.3.4', markdown.read_text())
         self.assertTrue(bundle['reports']['node-a']['firewalld']['packages']['firewalld']['installed'])

@@ -1,11 +1,11 @@
 ---
-- name: Enforce the report-only boundary within the role
+- name: Enforce the read-only collection boundary within the role
   ansible.builtin.assert:
     that:
-      - host_firewall_mode == 'report'
+      - host_firewall_mode == 'report' or (host_firewall_mode == 'apply' and host_firewall_admission.operation | default('') == 'apply')
       - ansible_version.full is version('2.18', '>=')
       - ansible_version.full is version('2.19', '<')
-    fail_msg: "Report-only delivery requires ansible-core 2.18.x; apply is not implemented."
+    fail_msg: "Ansible 2.18.x and an admitted request are required."
   any_errors_fatal: true
 
 - name: Load the preliminary flow catalog
@@ -24,9 +24,9 @@
   ignore_unreachable: true
   no_log: true
   # Keep the remote boundary even if preflight/role assertions are skipped with
-  # CLI task selection. No mode except report is allowed to contact a host.
+  # CLI task selection. Incomplete apply requests cannot contact a host.
   when:
-    - host_firewall_mode == 'report'
+    - host_firewall_mode == 'report' or (host_firewall_mode == 'apply' and host_firewall_admission.operation | default('') == 'apply')
     - ansible_version.full is version('2.18', '>=')
     - ansible_version.full is version('2.19', '<')
 

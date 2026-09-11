@@ -1,0 +1,13 @@
+[Unit]
+Description=Restore uncommitted owned firewall policy before firewalld starts
+DefaultDependencies=no
+After=local-fs.target
+Before=firewalld.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+UMask=0077
+ExecStart=/usr/bin/python3 -B /usr/local/libexec/kolla-host-firewall/powerops_firewall_helper.py recover-boot
+TimeoutStartSec=30

@@ -1,5 +1,12 @@
 ---
 host_firewall_mode: report
+host_firewall_initialize: false
+host_firewall_allow_initial_reload: false
+host_firewall_plan_file: ''
+host_firewall_plan_id: ''
+host_firewall_rollback_transaction_id: ''
+host_firewall_rollback_timeout: 300
+host_firewall_verification_checks: []
 host_firewall_probe_timeout: 10
 host_firewall_probe_max_bytes: 262144
 host_firewall_become: true

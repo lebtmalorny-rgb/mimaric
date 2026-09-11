@@ -1,0 +1,89 @@
+---
+- name: Check installed firewalld and Python bindings without installing or starting them
+  powerops_firewall_manage:
+    action: preflight
+  become: "{{ host_firewall_become }}"
+
+- name: Verify fresh strict SSH before initialization
+  powerops_firewall_verify:
+    ssh_only: true
+
+- name: Install the local transaction recovery files
+  become: "{{ host_firewall_become }}"
+  block:
+    - name: Create a root-owned helper directory
+      ansible.builtin.file:
+        path: /usr/local/libexec/kolla-host-firewall
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+    - name: Install shared transaction code for independent recovery
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/module_utils/{{ item }}.py"
+        dest: "/usr/local/libexec/kolla-host-firewall/{{ item }}.py"
+        owner: root
+        group: root
+        mode: '0644'
+      loop:
+        - powerops_firewall_transaction
+        - powerops_firewall_firewalld
+        - powerops_firewall_plan
+        - powerops_firewall_probe
+        - powerops_firewall_runtime
+        - powerops_firewall_boot
+    - name: Install the independent recovery entry point
+      ansible.builtin.copy:
+        src: powerops_firewall_helper.py
+        dest: /usr/local/libexec/kolla-host-firewall/powerops_firewall_helper.py
+        owner: root
+        group: root
+        mode: '0755'
+    - name: Install the owned watchdog units
+      ansible.builtin.template:
+        src: "kolla-host-firewall-watchdog.{{ item }}.j2"
+        dest: "/etc/systemd/system/kolla-host-firewall-watchdog.{{ item }}"
+        owner: root
+        group: root
+        mode: '0644'
+      loop: [service, timer]
+    - name: Install recovery before firewalld startup
+      ansible.builtin.template:
+        src: kolla-host-firewall-boot-recovery.service.j2
+        dest: /etc/systemd/system/kolla-host-firewall-boot-recovery.service
+        owner: root
+        group: root
+        mode: '0644'
+    - name: Create the firewalld unit override directory
+      ansible.builtin.file:
+        path: /etc/systemd/system/firewalld.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+    - name: Require successful recovery before future firewalld starts
+      ansible.builtin.template:
+        src: 50-kolla-host-firewall-recovery.conf.j2
+        dest: /etc/systemd/system/firewalld.service.d/50-kolla-host-firewall-recovery.conf
+        owner: root
+        group: root
+        mode: '0644'
+    - name: Activate the own recovery prerequisite without restarting firewalld
+      ansible.builtin.systemd_service:
+        name: kolla-host-firewall-boot-recovery.service
+        daemon_reload: true
+        state: started
+    - name: Enable and start only the local rollback watchdog
+      ansible.builtin.systemd_service:
+        name: kolla-host-firewall-watchdog.timer
+        daemon_reload: true
+        enabled: true
+        state: started
+    - name: Initialize the empty owned policy with the explicitly approved reload
+      powerops_firewall_manage:
+        action: prepare
+        allow_reload: true
+
+- name: Verify a new SSH connection after initialization
+  powerops_firewall_verify:
+    ssh_only: true

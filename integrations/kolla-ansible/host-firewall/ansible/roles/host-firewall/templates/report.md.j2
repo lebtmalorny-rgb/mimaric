@@ -2,8 +2,9 @@
 
 Сформирован: {{ host_firewall_report.bundle.generated_at }}.
 
-Режим: **report-only**. `apply_ready: false`.
-Правила не менялись. Применение, default-deny и откат не реализованы.
+Этап: **read-only обследование**. `apply_ready: false`.
+Этот отчёт сам по себе не меняет правила. Применение и откат вызываются отдельно.
+Идентификатор входных данных: `{{ host_firewall_report.bundle.plan_id | default('нет') }}`.
 Матрица ниже — кандидаты для анализа, не готовые разрешения firewall.
 Полнота сбора выбранных хостов: {{ host_firewall_report.bundle.collection_complete }}.
 

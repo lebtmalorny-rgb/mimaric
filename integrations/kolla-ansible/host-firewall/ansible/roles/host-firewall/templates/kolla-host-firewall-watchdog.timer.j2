@@ -1,0 +1,11 @@
+[Unit]
+Description=Independent deadline check for Kolla host firewall rollback
+
+[Timer]
+OnBootSec=5s
+OnUnitInactiveSec=2s
+AccuracySec=1s
+Unit=kolla-host-firewall-watchdog.service
+
+[Install]
+WantedBy=timers.target

@@ -1,12 +1,22 @@
-# Host firewall: этап 1 — обследование и предварительный отчёт
+# Host firewall: обследование, применение и откат через firewalld
 
-Добавка к Kolla-Ansible `0809`, реализующая первый этап
+Отдельная добавка к Kolla-Ansible `0809` по
 [ADR-0002](../../../docs/adr/0002-host-firewall.md).
 
-**Правила firewall не меняются.** Playbook не устанавливает пакеты,
-не запускает и не перезапускает службы, не меняет SSH, NAT, Security Groups
-или сетевые настройки. Режим `apply` отсутствует и отклоняется до удалённых
-проверок. Это не готовый механизм ограничения доступа.
+По умолчанию `report` ничего не меняет на хостах. Реализованы также
+`apply` и `rollback`: работа с собственной policy `kolla-host-input` через
+D-Bus firewalld **1.3.4 / nftables**, последовательное применение и локальное
+восстановление. Пакеты и сам firewalld автоматически не устанавливаются,
+не запускаются и не перезапускаются. Инициализация устанавливает и запускает
+только собственные recovery units; создание пустой policy требует отдельно
+разрешённого reload firewalld.
+
+**Ограничение текущей поставки:** каталог потоков OpenStack пока частичный.
+`PARTIAL_SERVICE_COVERAGE`, неизвестные включённые сервисы и неполный сбор
+по-прежнему запрещают restrictive apply. Реализованный механизм применения
+не означает, что уже можно безопасно закрыть весь кластер Ultra.
+Не удалять blockers вручную: перед изменениями отчёт собирается заново
+и его идентификатор сверяется. Полный каталог сервисов — отдельная оставшаяся работа.
 
 ## Что получается
 
@@ -94,11 +104,11 @@ ansible-playbook -i ./ansible/inventory/multinode \
 пределами выбранного развёртывания. `--check` также выполняет read-only сбор
 и сохраняет новый локальный отчёт; это явно предусмотренное поведение.
 
-## Параметры первого этапа
+## Параметры обследования
 
 | Параметр | По умолчанию | Значение |
 | --- | --- | --- |
-| `host_firewall_mode` | `report` | Единственный допустимый режим |
+| `host_firewall_mode` | `report` | `report`, `apply`, `rollback` |
 | `host_firewall_hosts` | `baremetal` | Ansible host pattern; дополнительно действует `--limit` |
 | `host_firewall_become` | `true` | Повышение прав для удалённого сбора |
 | `host_firewall_probe_timeout` | `10` | Секунды на одну команду, целое `1..120` |
@@ -183,7 +193,7 @@ Public backend Keystone дополнительно требует вычисле
 
 | Код | Что означает |
 | --- | --- |
-| `APPLY_NOT_IMPLEMENTED` | Постоянная блокировка: применение не входит в этот этап |
+| `APPLY_REQUIRES_VERIFICATION` | Сам отчёт не подтверждает безопасность; нужны отдельная транзакция и live-проверки |
 | `PARTIAL_SERVICE_COVERAGE` | Описана только часть связей сервиса, не БД/RPC и все зависимости |
 | `UNKNOWN_ENABLED_FLAG` | Включённый сервис либо feature flag ещё не покрыт каталогом |
 | `INVALID_ENABLE_FLAG`, `MISSING_ENABLE_FLAG` | Значение флага неоднозначно или отсутствует |
@@ -210,9 +220,135 @@ Public backend Keystone дополнительно требует вычисле
 блокировки ожидаемы: отчёт не должен объявить всё развёртывание покрытым.
 
 Открытый socket — наблюдение, а не автоматическое разрешение доступа.
-Конфликты чужих правил, их владельцы, допустимость доступа и Security Groups
-автоматически не анализируются. Для применения нужен следующий этап с полным
-каталогом, политикой источников, backend и проверенным откатом.
+Apply проверяет маркер владельца своей policy, её неизменяемые поля, ранние
+HOST policies и изменение снимка чужих объектов firewalld. Это не полный
+аудит правил ядра или Security Groups. Для ограничения реального OpenStack
+остаётся дополнить и проверить весь каталог необходимых потоков.
+
+## Как выполняется применение
+
+1. Controller проверяет сохранённый JSON, `plan_id`, точный список выбранных
+   хостов и blockers, ещё до подключения к хостам.
+2. Заново выполняется read-only сбор. Изменившиеся порты, адреса, флаги,
+   каталог или состав inventory запрещают использование старого отчёта.
+3. Хосты обрабатываются с `serial: 1`, `any_errors_fatal: true`. До изменения
+   проверяются новое SSH-подключение и заданные service checks.
+4. Локально сохраняются разные исходные runtime/permanent снимки, исходный
+   XML, UUID транзакции и deadline. Без работающего собственного watchdog
+   применение не начинается. Каждая отдельная запись заранее заносится в журнал.
+5. Меняются только rich rules собственной policy. SSH-порт из inventory
+   разрешён с любых IPv4/IPv6 адресов; ICMP/ICMPv6 разрешены; сервисные правила
+   содержат точные адреса источника и назначения. Последнее правило — drop.
+6. Controller открывает новое SSH-соединение без reuse, со строгой проверкой
+   host key, и повторяет service checks. Лишь затем сохраняется permanent.
+7. Ошибка вызывает rollback и остановку дальнейшего rollout. При недоступном
+   SSH или пропавшем controller локальный timer восстанавливает правила после
+   deadline. Watchdog не отключается после успешной транзакции — он остаётся
+   наблюдать журнал, но не откатывает `COMMITTED`.
+
+Собственная policy: `ANY → HOST`, priority `-500`, target `CONTINUE`.
+Зоны, default zone, OUTPUT/FORWARD, NAT и чужие объекты не переписываются.
+Команды `runtime-to-permanent`, flush ruleset и прямые записи nft/iptables
+не используются. Совместимость с произвольным существующим firewall не заявлена.
+
+### Однократная инициализация
+
+Нужны уже установленные RPM `firewalld`, `python3-firewall`, доступный D-Bus
+из Python Ansible, работающий и enabled firewalld **1.3.4 / nftables**.
+Свежая SSH-проверка требует явного `ansible_user`, известного host key и ключа
+или ssh-agent. Произвольные SSH options/ProxyJump/password в этом профиле
+не поддержаны: проверка останавливается, а не отключает защиту host key.
+
+Пример команды для одного хоста; путь inventory и имя выбрать свои:
+
+```bash
+ansible-playbook -i ./ansible/inventory/multinode ./ansible/host-firewall.yml \
+  -e @/etc/kolla/globals.yml --limit ultra1-2 \
+  -e '{"host_firewall_mode":"apply","host_firewall_initialize":true,"host_firewall_allow_initial_reload":true}'
+```
+
+Это **изменяющая операция**, не dry run. Создаёт только пустую policy и
+устанавливает helper, timer, boot-recovery unit и свой drop-in для firewalld.
+Первое создание policy вызывает reload, отдельно разрешённый указанным флагом.
+Он запрещён при runtime/permanent drift, direct rules, IP sets,
+чужих nftables tables или непустых iptables rulesets. При уже подготовленной
+policy reload не выполняется. Чужая одноимённая policy не присваивается себе.
+
+`--check` проверяет входные параметры без установки файлов, запуска units
+или изменения правил. Это не подтверждение live-совместимости хоста.
+
+### Apply по проверенному отчёту
+
+Для реального OpenStack текущий partial catalog остановит эту команду.
+Ниже интерфейс уже реализованного apply, **не рекомендация обходить blockers**.
+Состав выбранных хостов и `--limit` должен совпадать с отчётом.
+
+В отдельном YAML параметров, например `/etc/kolla/host-firewall-apply.yml`:
+
+```yaml
+host_firewall_mode: apply
+host_firewall_plan_file: /home/operator/work/kolla-ansible/artifacts/host-firewall-EXAMPLE/report.json
+host_firewall_plan_id: 'ВСТАВИТЬ_64_HEX_СИМВОЛА_ИЗ_ПОЛЯ_plan_id_ОТЧЁТА'
+host_firewall_rollback_timeout: 300
+host_firewall_verification_checks:
+  - id: api
+    type: tcp
+    host: 192.0.2.10
+    port: 443
+  - id: health
+    type: http
+    url: https://api.example.test/health
+    status: 200
+```
+
+Адреса — примеры, заменить реальными проверяемыми endpoints. TCP проверяет
+только установление соединения; HTTP — заданный успешный код без redirect,
+HTTPS — с проверкой сертификата. Credentials/query в URL не принимаются.
+Это не доказательство исправности RPC, HA, миграции или всех связей между хостами;
+для них необходимы отдельные квалификационные проверки профиля.
+
+```bash
+ansible-playbook -i ./ansible/inventory/multinode ./ansible/host-firewall.yml \
+  -e @/etc/kolla/globals.yml -e @/etc/kolla/host-firewall-apply.yml
+```
+
+`host_firewall_rollback_timeout`: целое `60..900`, секунд с начала транзакции,
+не со старта playbook. Проверки до начала: SSH до 20 с; TCP/HTTP socket timeout
+5 с на check; 1–16 checks. DNS может занимать дополнительное время.
+Watchdog проверяет срок примерно каждые 2 с; rollback занимает дополнительное
+время и зависит от доступности D-Bus/firewalld и диска. Срок — не обещание
+восстановления сети ровно на указанной секунде.
+
+### Ручной откат и локальная диагностика
+
+UUID показан задачей `Show transaction identifier...`. У каждого хоста свой UUID.
+Использовать только текущую транзакцию конкретного хоста; старая отклоняется:
+
+```bash
+ansible-playbook -i ./ansible/inventory/multinode ./ansible/host-firewall.yml \
+  -e @/etc/kolla/globals.yml --limit ultra1-2 \
+  -e host_firewall_mode=rollback \
+  -e host_firewall_rollback_transaction_id=ВСТАВИТЬ_UUID_ТРАНЗАКЦИИ
+```
+
+На самом хосте (при необходимости через локальную/BMC-консоль):
+
+```bash
+sudo systemctl status kolla-host-firewall-watchdog.timer
+sudo journalctl -u kolla-host-firewall-watchdog.service -u kolla-host-firewall-boot-recovery.service -n 100 --no-pager
+sudo firewall-cmd --info-policy=kolla-host-input
+sudo firewall-cmd --permanent --info-policy=kolla-host-input
+```
+
+Журнал и снимки: `/var/lib/kolla-host-firewall/`, каталог `0700`, JSON `0600`.
+Они содержат внутренние правила и nonce; не публиковать целиком.
+Не удалять их и не отключать watchdog во время незавершённой транзакции.
+На новом boot исходный owned XML восстанавливается **до запуска firewalld**;
+после запуска timer завершает восстановление прежнего runtime. При конфликте
+владельца/неподтверждённом повреждении журнал сохраняется, boot recovery завершится
+ошибкой и запуск firewalld будет заблокирован зависимостью `Requires`.
+Тогда нужна диагностика с консоли; автоматический запуск firewalld в обход
+этой ошибки небезопасен. Это программный recovery, не гарантия при отказе диска/ОС.
 
 ## Локальные проверки
 

@@ -140,7 +140,7 @@ def build_report(host, model, catalog, observation):
         if entry not in blockers:
             blockers.append(entry)
 
-    block('APPLY_NOT_IMPLEMENTED')
+    block('APPLY_REQUIRES_VERIFICATION')
     block('SSH_ACCESS_NOT_VERIFIED')
     flags = {}
     for name, value in sorted(model.get('enabled_flags', {}).items()):

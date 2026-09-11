@@ -1,0 +1,31 @@
+---
+- name: Revalidate mutation admission in the serial play
+  powerops_firewall_admission:
+    require_fresh: true
+  register: host_firewall_admission
+
+- name: Show check mode boundary without contacting or changing hosts
+  ansible.builtin.debug:
+    msg: "Validated {{ host_firewall_admission.operation }} request; --check does not test live firewall or SSH."
+  when: ansible_check_mode
+
+- name: Restore the exact selected transaction
+  powerops_firewall_manage:
+    action: rollback
+    txid: "{{ host_firewall_admission.txid }}"
+  become: "{{ host_firewall_become }}"
+  when:
+    - not ansible_check_mode
+    - host_firewall_admission.operation == 'rollback'
+
+- name: Prepare the explicitly approved empty policy and recovery helper
+  ansible.builtin.include_tasks: prepare.yml
+  when:
+    - not ansible_check_mode
+    - host_firewall_admission.operation == 'prepare'
+
+- name: Apply a revalidated firewall transaction
+  ansible.builtin.include_tasks: apply.yml
+  when:
+    - not ansible_check_mode
+    - host_firewall_admission.operation == 'apply'

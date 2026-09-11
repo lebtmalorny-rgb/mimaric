@@ -15,6 +15,10 @@ _spec = importlib.util.spec_from_file_location(
     Path(__file__).resolve().parents[1] / 'module_utils/powerops_firewall_model.py')
 _model = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_model)
+_plan_spec = importlib.util.spec_from_file_location('_firewall_report_plan',
+    Path(__file__).resolve().parents[1] / 'module_utils/powerops_firewall_plan.py')
+_plan = importlib.util.module_from_spec(_plan_spec)
+_plan_spec.loader.exec_module(_plan)
 
 
 class ActionModule(ActionBase):
@@ -34,12 +38,15 @@ class ActionModule(ActionBase):
             # that could be mistaken for successful handling of an apply request.
             mode = self._templar.template(task_vars.get('host_firewall_mode', 'report'),
                                           fail_on_undefined=True, disable_lookups=True)
-            if mode != 'report':
-                return dict(result, failed=True, msg='Only report mode is implemented')
+            if mode != 'report' and not (mode == 'apply' and
+                    task_vars.get('host_firewall_admission', {}).get('operation') == 'apply'):
+                return dict(result, failed=True, msg='Report or admitted apply request required')
             if stage == 'project':
                 result['model'] = self.project(task_vars, catalog)
             else:
                 result['bundle'] = self.aggregate(task_vars, catalog)
+                result['bundle']['catalog_digest'] = _plan.canonical_digest(catalog)
+                result['bundle']['plan_id'] = _plan.report_digest(result['bundle'])
         except Exception:
             # Exception text from templating can include passwords or expressions.
             return dict(result, failed=True, msg='Report model failed; check input schema and selected variables')
