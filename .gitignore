@@ -1,12 +1,8 @@
-/sources/
-/work/
-/worktrees/
-.DS_Store
+.venv/
+.venv-stand/
 __pycache__/
 *.py[cod]
-.venv/
-.tox/
-.superpowers/
 artifacts/
 .coverage
 .pytest_cache/
+.DS_Store
