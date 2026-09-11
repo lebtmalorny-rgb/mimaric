@@ -32,22 +32,39 @@ D-Bus firewalld **1.3.4 / nftables**, последовательное прим�
 Правила могут содержать внутренние адреса и комментарии: обращаться с JSON
 как с чувствительной диагностикой, не публиковать без проверки.
 
+## Получение отдельной ветки
+
+Код и эта инструкция находятся в ветке `feature/host-firewall-apply`
+репозитория `lebtmalorny-rgb/mimaric`. Ветка не требует слияния в `main`.
+Чтобы не переключать существующий рабочий checkout, получить отдельную копию
+в свободный каталог (родительский `~/work` должен существовать):
+
+```bash
+git clone --branch feature/host-firewall-apply --single-branch \
+  https://github.com/lebtmalorny-rgb/mimaric.git ~/work/mimaric-firewall
+git -C ~/work/mimaric-firewall log -1 --oneline
+```
+
+Инструкция в этой копии: `integrations/kolla-ansible/host-firewall/README.md`.
+Сначала выполнить установку добавки и read-only `report`. До полноты каталога
+не переходить к restrictive apply на рабочем кластере.
+
 ## Установка добавки
 
 Подкаталог `ansible/` содержит только новые файлы. Его нужно скопировать
 в `ansible/` исходников Kolla-Ansible; один YAML без соседних plugins и role
 не является автономным playbook.
 
-Ниже пример для двух локальных checkout: `~/work/mimaric` и
+Ниже пример для двух локальных checkout: `~/work/mimaric-firewall` и
 `~/work/kolla-ansible`. Подставить свои пути. Использовать чистую отдельную
 ветку Kolla-Ansible на базе `0809`; существующие одноимённые файлы означают,
 что добавка уже установлена — обновление тогда требует сравнения версий.
 
 ```bash
 cd ~/work/kolla-ansible
-git switch -c feature/host-firewall-report
+git switch -c feature/host-firewall-apply
 rsync -a --ignore-existing --exclude='__pycache__' --exclude='*.pyc' \
-  ~/work/mimaric/integrations/kolla-ansible/host-firewall/ansible/ \
+  ~/work/mimaric-firewall/integrations/kolla-ansible/host-firewall/ansible/ \
   ./ansible/
 git status --short
 ```
