@@ -21,7 +21,7 @@
 | Команды для разбора отдельных проблем | [POWEROPS-TROUBLESHOOTING-COMMANDS.md](docs/POWEROPS-TROUBLESHOOTING-COMMANDS.md) |
 | Универсальный сбор PowerOps | [collect-v2.yml](tools/diagnostics/collect-v2.yml) |
 | Медленный Mistral, 504, зависшие executions | [collect-mistral.yml](tools/diagnostics/collect-mistral.yml) |
-| Host firewall: read-only обследование и предварительная матрица | [Добавка к Kolla-Ansible](integrations/kolla-ansible/host-firewall/README.md) |
+| Host firewall: команда `kolla-ansible host-firewall`, report/apply/rollback | [Патч и инструкция](integrations/kolla-ansible/host-firewall/README.md) |
 | Masakari: Nova down после fencing | [Патч и порядок применения](hotfixes/masakari-post-fence-nova-down/README.md) |
 | Horizon: исходники и зависимые патчи | [horizon/README.md](horizon/README.md) |
 
@@ -44,9 +44,10 @@ ansible-playbook collect-mistral.yml
   Не реализовано; автоматическое восстановление не включено.
 - [ADR-0002: firewall хостов Kolla-Ansible](docs/adr/0002-host-firewall.md) —
   концепция отдельного playbook с каталогом потоков всех включённых сервисов,
-  сохранением SSH, предварительным отчётом и откатом. Реализован только
-  [report-only этап](integrations/kolla-ansible/host-firewall/README.md):
-  обследование и частичная матрица. Применение правил и откат не реализованы.
+  сохранением SSH, предварительным отчётом и откатом. Реализованы
+  [команда Kolla-Ansible, отчёт, применение и откат](integrations/kolla-ansible/host-firewall/README.md).
+  Каталог связей пока частичный и блокирует применение ограничений для
+  полноценного OpenStack; проверки на стенде не выполнены.
 
 ## База и порядок применения
 

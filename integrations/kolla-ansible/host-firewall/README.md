@@ -3,6 +3,12 @@
 Отдельная добавка к Kolla-Ansible `0809` по
 [ADR-0002](../../../docs/adr/0002-host-firewall.md).
 
+Точка запуска — **`kolla-ansible host-firewall`**. Kolla-Ansible загружает
+inventory, `/etc/kolla/globals.yml`, файлы `globals.d` и переданные `-e`, затем
+вызывает `ansible/host-firewall.yml`. Роль `host-firewall` собирает отчёт либо
+применяет правила через firewalld. Обычные `deploy` и `reconfigure` эту
+операцию автоматически не запускают.
+
 По умолчанию `report` ничего не меняет на хостах. Реализованы также
 `apply` и `rollback`: работа с собственной policy `kolla-host-input` через
 D-Bus firewalld **1.3.4 / nftables**, последовательное применение и локальное
@@ -21,7 +27,8 @@ D-Bus firewalld **1.3.4 / nftables**, последовательное прим�
 ## Что получается
 
 На controller сохраняется новый приватный каталог
-`artifacts/host-firewall-<случайный суффикс>/` в корне Kolla-Ansible:
+`artifacts/host-firewall-<случайный суффикс>/` в каталоге данных Kolla-Ansible
+(при работе из исходников — в корне checkout):
 
 - `report.md` — читаемый итог по выбранным хостам.
 - `report.json` — структурированный отчёт и вывод read-only команд.
@@ -31,6 +38,10 @@ D-Bus firewalld **1.3.4 / nftables**, последовательное прим�
 В вывод Ansible передаётся путь отчёта, а не его содержимое.
 Правила могут содержать внутренние адреса и комментарии: обращаться с JSON
 как с чувствительной диагностикой, не публиковать без проверки.
+Если установленный каталог данных недоступен для записи оператору, задать
+`host_firewall_output_dir` в globals или через `-e`, например
+`/home/operator/firewall-reports`. Полный путь нового отчёта выводится в конце
+запуска; именно его использовать для последующего apply.
 
 ## Получение отдельной ветки
 
@@ -51,9 +62,16 @@ git -C ~/work/mimaric-firewall log -1 --oneline
 
 ## Установка добавки
 
-Подкаталог `ansible/` содержит только новые файлы. Его нужно скопировать
-в `ansible/` исходников Kolla-Ansible; один YAML без соседних plugins и role
-не является автономным playbook.
+Поставка состоит из двух частей:
+
+- [CLI-патч](patches/0001-add-host-firewall-command.patch) добавляет команду
+  `host-firewall` в `kolla_ansible/cli/commands.py` и регистрацию в `setup.cfg`.
+- Подкаталог `ansible/` содержит playbook, plugins, модули и роль. Его нужно
+  скопировать в `ansible/` исходников Kolla-Ansible.
+
+Обе части обязательны. После установки требуется переустановить Python-пакет
+Kolla-Ansible в используемом окружении controller: это регистрирует команду
+и устанавливает её Ansible-файлы. Сборка контейнерных образов не требуется.
 
 Ниже пример для двух локальных checkout: `~/work/mimaric-firewall` и
 `~/work/kolla-ansible`. Подставить свои пути. Использовать чистую отдельную
@@ -63,14 +81,22 @@ git -C ~/work/mimaric-firewall log -1 --oneline
 ```bash
 cd ~/work/kolla-ansible
 git switch -c feature/host-firewall-apply
+git apply --check ~/work/mimaric-firewall/integrations/kolla-ansible/host-firewall/patches/0001-add-host-firewall-command.patch
+git apply ~/work/mimaric-firewall/integrations/kolla-ansible/host-firewall/patches/0001-add-host-firewall-command.patch
 rsync -a --ignore-existing --exclude='__pycache__' --exclude='*.pyc' \
   ~/work/mimaric-firewall/integrations/kolla-ansible/host-firewall/ansible/ \
   ./ansible/
 git status --short
+python -m pip install --no-deps .
+kolla-ansible host-firewall --help
 ```
 
 `--ignore-existing` защищает существующие файлы, но не обновляет старую версию
 добавки. Не считать такую команду универсальной процедурой upgrade.
+Если Ansible-часть этой ветки уже установлена, для добавления команды достаточно
+применить CLI-патч и повторить установку Python-пакета. Повторно применять уже
+установленный CLI-патч не нужно. При конфликте `git apply --check` остановиться
+и сравнить версию исходников; патч проверен на базе `0809`.
 Изменение `site.yml`, deploy/reconfigure handlers, globals и образов не требуется.
 
 ## Запуск
@@ -78,36 +104,37 @@ git status --short
 Требования: рабочий controller Kolla-Ansible с **ansible-core 2.18.x**, его
 обычный inventory и Linux-хосты с Python. Локальная проверка выполнена с
 ansible-core 2.18.2; другие ветки Ansible этим этапом не заявлены и gate их
-отклоняет. Новые collections или Python-пакеты добавка не устанавливает.
+отклоняет. Новые collections или runtime-зависимости добавка не добавляет.
 
 Запускать из обычного окружения пользователя на controller, не оборачивать
 весь playbook в `sudo`. Для удалённых read-only команд используется Ansible
 `become`; ключи, пользователь и адреса берутся из существующего inventory.
 `passwords.yml` и OpenStack credentials этому playbook не нужны.
+Команда не загружает `passwords.yml` и не запускает получение секретов из Vault.
+`--configdir` задаёт каталог Kolla-конфигурации; по умолчанию это `/etc/kolla`
+(либо существующая настройка `KOLLA_CONFIG_PATH`). Файлы `globals.d` загружаются
+в алфавитном порядке после `globals.yml`, затем действуют переданные `-e`.
+
+Посмотреть состав задач без их выполнения:
 
 ```bash
 cd ~/work/kolla-ansible
-ansible-playbook -i ./ansible/inventory/multinode \
-  ./ansible/host-firewall.yml \
-  -e @/etc/kolla/globals.yml \
-  --syntax-check
+kolla-ansible host-firewall -i ./ansible/inventory/multinode \
+  --configdir /etc/kolla --list-tasks
 ```
 
 После проверки путей и состава inventory, для сбора:
 
 ```bash
-ansible-playbook -i ./ansible/inventory/multinode \
-  ./ansible/host-firewall.yml \
-  -e @/etc/kolla/globals.yml
+kolla-ansible host-firewall -i ./ansible/inventory/multinode \
+  --configdir /etc/kolla
 ```
 
 По умолчанию выбирается группа `baremetal`. Для ограниченного сбора:
 
 ```bash
-ansible-playbook -i ./ansible/inventory/multinode \
-  ./ansible/host-firewall.yml \
-  -e @/etc/kolla/globals.yml \
-  --limit 'control'
+kolla-ansible host-firewall -i ./ansible/inventory/multinode \
+  --configdir /etc/kolla --limit 'control'
 ```
 
 `--limit` не вызывает дополнительных подключений к исключённым хостам.
@@ -120,20 +147,28 @@ ansible-playbook -i ./ansible/inventory/multinode \
 `-e host_firewall_hosts=control`. Не указывать случайно инфраструктуру за
 пределами выбранного развёртывания. `--check` также выполняет read-only сбор
 и сохраняет новый локальный отчёт; это явно предусмотренное поведение.
+Подмена playbook через `--playbook` и частичный запуск через `--tags`/
+`--skip-tags` для этой команды запрещены: допуск, применение и проверки
+должны выполняться вместе.
+
+Режим задаётся **только аргументом `--mode report|apply|rollback`**.
+Без `--mode` всегда выбирается `report`, даже если в globals или `-e` указано
+`host_firewall_mode: apply`. Kolla передаёт выбранный режим в playbook с высшим
+приоритетом. Остальные `host_firewall_*` передаются обычным способом.
 
 ## Параметры обследования
 
 | Параметр | По умолчанию | Значение |
 | --- | --- | --- |
-| `host_firewall_mode` | `report` | `report`, `apply`, `rollback` |
+| `--mode` | `report` | Аргумент CLI: `report`, `apply`, `rollback` |
 | `host_firewall_hosts` | `baremetal` | Ansible host pattern; дополнительно действует `--limit` |
 | `host_firewall_become` | `true` | Повышение прав для удалённого сбора |
 | `host_firewall_probe_timeout` | `10` | Секунды на одну команду, целое `1..120` |
 | `host_firewall_probe_max_bytes` | `262144` | Лимит байт отдельно для stdout/stderr, целое `1..4194304` |
-| `host_firewall_output_dir` | `artifacts` в корне Kolla-Ansible | Абсолютный путь родительского каталога отчётов на controller |
+| `host_firewall_output_dir` | `artifacts` в каталоге данных Kolla-Ansible | Абсолютный путь родительского каталога отчётов на controller |
 
 Это параметры добавки, а не существующие опции upstream Kolla.
-Их можно передать через `-e` или свой globals. Команды внутри сборщика
+Кроме `--mode`, их можно передать через `-e` или свой globals. Команды внутри сборщика
 фиксированы: произвольный shell или список команд через переменные не принимаются.
 19 команд выполняются последовательно на каждом выбранном хосте; таймаут
 относится к каждой отдельно, плюс время Ansible/SSH и завершения процесса.
@@ -184,9 +219,10 @@ API-поля JSON имеют значения `true` (запрос успеше�
 по одной версии не утверждаются.
 
 Отсутствие prerequisites **не прерывает report**, остальные сведения продолжают
-собираться. Никакой автоустановки, `start`, `enable`, `unmask`, `reload` или
-изменения правил нет. `apply` по-прежнему целиком заблокирован: успешные
-предварительные проверки не включают применение.
+собираться. В режиме `report` нет автоустановки, `start`, `enable`, `unmask`,
+`reload` или изменения правил. Успешные предварительные проверки сами по себе
+не разрешают применение: для ограничительного `apply` нужны полный каталог,
+проверенный отчёт и остальные условия допуска, описанные ниже.
 
 Семантика запросов: [RPM query](https://rpm.org/docs/4.20.x/man/rpm.8),
 [firewall-cmd](https://firewalld.org/documentation/man-pages/firewall-cmd.html).
@@ -279,9 +315,9 @@ HOST policies и изменение снимка чужих объектов fir
 Пример команды для одного хоста; путь inventory и имя выбрать свои:
 
 ```bash
-ansible-playbook -i ./ansible/inventory/multinode ./ansible/host-firewall.yml \
-  -e @/etc/kolla/globals.yml --limit ultra1-2 \
-  -e '{"host_firewall_mode":"apply","host_firewall_initialize":true,"host_firewall_allow_initial_reload":true}'
+kolla-ansible host-firewall --mode apply -i ./ansible/inventory/multinode \
+  --configdir /etc/kolla --limit ultra1-2 \
+  -e '{"host_firewall_initialize":true,"host_firewall_allow_initial_reload":true}'
 ```
 
 Это **изменяющая операция**, не dry run. Создаёт только пустую policy и
@@ -303,7 +339,6 @@ policy reload не выполняется. Чужая одноимённая pol
 В отдельном YAML параметров, например `/etc/kolla/host-firewall-apply.yml`:
 
 ```yaml
-host_firewall_mode: apply
 host_firewall_plan_file: /home/operator/work/kolla-ansible/artifacts/host-firewall-EXAMPLE/report.json
 host_firewall_plan_id: 'ВСТАВИТЬ_64_HEX_СИМВОЛА_ИЗ_ПОЛЯ_plan_id_ОТЧЁТА'
 host_firewall_rollback_timeout: 300
@@ -325,8 +360,8 @@ HTTPS — с проверкой сертификата. Credentials/query в URL
 для них необходимы отдельные квалификационные проверки профиля.
 
 ```bash
-ansible-playbook -i ./ansible/inventory/multinode ./ansible/host-firewall.yml \
-  -e @/etc/kolla/globals.yml -e @/etc/kolla/host-firewall-apply.yml
+kolla-ansible host-firewall --mode apply -i ./ansible/inventory/multinode \
+  --configdir /etc/kolla -e @/etc/kolla/host-firewall-apply.yml
 ```
 
 `host_firewall_rollback_timeout`: целое `60..900`, секунд с начала транзакции,
@@ -342,9 +377,8 @@ UUID показан задачей `Show transaction identifier...`. У кажд
 Использовать только текущую транзакцию конкретного хоста; старая отклоняется:
 
 ```bash
-ansible-playbook -i ./ansible/inventory/multinode ./ansible/host-firewall.yml \
-  -e @/etc/kolla/globals.yml --limit ultra1-2 \
-  -e host_firewall_mode=rollback \
+kolla-ansible host-firewall --mode rollback -i ./ansible/inventory/multinode \
+  --configdir /etc/kolla --limit ultra1-2 \
   -e host_firewall_rollback_transaction_id=ВСТАВИТЬ_UUID_ТРАНЗАКЦИИ
 ```
 
@@ -369,7 +403,8 @@ sudo firewall-cmd --permanent --info-policy=kolla-host-input
 
 ## Локальные проверки
 
-Из корня `mimaric`:
+Из корня `mimaric`, в Python-окружении Kolla-Ansible (нужны `cliff`, `pbr`,
+`PyYAML`) и с `ansible-playbook` версии 2.18.x в PATH:
 
 ```bash
 python3 -m unittest discover \
@@ -386,8 +421,20 @@ firewall и не подключаются к стенду. Чистые тест
 Дополнительный тест автоматически ищет объявленный архив `0809` в родительских
 каталогах workspace, сверяет SHA256 с `baselines/0809.json`, проверяет отсутствие
 коллизий добавки, syntax-check и report run на временной копии исходников.
-Он проверяет сохранность исходных файлов. Без архива этот тест помечается SKIP;
-остальные тесты не требуют исходников Kolla.
+Он проверяет сохранность исходных файлов Ansible-части. Без архива этот тест
+помечается SKIP. CLI-патч отдельно меняет только `commands.py` и `setup.cfg`.
+
+CLI-тесты также используют проверенный архив `0809`: применяют CLI-патч,
+читают его регистрацию команды и запускают настоящий Kolla CLI и Ansible.
+Проверяются режим по умолчанию, порядок globals/overrides, применение и откат,
+сохранение кода ошибки Ansible и остановка перед следующим хостом.
+Без архива или Python-зависимостей Kolla эти тесты помечаются SKIP; такой
+запуск не подтверждает CLI-интеграцию.
+
+Для CLI-поставки дополнительно проверены сборка wheel из базы `0809`, наличие
+в нём всех Ansible-файлов добавки, установка через pip во временный каталог,
+справка установленной команды, `--list-tasks` и формирование отчёта с переменными
+`0809`. В проверке отчёта удалённое обследование заменено локальной fixture.
 
 Ни эти проверки, ни успешный локальный отчёт не подтверждают, что firewall
 можно безопасно включать на Ultra. Реального стендового запуска не выполнялось.

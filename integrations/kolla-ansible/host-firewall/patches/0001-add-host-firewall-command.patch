@@ -1,0 +1,51 @@
+diff --git a/kolla_ansible/cli/commands.py b/kolla_ansible/cli/commands.py
+--- a/kolla_ansible/cli/commands.py
++++ b/kolla_ansible/cli/commands.py
+@@ -167,6 +167,36 @@
+         self.run_playbooks(parsed_args, playbooks)
+ 
+ 
++class HostFirewall(KollaAnsibleMixin, Command):
++    """Report, apply or roll back the Kolla host firewall"""
++
++    def get_parser(self, prog_name):
++        parser = super().get_parser(prog_name)
++        parser.add_argument(
++            "--mode",
++            choices=("report", "apply", "rollback"),
++            default="report",
++            help="Firewall operation (default: report). Overrides "
++                 "host_firewall_mode in configuration and extra vars.",
++        )
++        return parser
++
++    def take_action(self, parsed_args):
++        # The report/admission/verification transaction must run as a whole.
++        if parsed_args.playbook or parsed_args.tags or parsed_args.skip_tags:
++            raise ValueError(
++                "host-firewall requires the complete host-firewall playbook; "
++                "--playbook, --tags and --skip-tags are not supported"
++            )
++        self.app.LOG.info("Managing host firewall (%s)", parsed_args.mode)
++        self.run_playbooks(
++            parsed_args,
++            [_get_playbook_path("host-firewall")],
++            extra_vars={"host_firewall_mode": parsed_args.mode},
++            include_passwords=False,
++        )
++
++
+ class InstallDeps(KollaAnsibleMixin, Command):
+     """Install Ansible Galaxy dependencies"""
+ 
+diff --git a/setup.cfg b/setup.cfg
+--- a/setup.cfg
++++ b/setup.cfg
+@@ -49,6 +49,7 @@
+ 
+ kolla_ansible.cli =
+     gather-facts = kolla_ansible.cli.commands:GatherFacts
++    host-firewall = kolla_ansible.cli.commands:HostFirewall
+     install-deps = kolla_ansible.cli.commands:InstallDeps
+     prechecks = kolla_ansible.cli.commands:Prechecks
+     genconfig = kolla_ansible.cli.commands:GenConfig
