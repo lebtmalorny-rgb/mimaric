@@ -24,8 +24,9 @@ class RepositoryTests(unittest.TestCase):
             self.assertEqual(digest, hashlib.sha256((ROOT / name).read_bytes()).hexdigest())
         expected = {str(p.relative_to(ROOT)) for p in (ROOT / 'hotfixes').rglob('*.patch')}
         expected.update(str(p.relative_to(ROOT)) for p in (ROOT / 'tools/diagnostics').glob('*.yml'))
+        expected.update(str(p.relative_to(ROOT)) for p in (ROOT / 'hotfixes').rglob('*.whl'))
+        expected.update(str(p.relative_to(ROOT)) for p in (ROOT / 'hotfixes').rglob('manifest.json'))
         self.assertEqual(expected, set(entries))
-        self.assertEqual(8, len(entries))
 
     def test_0809_baseline_and_horizon_boundary_are_explicit(self):
         data = json.loads((ROOT / 'baselines/0809.json').read_text())

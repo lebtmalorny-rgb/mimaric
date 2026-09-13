@@ -1,0 +1,664 @@
+From 2b9963d613423fa0b6c4eba67516808112354c3a Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Sun, 13 Sep 2026 20:53:07 +0300
+Subject: [PATCH 1/2] feat: configure per-target evacuation guard
+
+---
+ ansible/group_vars/all.yml                    |  18 ++
+ ansible/roles/masakari/tasks/precheck.yml     |   3 +
+ .../roles/masakari/templates/masakari.conf.j2 |  20 ++
+ ansible/roles/nova-cell/tasks/precheck.yml    |   3 +
+ .../roles/nova-cell/templates/nova.conf.j2    |  20 ++
+ .../powerops-evacuation-guard/tasks/main.yml  |  98 ++++++++
+ .../test_powerops_configuration_contract.py   | 210 ++++++++++++++++++
+ .../tests/unit/test_powerops_templates.py     | 135 +++++++++++
+ 8 files changed, 507 insertions(+)
+ create mode 100644 ansible/roles/powerops-evacuation-guard/tasks/main.yml
+
+diff --git a/ansible/group_vars/all.yml b/ansible/group_vars/all.yml
+index 3c54caa..afc2b9d 100644
+--- a/ansible/group_vars/all.yml
++++ b/ansible/group_vars/all.yml
+@@ -1232,6 +1232,24 @@ watcher_automation_guard_ca_file: "{{ openstack_cacert }}"
+ watcher_automation_guard_cert_file: ""
+ watcher_automation_guard_key_file: ""
+ 
++# Shared durable admission gate between Masakari evacuation submission and
++# Nova compute execution. Images configured for these services must already
++# contain the coordinated patches and the evacuation guard package.
++powerops_evacuation_guard_enabled: "no"
++powerops_evacuation_guard_default_endpoint: >-
++  {{ 'https' if internal_protocol == 'https' else 'http' }}://{{ kolla_internal_fqdn }}:{{ etcd_client_port }}
++powerops_evacuation_guard_endpoint: "{{ powerops_evacuation_guard_default_endpoint }}"
++powerops_evacuation_guard_prefix: "/powerops/evacuation/v1"
++powerops_evacuation_guard_timeout: 5.0
++powerops_evacuation_guard_max_parallel: 3
++powerops_evacuation_guard_cooldown: 5.0
++powerops_evacuation_guard_admission_timeout: 3600.0
++powerops_evacuation_guard_poll_interval: 1.0
++powerops_evacuation_guard_submission_workers: 3
++powerops_evacuation_guard_ca_file: ""
++powerops_evacuation_guard_cert_file: ""
++powerops_evacuation_guard_key_file: ""
++
+ powerops_coordination_url: >-
+   etcd3+{{ internal_protocol }}://{{ kolla_internal_fqdn }}:{{ etcd_client_port }}?api_version=v3{% if openstack_cacert %}&ca_cert={{ openstack_cacert }}{% endif %}
+ powerops_host_lock_timeout: 30
+diff --git a/ansible/roles/masakari/tasks/precheck.yml b/ansible/roles/masakari/tasks/precheck.yml
+index fec7e52..20e802a 100644
+--- a/ansible/roles/masakari/tasks/precheck.yml
++++ b/ansible/roles/masakari/tasks/precheck.yml
+@@ -2,6 +2,9 @@
+ - import_role:
+     name: watcher-automation-guard
+ 
++- import_role:
++    name: powerops-evacuation-guard
++
+ - name: Validate PowerOps service and coordination dependencies
+   ansible.builtin.assert:
+     that:
+diff --git a/ansible/roles/masakari/templates/masakari.conf.j2 b/ansible/roles/masakari/templates/masakari.conf.j2
+index 913584d..6ebf66a 100644
+--- a/ansible/roles/masakari/templates/masakari.conf.j2
++++ b/ansible/roles/masakari/templates/masakari.conf.j2
+@@ -99,6 +99,26 @@ cert_file = {{ watcher_automation_guard_cert_file }}
+ key_file = {{ watcher_automation_guard_key_file }}
+ {% endif %}
+ 
++[powerops_evacuation_guard]
++enabled = {{ powerops_evacuation_guard_enabled | bool | string | lower }}
++endpoint = {{ powerops_evacuation_guard_endpoint }}
++prefix = {{ powerops_evacuation_guard_prefix }}
++timeout = {{ powerops_evacuation_guard_timeout }}
++max_parallel = {{ powerops_evacuation_guard_max_parallel }}
++cooldown = {{ powerops_evacuation_guard_cooldown }}
++admission_timeout = {{ powerops_evacuation_guard_admission_timeout }}
++poll_interval = {{ powerops_evacuation_guard_poll_interval }}
++submission_workers = {{ powerops_evacuation_guard_submission_workers }}
++{% if powerops_evacuation_guard_ca_file | length > 0 %}
++ca_file = {{ powerops_evacuation_guard_ca_file }}
++{% endif %}
++{% if powerops_evacuation_guard_cert_file | length > 0 %}
++cert_file = {{ powerops_evacuation_guard_cert_file }}
++{% endif %}
++{% if powerops_evacuation_guard_key_file | length > 0 %}
++key_file = {{ powerops_evacuation_guard_key_file }}
++{% endif %}
++
+ {% if enable_powerops | bool %}
+ {% if service_name in ['masakari-api', 'masakari-engine'] %}
+ [coordination]
+diff --git a/ansible/roles/nova-cell/tasks/precheck.yml b/ansible/roles/nova-cell/tasks/precheck.yml
+index b0b510a..3315645 100644
+--- a/ansible/roles/nova-cell/tasks/precheck.yml
++++ b/ansible/roles/nova-cell/tasks/precheck.yml
+@@ -1,4 +1,7 @@
+ ---
++- import_role:
++    name: powerops-evacuation-guard
++
+ - import_role:
+     name: service-precheck
+   vars:
+diff --git a/ansible/roles/nova-cell/templates/nova.conf.j2 b/ansible/roles/nova-cell/templates/nova.conf.j2
+index e4b0c1a..66dc410 100644
+--- a/ansible/roles/nova-cell/templates/nova.conf.j2
++++ b/ansible/roles/nova-cell/templates/nova.conf.j2
+@@ -102,6 +102,26 @@ endpoint_override = {{ ironic_internal_endpoint }}/v1
+ [oslo_concurrency]
+ lock_path = /var/lib/nova/tmp
+ 
++[powerops_evacuation_guard]
++enabled = {{ powerops_evacuation_guard_enabled | bool | string | lower }}
++endpoint = {{ powerops_evacuation_guard_endpoint }}
++prefix = {{ powerops_evacuation_guard_prefix }}
++timeout = {{ powerops_evacuation_guard_timeout }}
++max_parallel = {{ powerops_evacuation_guard_max_parallel }}
++cooldown = {{ powerops_evacuation_guard_cooldown }}
++admission_timeout = {{ powerops_evacuation_guard_admission_timeout }}
++poll_interval = {{ powerops_evacuation_guard_poll_interval }}
++submission_workers = {{ powerops_evacuation_guard_submission_workers }}
++{% if powerops_evacuation_guard_ca_file | length > 0 %}
++ca_file = {{ powerops_evacuation_guard_ca_file }}
++{% endif %}
++{% if powerops_evacuation_guard_cert_file | length > 0 %}
++cert_file = {{ powerops_evacuation_guard_cert_file }}
++{% endif %}
++{% if powerops_evacuation_guard_key_file | length > 0 %}
++key_file = {{ powerops_evacuation_guard_key_file }}
++{% endif %}
++
+ [glance]
+ debug = {{ nova_logging_debug }}
+ api_servers = {{ glance_internal_endpoint }}
+diff --git a/ansible/roles/powerops-evacuation-guard/tasks/main.yml b/ansible/roles/powerops-evacuation-guard/tasks/main.yml
+new file mode 100644
+index 0000000..0d0a86b
+--- /dev/null
++++ b/ansible/roles/powerops-evacuation-guard/tasks/main.yml
+@@ -0,0 +1,98 @@
++---
++- name: Validate PowerOps evacuation guard dependencies
++  ansible.builtin.assert:
++    that:
++      - enable_nova | bool
++      - enable_masakari | bool
++      - enable_powerops | bool
++      - enable_etcd | bool
++      - powerops_evacuation_guard_endpoint is string
++      - >-
++        powerops_evacuation_guard_endpoint |
++        regex_search(
++          '^https?://(?:\[(?=[0-9A-Fa-f:]*:)[0-9A-Fa-f:]+\]|[^\s:/?#@\[\]]+):[0-9]+$'
++        ) is not none
++      - >-
++        powerops_evacuation_guard_endpoint |
++        regex_replace('^.*:', '') | int >= 1
++      - >-
++        powerops_evacuation_guard_endpoint |
++        regex_replace('^.*:', '') | int <= 65535
++      - powerops_evacuation_guard_prefix is string
++      - >-
++        powerops_evacuation_guard_prefix |
++        regex_search('^/[^\s/](?:[^\s]*[^/])?$') is not none
++      - powerops_evacuation_guard_prefix | regex_search('//') is none
++      - >-
++        powerops_evacuation_guard_prefix |
++        regex_search('(?:^|/)\.\.?(?:/|$)') is none
++      - (powerops_evacuation_guard_timeout | type_debug) in ['int', 'float']
++      - >-
++        powerops_evacuation_guard_timeout | string | lower
++        not in ['nan', 'inf', '-inf', 'infinity', '-infinity']
++      - powerops_evacuation_guard_timeout | float > 0
++      - (powerops_evacuation_guard_max_parallel | type_debug) == 'int'
++      - powerops_evacuation_guard_max_parallel >= 1
++      - powerops_evacuation_guard_max_parallel <= 1024
++      - (powerops_evacuation_guard_cooldown | type_debug) in ['int', 'float']
++      - >-
++        powerops_evacuation_guard_cooldown | string | lower
++        not in ['nan', 'inf', '-inf', 'infinity', '-infinity']
++      - powerops_evacuation_guard_cooldown | float >= 0
++      - >-
++        (powerops_evacuation_guard_admission_timeout | type_debug)
++        in ['int', 'float']
++      - >-
++        powerops_evacuation_guard_admission_timeout | string | lower
++        not in ['nan', 'inf', '-inf', 'infinity', '-infinity']
++      - powerops_evacuation_guard_admission_timeout | float > 0
++      - >-
++        (powerops_evacuation_guard_poll_interval | type_debug)
++        in ['int', 'float']
++      - >-
++        powerops_evacuation_guard_poll_interval | string | lower
++        not in ['nan', 'inf', '-inf', 'infinity', '-infinity']
++      - powerops_evacuation_guard_poll_interval | float > 0
++      - >-
++        (powerops_evacuation_guard_submission_workers | type_debug) == 'int'
++      - powerops_evacuation_guard_submission_workers >= 1
++      - powerops_evacuation_guard_submission_workers <= 1024
++      - powerops_evacuation_guard_ca_file is string
++      - powerops_evacuation_guard_cert_file is string
++      - powerops_evacuation_guard_key_file is string
++      - >-
++        (powerops_evacuation_guard_cert_file | length > 0) ==
++        (powerops_evacuation_guard_key_file | length > 0)
++      - >-
++        powerops_evacuation_guard_ca_file | length == 0 or
++        powerops_evacuation_guard_ca_file |
++        regex_search(
++          '^/(?:etc/pki|etc/ssl|var/lib/kolla/share/ca-certificates)/[^\s/]+(?:/[^\s/]+)*$'
++        ) is not none
++      - >-
++        powerops_evacuation_guard_ca_file |
++        regex_search('(?:^|/)\.\.?(?:/|$)') is none
++      - >-
++        powerops_evacuation_guard_cert_file | length == 0 or
++        powerops_evacuation_guard_cert_file |
++        regex_search(
++          '^/(?:etc/pki|etc/ssl|var/lib/kolla/share/ca-certificates)/[^\s/]+(?:/[^\s/]+)*$'
++        ) is not none
++      - >-
++        powerops_evacuation_guard_cert_file |
++        regex_search('(?:^|/)\.\.?(?:/|$)') is none
++      - >-
++        powerops_evacuation_guard_key_file | length == 0 or
++        powerops_evacuation_guard_key_file |
++        regex_search(
++          '^/(?:etc/pki|etc/ssl|var/lib/kolla/share/ca-certificates)/[^\s/]+(?:/[^\s/]+)*$'
++        ) is not none
++      - >-
++        powerops_evacuation_guard_key_file |
++        regex_search('(?:^|/)\.\.?(?:/|$)') is none
++    fail_msg: >-
++      The PowerOps evacuation guard requires Nova, Masakari, PowerOps and
++      Kolla managed etcd, valid bounded admission settings, and valid
++      preprovisioned container TLS paths.
++      Optional client certificate and key files must be configured together.
++  when: powerops_evacuation_guard_enabled | bool
+diff --git a/kolla_ansible/tests/unit/test_powerops_configuration_contract.py b/kolla_ansible/tests/unit/test_powerops_configuration_contract.py
+index e825097..eb9f711 100644
+--- a/kolla_ansible/tests/unit/test_powerops_configuration_contract.py
++++ b/kolla_ansible/tests/unit/test_powerops_configuration_contract.py
+@@ -32,6 +32,9 @@ GLOBAL_POWEROPS_PRECHECK = (
+ SHARED_GUARD_PRECHECK = (
+     ROOT / "ansible/roles/watcher-automation-guard/tasks/main.yml"
+ )
++SHARED_EVACUATION_GUARD_PRECHECK = (
++    ROOT / "ansible/roles/powerops-evacuation-guard/tasks/main.yml"
++)
+ 
+ POWEROPS_TIMING_DEFAULTS = {
+     "powerops_host_lock_timeout": 30,
+@@ -94,6 +97,27 @@ WATCHER_AUTOMATION_GUARD_DEFAULTS = {
+     "watcher_automation_guard_key_file": "",
+ }
+ 
++POWEROPS_EVACUATION_GUARD_DEFAULTS = {
++    "powerops_evacuation_guard_enabled": "no",
++    "powerops_evacuation_guard_default_endpoint": (
++        "{{ 'https' if internal_protocol == 'https' else 'http' }}://"
++        "{{ kolla_internal_fqdn }}:{{ etcd_client_port }}"
++    ),
++    "powerops_evacuation_guard_endpoint": (
++        "{{ powerops_evacuation_guard_default_endpoint }}"
++    ),
++    "powerops_evacuation_guard_prefix": "/powerops/evacuation/v1",
++    "powerops_evacuation_guard_timeout": 5.0,
++    "powerops_evacuation_guard_max_parallel": 3,
++    "powerops_evacuation_guard_cooldown": 5.0,
++    "powerops_evacuation_guard_admission_timeout": 3600.0,
++    "powerops_evacuation_guard_poll_interval": 1.0,
++    "powerops_evacuation_guard_submission_workers": 3,
++    "powerops_evacuation_guard_ca_file": "",
++    "powerops_evacuation_guard_cert_file": "",
++    "powerops_evacuation_guard_key_file": "",
++}
++
+ ROLE_PATHS = {
+     "masakari": {
+         "defaults": ROOT / "ansible/roles/masakari/defaults/main.yml",
+@@ -110,6 +134,11 @@ GUARD_SERVICE_PRECHECKS = {
+     "watcher": ROOT / "ansible/roles/watcher/tasks/precheck.yml",
+ }
+ 
++EVACUATION_GUARD_SERVICE_PRECHECKS = {
++    "nova-cell": ROOT / "ansible/roles/nova-cell/tasks/precheck.yml",
++    "masakari": ROOT / "ansible/roles/masakari/tasks/precheck.yml",
++}
++
+ PATCHED_SERVICES = {
+     "masakari": {
+         "masakari-engine": (
+@@ -198,6 +227,19 @@ def _guard_assertion():
+     return matches[0]
+ 
+ 
++def _evacuation_guard_assertion():
++    tasks = _load_yaml(SHARED_EVACUATION_GUARD_PRECHECK)
++    matches = [
++        task for task in tasks
++        if task.get("name") == (
++            "Validate PowerOps evacuation guard dependencies"
++        )
++    ]
++    if len(matches) != 1:
++        return None
++    return matches[0]
++
++
+ def _conditions_pass(conditions, variables):
+     templar = Templar(loader=DataLoader(), variables=variables)
+     with warnings.catch_warnings():
+@@ -226,6 +268,174 @@ def _assertion_outcome(task, variables):
+ 
+ class PowerOpsConfigurationContractTest(unittest.TestCase):
+ 
++    def test_evacuation_guard_defaults_are_exact_and_safe(self):
++        variables = _load_yaml(GROUP_VARS)
++        actual = {
++            name: variables.get(name)
++            for name in POWEROPS_EVACUATION_GUARD_DEFAULTS
++        }
++        self.assertEqual(POWEROPS_EVACUATION_GUARD_DEFAULTS, actual)
++
++        expression = variables[
++            "powerops_evacuation_guard_default_endpoint"]
++        environment = _jinja_environment()
++        self.assertEqual(
++            "http://controller.internal:2379",
++            environment.from_string(expression).render(
++                internal_protocol="http",
++                kolla_internal_fqdn="controller.internal",
++                etcd_client_port=2379,
++            ),
++        )
++        self.assertEqual(
++            "https://controller.internal:2379",
++            environment.from_string(expression).render(
++                internal_protocol="https",
++                kolla_internal_fqdn="controller.internal",
++                etcd_client_port=2379,
++            ),
++        )
++
++    def test_evacuation_guard_preserves_normal_nova_compute_image(self):
++        variables = _load_yaml(GROUP_VARS)
++        defaults = _load_yaml(
++            ROOT / "ansible/roles/nova-cell/defaults/main.yml")
++        expression = defaults["nova_cell_services"]["nova-compute"]["image"]
++        environment = _jinja_environment()
++        legacy_nova_compute_image = "upstream/nova-compute:2025.1"
++        disabled_rendered_image = environment.from_string(expression).render(
++            powerops_evacuation_guard_enabled="no",
++            nova_compute_image_full=legacy_nova_compute_image,
++        )
++        enabled_rendered_image = environment.from_string(expression).render(
++            powerops_evacuation_guard_enabled="yes",
++            nova_compute_image_full=legacy_nova_compute_image,
++        )
++
++        self.assertEqual(legacy_nova_compute_image, disabled_rendered_image)
++        self.assertEqual(legacy_nova_compute_image, enabled_rendered_image)
++        self.assertEqual(
++            "{{ nova_compute_image_full }}", expression)
++        self.assertEqual(
++            "{{ nova_compute_image }}:{{ nova_compute_tag }}",
++            defaults["nova_compute_image_full"],
++        )
++        self.assertNotIn("powerops_nova_compute_image", variables)
++        self.assertNotIn("powerops_nova_compute_tag", variables)
++
++    def test_evacuation_guard_prechecks_execute_real_conditions(self):
++        valid = {
++            "powerops_evacuation_guard_enabled": "yes",
++            "enable_nova": "yes",
++            "enable_masakari": "yes",
++            "enable_powerops": "yes",
++            "enable_etcd": "yes",
++            "powerops_evacuation_guard_endpoint": (
++                "https://controller.internal:2379"
++            ),
++            "powerops_evacuation_guard_prefix": "/powerops/evacuation/v1",
++            "powerops_evacuation_guard_timeout": 5.0,
++            "powerops_evacuation_guard_max_parallel": 3,
++            "powerops_evacuation_guard_cooldown": 5.0,
++            "powerops_evacuation_guard_admission_timeout": 3600.0,
++            "powerops_evacuation_guard_poll_interval": 1.0,
++            "powerops_evacuation_guard_submission_workers": 3,
++            "powerops_evacuation_guard_ca_file": (
++                "/etc/pki/tls/certs/ca-bundle.crt"
++            ),
++            "powerops_evacuation_guard_cert_file": "",
++            "powerops_evacuation_guard_key_file": "",
++        }
++        invalid_cases = (
++            {"enable_nova": "no"},
++            {"enable_masakari": "no"},
++            {"enable_powerops": "no"},
++            {"enable_etcd": "no"},
++            {"powerops_evacuation_guard_endpoint": "etcd:2379"},
++            {"powerops_evacuation_guard_endpoint": "http://user@etcd:2379"},
++            {"powerops_evacuation_guard_endpoint": "http://[bad]:2379"},
++            {"powerops_evacuation_guard_endpoint": "http://etcd:2379/v3"},
++            {"powerops_evacuation_guard_endpoint": "http://etcd:0"},
++            {"powerops_evacuation_guard_endpoint": "http://etcd:65536"},
++            {"powerops_evacuation_guard_prefix": "relative"},
++            {"powerops_evacuation_guard_prefix": "/powerops//evacuation"},
++            {"powerops_evacuation_guard_prefix": "/powerops/../evacuation"},
++            {"powerops_evacuation_guard_timeout": True},
++            {"powerops_evacuation_guard_timeout": 0},
++            {"powerops_evacuation_guard_timeout": float("inf")},
++            {"powerops_evacuation_guard_max_parallel": True},
++            {"powerops_evacuation_guard_max_parallel": 0},
++            {"powerops_evacuation_guard_max_parallel": 1025},
++            {"powerops_evacuation_guard_cooldown": True},
++            {"powerops_evacuation_guard_cooldown": -0.1},
++            {"powerops_evacuation_guard_cooldown": float("nan")},
++            {"powerops_evacuation_guard_admission_timeout": False},
++            {"powerops_evacuation_guard_admission_timeout": 0},
++            {"powerops_evacuation_guard_poll_interval": False},
++            {"powerops_evacuation_guard_poll_interval": 0},
++            {"powerops_evacuation_guard_submission_workers": False},
++            {"powerops_evacuation_guard_submission_workers": 0},
++            {"powerops_evacuation_guard_submission_workers": 1025},
++            {"powerops_evacuation_guard_ca_file": "relative/ca.pem"},
++            {"powerops_evacuation_guard_ca_file": "/etc/kolla/ca.pem"},
++            {
++                "powerops_evacuation_guard_cert_file": (
++                    "/etc/ssl/powerops/client.crt"
++                ),
++            },
++            {
++                "powerops_evacuation_guard_cert_file": (
++                    "/etc/ssl/powerops/../client.crt"
++                ),
++                "powerops_evacuation_guard_key_file": (
++                    "/etc/ssl/powerops/client.key"
++                ),
++            },
++        )
++
++        task = _evacuation_guard_assertion()
++        self.assertIsNotNone(task)
++        self.assertEqual(
++            "powerops_evacuation_guard_enabled | bool", task.get("when"))
++        self.assertEqual("passed", _assertion_outcome(task, valid))
++        valid_tls_pair = {
++            **valid,
++            "powerops_evacuation_guard_endpoint": "http://[2001:db8::1]:1",
++            "powerops_evacuation_guard_ca_file": (
++                "/var/lib/kolla/share/ca-certificates/powerops-ca.pem"
++            ),
++            "powerops_evacuation_guard_cert_file": (
++                "/etc/ssl/powerops/client.crt"
++            ),
++            "powerops_evacuation_guard_key_file": (
++                "/etc/pki/powerops/client.key"
++            ),
++        }
++        self.assertEqual("passed", _assertion_outcome(task, valid_tls_pair))
++        self.assertEqual(
++            "skipped",
++            _assertion_outcome(
++                task, {**valid, "powerops_evacuation_guard_enabled": "no"}),
++        )
++        for updates in invalid_cases:
++            with self.subTest(updates=updates):
++                self.assertEqual(
++                    "failed", _assertion_outcome(task, {**valid, **updates}))
++
++    def test_nova_and_masakari_import_shared_evacuation_guard_contract(self):
++        expected = {"name": "powerops-evacuation-guard"}
++        for role, path in EVACUATION_GUARD_SERVICE_PRECHECKS.items():
++            tasks = _load_yaml(path)
++            imports = [
++                task["import_role"]
++                for task in tasks
++                if (
++                    "import_role" in task and
++                    task["import_role"].get("name") == expected["name"]
++                )
++            ]
++            self.assertEqual([expected], imports, role)
++
+     def test_watcher_automation_guard_defaults_are_exact_and_safe(self):
+         variables = _load_yaml(GROUP_VARS)
+         actual = {
+diff --git a/kolla_ansible/tests/unit/test_powerops_templates.py b/kolla_ansible/tests/unit/test_powerops_templates.py
+index 274edea..f80701e 100644
+--- a/kolla_ansible/tests/unit/test_powerops_templates.py
++++ b/kolla_ansible/tests/unit/test_powerops_templates.py
+@@ -18,6 +18,7 @@ import jinja2
+ 
+ 
+ ROOT = Path(__file__).resolve().parents[3]
++NOVA_CELL_TEMPLATE = "ansible/roles/nova-cell/templates/nova.conf.j2"
+ MASAKARI_TEMPLATE = "ansible/roles/masakari/templates/masakari.conf.j2"
+ MISTRAL_TEMPLATE = "ansible/roles/mistral/templates/mistral.conf.j2"
+ WATCHER_TEMPLATE = "ansible/roles/watcher/templates/watcher.conf.j2"
+@@ -51,6 +52,7 @@ MASAKARI_BASE_SECTIONS = {
+     "oslo_messaging_notifications",
+     "oslo_messaging_rabbit",
+     "oslo_middleware",
++    "powerops_evacuation_guard",
+     "taskflow",
+     "oslo_concurrency",
+ }
+@@ -146,6 +148,20 @@ def _common_variables():
+         "watcher_automation_guard_ca_file": "",
+         "watcher_automation_guard_cert_file": "",
+         "watcher_automation_guard_key_file": "",
++        "powerops_evacuation_guard_enabled": False,
++        "powerops_evacuation_guard_endpoint": (
++            "http://controller.internal:2379"
++        ),
++        "powerops_evacuation_guard_prefix": "/powerops/evacuation/v1",
++        "powerops_evacuation_guard_timeout": 5.0,
++        "powerops_evacuation_guard_max_parallel": 3,
++        "powerops_evacuation_guard_cooldown": 5.0,
++        "powerops_evacuation_guard_admission_timeout": 3600.0,
++        "powerops_evacuation_guard_poll_interval": 1.0,
++        "powerops_evacuation_guard_submission_workers": 3,
++        "powerops_evacuation_guard_ca_file": "",
++        "powerops_evacuation_guard_cert_file": "",
++        "powerops_evacuation_guard_key_file": "",
+     }
+ 
+ 
+@@ -231,6 +247,43 @@ def _watcher_variables(service_name):
+     return variables
+ 
+ 
++def _nova_compute_variables():
++    variables = _common_variables()
++    variables.update({
++        "ansible_facts": {"hostname": "compute-01"},
++        "enable_barbican": False,
++        "enable_cells": False,
++        "enable_cinder": False,
++        "enable_designate": False,
++        "enable_neutron_infoblox_ipam_agent": False,
++        "enable_nova_fake": False,
++        "enable_nova_serialconsole_proxy": False,
++        "enable_watcher": True,
++        "glance_internal_endpoint": "http://glance.internal:9292",
++        "inventory_hostname": "compute-01",
++        "keystone_internal_url": "http://keystone.internal:5000",
++        "metadata_secret": "metadata-secret",
++        "neutron_keystone_password": "neutron-secret",
++        "neutron_keystone_user": "neutron",
++        "neutron_plugin_agent": "openvswitch",
++        "nova_cell_conductor_workers": 4,
++        "nova_cell_notify_transport_url": "rabbit://notifications",
++        "nova_cell_rpc_transport_url": "rabbit://rpc",
++        "nova_cell_services_require_policy_json": [],
++        "nova_compute_virt_type": "xen",
++        "nova_console": "none",
++        "nova_enabled_notification_topics": [],
++        "nova_keystone_password": "nova-secret",
++        "nova_keystone_user": "nova",
++        "nova_logging_debug": False,
++        "nova_pci_passthrough_whitelist": [],
++        "placement_keystone_password": "placement-secret",
++        "placement_keystone_user": "placement",
++        "service_name": "nova-compute",
++    })
++    return variables
++
++
+ def _render(relative_path, variables):
+     return _environment().get_template(str(relative_path)).render(**variables)
+ 
+@@ -465,6 +518,88 @@ class WatcherAutomationGuardTemplateTest(unittest.TestCase):
+         )
+ 
+ 
++class PowerOpsEvacuationGuardTemplateTest(unittest.TestCase):
++
++    def test_nova_and_masakari_render_identical_disabled_options(self):
++        expected = {
++            "enabled": "false",
++            "endpoint": "http://controller.internal:2379",
++            "prefix": "/powerops/evacuation/v1",
++            "timeout": "5.0",
++            "max_parallel": "3",
++            "cooldown": "5.0",
++            "admission_timeout": "3600.0",
++            "poll_interval": "1.0",
++            "submission_workers": "3",
++        }
++        nova = _parse(_render(NOVA_CELL_TEMPLATE,
++                              _nova_compute_variables()))
++        masakari = _parse(_render(
++            MASAKARI_TEMPLATE,
++            _masakari_variables("masakari-engine", False, "redis", ""),
++        ))
++
++        nova_guard_options = dict(nova["powerops_evacuation_guard"])
++        masakari_guard_options = dict(
++            masakari["powerops_evacuation_guard"])
++        self.assertEqual(nova_guard_options, masakari_guard_options)
++        default_guard_options = nova_guard_options
++        self.assertEqual(expected, default_guard_options)
++        self.assertEqual("false", default_guard_options["enabled"])
++
++    def test_optional_tls_paths_render_identically_when_configured(self):
++        expected = {
++            "enabled": "true",
++            "endpoint": "https://etcd-ha.internal:2379",
++            "prefix": "/powerops/evacuation/v1",
++            "timeout": "7.5",
++            "max_parallel": "7",
++            "cooldown": "8.5",
++            "admission_timeout": "901.5",
++            "poll_interval": "0.5",
++            "submission_workers": "11",
++            "ca_file": "/etc/pki/tls/certs/ca-bundle.crt",
++            "cert_file": "/etc/ssl/powerops/client.crt",
++            "key_file": "/var/lib/kolla/share/ca-certificates/client.key",
++        }
++        nova_variables = _nova_compute_variables()
++        masakari_variables = _masakari_variables(
++            "masakari-engine", True, "etcd", "")
++        overrides = {
++            "powerops_evacuation_guard_enabled": True,
++            "powerops_evacuation_guard_endpoint": (
++                "https://etcd-ha.internal:2379"
++            ),
++            "powerops_evacuation_guard_timeout": 7.5,
++            "powerops_evacuation_guard_max_parallel": 7,
++            "powerops_evacuation_guard_cooldown": 8.5,
++            "powerops_evacuation_guard_admission_timeout": 901.5,
++            "powerops_evacuation_guard_poll_interval": 0.5,
++            "powerops_evacuation_guard_submission_workers": 11,
++            "powerops_evacuation_guard_ca_file": (
++                "/etc/pki/tls/certs/ca-bundle.crt"
++            ),
++            "powerops_evacuation_guard_cert_file": (
++                "/etc/ssl/powerops/client.crt"
++            ),
++            "powerops_evacuation_guard_key_file": (
++                "/var/lib/kolla/share/ca-certificates/client.key"
++            ),
++        }
++        nova_variables.update(overrides)
++        masakari_variables.update(overrides)
++
++        configs = (
++            _parse(_render(NOVA_CELL_TEMPLATE, nova_variables)),
++            _parse(_render(MASAKARI_TEMPLATE, masakari_variables)),
++        )
++        self.assertEqual(
++            [expected, expected],
++            [dict(config["powerops_evacuation_guard"])
++             for config in configs],
++        )
++
++
+ class MistralPowerOpsTemplateTest(unittest.TestCase):
+ 
+     def _render(self, service_name, enabled, ca_cert):
+-- 
+2.49.0
+

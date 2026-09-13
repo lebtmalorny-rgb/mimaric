@@ -1,0 +1,99 @@
+{
+  "schema": 1,
+  "name": "powerops-masakari-per-target-evacuation",
+  "dependency": {
+    "manifest": "hotfixes/watcher-automation-hold/manifest.json",
+    "manifest_sha256": "d09dbf5b47964b6b25cb405c196ae87f5400c295fa7117ca5261f156434f5509",
+    "kit_commit": "c866d56fbf382afa4612c07039c34fbb5032aef5",
+    "verification": "Verify predecessor separately; dependency path is kit-root metadata, never an artifact path. Apply original 0809 -> post-fence prerequisite -> Watcher series -> this delivery. Exact Masakari/Kolla bases already include prerequisites.",
+    "required_final_trees": {
+      "watcher": "30e2ec8225db08ce46b71844bbcdb4a00767ab8d",
+      "masakari": "f7eb2f799ba9db0ac44b01ca949c1070bd4b6f96",
+      "kolla-ansible": "d68e9dcf20ca05e2bea7fb07ab93e80aab40e2a2"
+    }
+  },
+  "package": {
+    "path": "package/powerops_evacuation_guard-0.1.0-py3-none-any.whl",
+    "sha256": "b38359c6c83e868f0fa0e63901a4c93043c13183735e81600996541a71b3544f",
+    "version": "0.1.0",
+    "published_index": false,
+    "source_commit": "7aa25702654a3a7e545123c59a04009f85b30ac0",
+    "build": {
+      "python": "3.11.15",
+      "build_frontend": "build 1.6.1",
+      "setuptools": "80.9.0",
+      "source_date_epoch": 1789295229,
+      "command": "SOURCE_DATE_EPOCH=1789295229 python3.11 -m build --wheel --no-isolation --outdir <output> <clean-core-archive>/packages/powerops-evacuation-guard",
+      "reproducible": true
+    }
+  },
+  "components": {
+    "nova": {
+      "base_commit": "ce37978276744e92d91251210a1d9c2784eea375",
+      "base_tree": "efaa1afe1685ffae2032c46ea1d03b3723c73e6f",
+      "final_commit": "69730e9fc77f1e57ac1ba884bc2dd0c567e01a3a",
+      "final_tree": "85d45af66afefeb0317eb42d1d235d28dc61dc90",
+      "prerequisites": [],
+      "patches": [
+        {
+          "path": "nova/0001-Guard-receiving-compute-evacuation-with-durable-per-.patch",
+          "sha256": "955cb5760f08eab1223b88ec7201f53708fd5f69eac414f0de7329d0fb706ca4"
+        }
+      ],
+      "excluded_paths": [],
+      "source": {
+        "type": "git",
+        "url": "https://opendev.org/openstack/nova.git",
+        "branch": "stable/2025.1"
+      }
+    },
+    "masakari": {
+      "base_commit": "0c2fa56a36e71612e32bf50e174c465138d0c8fb",
+      "base_tree": "f7eb2f799ba9db0ac44b01ca949c1070bd4b6f96",
+      "final_commit": "4e93865141f6113570ce80ac3e33f5bae836e3a6",
+      "final_tree": "568c7daa3e71c85beb22be44252d90c310a98acf",
+      "prerequisites": [],
+      "patches": [
+        {
+          "path": "masakari/0001-Add-durable-evacuation-intents-and-process-wide-Masa.patch",
+          "sha256": "fd00c9b1f18c44db3e76dae44eb4194781181ba4531cab0c59d9c9a570de7951"
+        }
+      ],
+      "excluded_paths": [],
+      "source": {
+        "type": "predecessor-final-tree",
+        "component": "masakari"
+      }
+    },
+    "kolla-ansible": {
+      "base_commit": "3c8d0b9b04053855541fc33f5be91ab0541a6a77",
+      "base_tree": "d68e9dcf20ca05e2bea7fb07ab93e80aab40e2a2",
+      "final_commit": "ac4d05465183572631a57c5c2fc0cc4fc348dc33",
+      "final_tree": "f8c12755d41a469c910ee29ea3a37a90e999d5ce",
+      "prerequisites": [],
+      "patches": [
+        {
+          "path": "kolla-ansible/0001-feat-configure-per-target-evacuation-guard.patch",
+          "sha256": "5d7b1f04c71c3c7cd77f0b01bea2436ac88c4bf55641ac887f72bd178eafa109"
+        },
+        {
+          "path": "kolla-ansible/0002-fix-validate-evacuation-guard-IPv6-endpoints.patch",
+          "sha256": "a7bcdf894c8a5ed9d6218545027fa28edd49a3ad7342b78c8560cd07bbc5f88b"
+        }
+      ],
+      "excluded_paths": [
+        "etc/kolla/passwords.yml"
+      ],
+      "source": {
+        "type": "predecessor-final-tree",
+        "component": "kolla-ansible"
+      },
+      "required_symlinks": [
+        "tools/generate_passwords.py",
+        "tools/merge_passwords.py",
+        "tools/read_passwords.py",
+        "tools/write_passwords.py"
+      ]
+    }
+  }
+}

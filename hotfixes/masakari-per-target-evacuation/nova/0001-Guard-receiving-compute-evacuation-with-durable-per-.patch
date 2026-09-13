@@ -1,0 +1,969 @@
+From 69730e9fc77f1e57ac1ba884bc2dd0c567e01a3a Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Sun, 13 Sep 2026 20:06:24 +0300
+Subject: [PATCH] Guard receiving compute evacuation with durable per-target
+ admission
+
+---
+ nova/compute/manager.py                       |   2 +
+ nova/compute/powerops_evacuation.py           | 244 +++++++
+ nova/conf/__init__.py                         |   4 +
+ nova/conf/opts.py                             |   4 +
+ .../unit/compute/test_powerops_evacuation.py  | 622 ++++++++++++++++++
+ requirements.txt                              |   2 +
+ 6 files changed, 878 insertions(+)
+ create mode 100644 nova/compute/powerops_evacuation.py
+ create mode 100644 nova/tests/unit/compute/test_powerops_evacuation.py
+
+diff --git a/nova/compute/manager.py b/nova/compute/manager.py
+index eb209f1..552b950 100644
+--- a/nova/compute/manager.py
++++ b/nova/compute/manager.py
+@@ -63,6 +63,7 @@ from nova.compute import api as compute
+ from nova.compute import build_results
+ from nova.compute import claims
+ from nova.compute import power_state
++from nova.compute import powerops_evacuation
+ from nova.compute import resource_tracker
+ from nova.compute import rpcapi as compute_rpcapi
+ from nova.compute import task_states
+@@ -3797,6 +3798,7 @@ class ComputeManager(manager.Manager):
+             context, instance, self.host,
+             phase=fields.NotificationPhase.ERROR, exception=error, bdms=bdms)
+ 
++    @powerops_evacuation.guard_rebuild
+     @messaging.expected_exceptions(exception.PreserveEphemeralNotSupported,
+                                    exception.BuildAbortException)
+     @wrap_exception()
+diff --git a/nova/compute/powerops_evacuation.py b/nova/compute/powerops_evacuation.py
+new file mode 100644
+index 0000000..00e9010
+--- /dev/null
++++ b/nova/compute/powerops_evacuation.py
+@@ -0,0 +1,244 @@
++#    Licensed under the Apache License, Version 2.0 (the "License"); you may
++#    not use this file except in compliance with the License. You may obtain
++#    a copy of the License at
++#
++#         http://www.apache.org/licenses/LICENSE-2.0
++#
++#    Unless required by applicable law or agreed to in writing, software
++#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++#    License for the specific language governing permissions and limitations
++#    under the License.
++
++"""Durable admission around the entire receiving-compute evacuation path.
++
++This must wrap *outside* Nova's state-changing error decorators. A duplicate
++RPC has no authority to reset the task or migration state of its executor.
++"""
++import functools
++import inspect
++import time
++import uuid
++
++from oslo_log import log as logging
++from oslo_utils import uuidutils
++from powerops_evacuation_guard import config
++from powerops_evacuation_guard import GuardBusy
++from powerops_evacuation_guard import GuardDenied
++from powerops_evacuation_guard import GuardDuplicate
++from powerops_evacuation_guard import GuardError
++
++from nova.compute import task_states
++from nova.compute import vm_states
++import nova.conf
++from nova import objects
++
++CONF = nova.conf.CONF
++LOG = logging.getLogger(__name__)
++
++
++def _uuid(value):
++    try:
++        if not isinstance(value, str) or str(uuid.UUID(value)) != value:
++            raise ValueError()
++    except (ValueError, AttributeError):
++        raise GuardDenied('Missing or invalid evacuation identity') from None
++    return value
++
++
++def _field(obj, name):
++    # Avoid lazy loading missing identities on RPC objects.
++    if obj is not None and obj.obj_attr_is_set(name):
++        return getattr(obj, name)
++    return None
++
++
++def _binding(migration, instance_uuid, host, node):
++    if (migration.instance_uuid != instance_uuid or
++            migration.migration_type != 'evacuation' or
++            not migration.source_compute or
++            migration.source_compute == host):
++        raise GuardDenied('Invalid evacuation migration binding')
++    # The API deliberately leaves these unset for automatic scheduling.
++    for field, expected in (('dest_compute', host),
++                            ('dest_node', node.hypervisor_hostname),
++                            ('dest_compute_id', node.id)):
++        if _field(migration, field) not in (None, expected):
++            raise GuardDenied('Evacuation destination binding changed')
++
++
++def _pending(context, migration_uuid, instance_uuid, source, node, host):
++    migration = objects.Migration.get_by_uuid(context, migration_uuid)
++    instance = objects.Instance.get_by_uuid(context, instance_uuid)
++    _binding(migration, instance_uuid, host, node)
++    if (migration.uuid != migration_uuid or
++            instance.uuid != instance_uuid or
++            migration.source_compute != source or
++            migration.status != 'accepted' or instance.host != source or
++            instance.node != migration.source_node or
++            instance.task_state != task_states.REBUILDING):
++        raise GuardDenied('Evacuation is no longer pending at its source')
++
++
++def _result(context, migration_uuid, instance_uuid, source, node, host,
++            expected_state):
++    migration = objects.Migration.get_by_uuid(context, migration_uuid)
++    instance = objects.Instance.get_by_uuid(context, instance_uuid)
++    current_node = objects.ComputeNode.get_by_host_and_nodename(
++        context, host, node.hypervisor_hostname)
++    if (migration.uuid != migration_uuid or
++            migration.instance_uuid != instance_uuid or
++            migration.migration_type != 'evacuation' or
++            migration.source_compute != source or migration.status != 'done' or
++            migration.dest_compute != host or
++            migration.dest_node != node.hypervisor_hostname or
++            migration.dest_compute_id != node.id or
++            instance.uuid != instance_uuid or instance.host != host or
++            instance.node != node.hypervisor_hostname or
++            instance.compute_id != node.id or
++            current_node.uuid != node.uuid or current_node.id != node.id or
++            instance.task_state is not None or
++            instance.vm_state != expected_state):
++        raise GuardDenied('Nova evacuation completion is not proven')
++    return dict(migration_status='done', vm_uuid=instance_uuid,
++                target_uuid=node.uuid, target_host=host,
++                vm_state=instance.vm_state, task_state=None)
++
++
++def _unknown(guard, migration_uuid, owner):
++    try:
++        guard.mark_unknown(migration_uuid, owner,
++                           'Receiving compute outcome is uncertain')
++    except GuardError:
++        # RUNNING, COOLDOWN or a tombstone remains durable even if this
++        # observation cannot be written. Never release on this error path.
++        LOG.warning('Could not record uncertain evacuation outcome for %s',
++                    migration_uuid)
++
++
++def _execute(function, args):
++    compute, context, instance = (args['self'], args['context'],
++                                  args['instance'])
++    migration_uuid = _uuid(_field(args['migration'], 'uuid'))
++    instance_uuid = _uuid(_field(instance, 'uuid'))
++    context = context.elevated()
++    scheduled_node = args['scheduled_node']
++    if scheduled_node:
++        node = objects.ComputeNode.get_by_host_and_nodename(
++            context, compute.host, scheduled_node)
++    else:
++        node = compute._get_compute_info(context, compute.host)
++    _uuid(_field(node, 'uuid'))
++    if (node.host != compute.host or not node.hypervisor_hostname or
++            (scheduled_node and node.hypervisor_hostname != scheduled_node)):
++        raise GuardDenied('Selected compute node is not local')
++    migration = objects.Migration.get_by_uuid(context, migration_uuid)
++    if _field(migration, 'uuid') != migration_uuid:
++        raise GuardDenied('Nova migration lookup identity changed')
++    _binding(migration, instance_uuid, compute.host, node)
++    _binding(args['migration'], instance_uuid, compute.host, node)
++    source = migration.source_compute
++    if (args['migration'].source_compute != source or
++            args['migration'].source_node != migration.source_node):
++        raise GuardDenied('RPC migration source does not match Nova')
++    guard = config.from_conf(CONF)
++    owner = uuidutils.generate_uuid()
++    try:
++        guard.register(migration_uuid, instance_uuid, source, node.uuid,
++                       compute.host, owner,
++                       request_id=getattr(context, 'global_request_id', None))
++    except GuardDuplicate:
++        # The request index may instead identify an already-bound intent.
++        # Only this exact migration's known COOLDOWN may be recovered. Never
++        # scan historical status pages or resolve RUNNING/UNKNOWN here.
++        LOG.info('Ignoring duplicate evacuation delivery %s', migration_uuid)
++        try:
++            existing = guard.get_operation(migration_uuid)
++        except GuardError:
++            return None
++        if (existing['state'] == 'COOLDOWN' and
++                existing['vm_uuid'] == instance_uuid and
++                existing['source_host'] == source and
++                existing['target_uuid'] == node.uuid and
++                existing['target_host'] == compute.host):
++            guard.recover_cooldown(
++                migration_uuid, existing['revision'], compute.host,
++                'Recover proven completion on duplicate delivery')
++        return None
++
++    try:
++        if (instance.host != source or
++                instance.node != migration.source_node or
++                instance.task_state != task_states.REBUILDING):
++            raise GuardDenied('RPC instance is not pending at its source')
++        _pending(context, migration_uuid, instance_uuid, source, node,
++                 compute.host)
++    except Exception:
++        guard.deny_waiting(migration_uuid, owner,
++                           'Nova evacuation is no longer pending')
++        raise
++
++    deadline = (time.monotonic() +
++                CONF.powerops_evacuation_guard.admission_timeout)
++    try:
++        while True:
++            if time.monotonic() >= deadline:
++                guard.deny_waiting(migration_uuid, owner,
++                                   'Receiving compute admission timed out')
++                raise GuardDenied('Evacuation admission timed out')
++            try:
++                guard.try_admit(migration_uuid, owner)
++                break
++            except GuardBusy:
++                time.sleep(min(CONF.powerops_evacuation_guard.poll_interval,
++                               max(0, deadline - time.monotonic())))
++        _pending(context, migration_uuid, instance_uuid, source, node,
++                 compute.host)
++        if time.monotonic() >= deadline:
++            # Admission may have committed while its response was delayed.
++            # Retain UNKNOWN; no late executor may start the local rebuild.
++            raise GuardDenied('Evacuation admission deadline elapsed')
++        # Preserve scheduler selection, including old explicit-host RPCs
++        # whose scheduled_node was None. No scheduling/Placement changes.
++        args['scheduled_node'] = node.hypervisor_hostname
++        expected_state = instance.vm_state
++        if args['target_state'] and expected_state != vm_states.ERROR:
++            expected_state = args['target_state']
++        if expected_state != vm_states.STOPPED:
++            expected_state = vm_states.ACTIVE
++        result = function(**args)
++        proof = _result(context, migration_uuid, instance_uuid, source, node,
++                        compute.host, expected_state)
++        guard.complete(migration_uuid, owner, proof)
++        guard.finish_cooldown(migration_uuid, owner)
++        return result
++    except BaseException:
++        _unknown(guard, migration_uuid, owner)
++        raise
++
++
++def guard_rebuild(function):
++    @functools.wraps(function)
++    def wrapped(self, context, instance, orig_image_ref, image_ref,
++                injected_files, new_pass, orig_sys_metadata,
++                bdms, recreate, on_shared_storage,
++                preserve_ephemeral, migration,
++                scheduled_node, limits, request_spec, accel_uuids,
++                reimage_boot_volume=None, target_state=None):
++        arguments = dict(
++            self=self, context=context, instance=instance,
++            orig_image_ref=orig_image_ref, image_ref=image_ref,
++            injected_files=injected_files, new_pass=new_pass,
++            orig_sys_metadata=orig_sys_metadata, bdms=bdms, recreate=recreate,
++            on_shared_storage=on_shared_storage,
++            preserve_ephemeral=preserve_ephemeral, migration=migration,
++            scheduled_node=scheduled_node, limits=limits,
++            request_spec=request_spec, accel_uuids=accel_uuids,
++            reimage_boot_volume=reimage_boot_volume, target_state=target_state)
++        if not CONF.powerops_evacuation_guard.enabled or not recreate:
++            return function(**arguments)
++        return _execute(function, arguments)
++    # oslo_messaging.expected_exceptions does not preserve __wrapped__.
++    # Publish the unchanged RPC signature explicitly, including defaults.
++    wrapped.__signature__ = inspect.signature(wrapped, follow_wrapped=False)
++    return wrapped
+diff --git a/nova/conf/__init__.py b/nova/conf/__init__.py
+index 6155281..ec4a833 100644
+--- a/nova/conf/__init__.py
++++ b/nova/conf/__init__.py
+@@ -18,6 +18,7 @@
+ # For more background see the blueprint "centralize-config-options"
+ 
+ from oslo_config import cfg
++from powerops_evacuation_guard import config as evacuation_guard_config
+ 
+ from nova.conf import api
+ from nova.conf import availability_zone
+@@ -112,3 +113,6 @@ vnc.register_opts(CONF)
+ workarounds.register_opts(CONF)
+ wsgi.register_opts(CONF)
+ zvm.register_opts(CONF)
++
++# Shared opt-in admission policy for receiving-compute evacuation.
++evacuation_guard_config.register_opts(CONF)
+diff --git a/nova/conf/opts.py b/nova/conf/opts.py
+index 9aed6b2..7c3ec23 100644
+--- a/nova/conf/opts.py
++++ b/nova/conf/opts.py
+@@ -31,6 +31,8 @@ import importlib
+ import os
+ import pkgutil
+ 
++from powerops_evacuation_guard import config as evacuation_guard_config
++
+ LIST_OPTS_FUNC_NAME = "list_opts"
+ 
+ 
+@@ -44,6 +46,8 @@ def list_opts():
+     module_names = _list_module_names()
+     imported_modules = _import_modules(module_names)
+     _append_config_options(imported_modules, opts)
++    for group, options in evacuation_guard_config.list_opts():
++        opts[group].extend(options)
+     return _tupleize(opts)
+ 
+ 
+diff --git a/nova/tests/unit/compute/test_powerops_evacuation.py b/nova/tests/unit/compute/test_powerops_evacuation.py
+new file mode 100644
+index 0000000..1130a04
+--- /dev/null
++++ b/nova/tests/unit/compute/test_powerops_evacuation.py
+@@ -0,0 +1,622 @@
++#    Licensed under the Apache License, Version 2.0 (the "License"); you may
++#    not use this file except in compliance with the License. You may obtain
++#    a copy of the License at
++#
++#         http://www.apache.org/licenses/LICENSE-2.0
++#
++#    Unless required by applicable law or agreed to in writing, software
++#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++#    License for the specific language governing permissions and limitations
++#    under the License.
++
++"""Receiving-compute tests: real rebuild, claims, spawn and completion path.
++
++Only the external etcd HTTP, Nova DB, virt and service boundaries are faked.
++Removing the admission wrapper must allow the forbidden second spawn.
++"""
++import base64
++import copy
++import threading
++from unittest import mock
++
++import ddt
++from oslo_utils import uuidutils
++from powerops_evacuation_guard import config as guard_config
++from powerops_evacuation_guard import GuardDenied
++import requests
++
++from nova.compute import manager
++from nova.compute import task_states
++from nova.compute import utils as compute_utils
++from nova.compute import vm_states
++import nova.conf
++from nova import context
++from nova.db.main import api as db
++from nova import objects
++from nova import test
++from nova.tests import fixtures
++from nova.tests.unit.compute import fake_resource_tracker
++from nova.tests.unit.compute import test_resource_tracker
++from nova.tests.unit import fake_instance
++
++
++def new_uuid():
++    return uuidutils.generate_uuid()
++
++
++class Gateway:
++    """Atomic HTTP etcd boundary; exercises the installed production Guard."""
++
++    def __init__(self):
++        self.data = {}
++        self.revision = 1
++        self.lock = threading.RLock()
++        self.after_write = None
++
++    def keys(self, req):
++        lo = base64.b64decode(req['key'])
++        hi = (base64.b64decode(req['range_end'])
++              if 'range_end' in req else None)
++        return sorted(k for k in self.data
++                      if (lo <= k < hi if hi else k == lo))
++
++    def post(self, url, **kwargs):
++        with self.lock:
++            req = kwargs['json']
++            if url.endswith('/range'):
++                keys = self.keys(req)
++                limited = keys[:int(req.get('limit', len(keys)))]
++                body = {'kvs': [self.data[k] for k in limited],
++                        'count': str(len(keys)),
++                        'more': len(limited) < len(keys)}
++            else:
++                assert url.endswith('/txn')
++                ok = True
++                for cmp in req['compare']:
++                    field = {'MOD': 'mod_revision',
++                             'VERSION': 'version'}[cmp['target']]
++                    values = [self.data[k] for k in self.keys(cmp)] or [{}]
++                    ok &= all(int(v.get(field, 0)) == int(cmp[field])
++                              for v in values)
++                ops = req['success' if ok else 'failure']
++                if ops:
++                    self.revision += 1
++                out = []
++                for op in ops:
++                    if 'request_put' in op:
++                        put = op['request_put']
++                        assert not put.get('lease')
++                        key = base64.b64decode(put['key'])
++                        old = self.data.get(key, {})
++                        self.data[key] = dict(
++                            key=put['key'], value=put['value'],
++                            mod_revision=str(self.revision),
++                            create_revision=old.get(
++                                'create_revision', str(self.revision)),
++                            version=str(int(old.get('version', 0)) + 1))
++                        out.append({'response_put': {}})
++                    else:
++                        keys = self.keys(op['request_delete_range'])
++                        for key in keys:
++                            del self.data[key]
++                        out.append({'response_delete_range': {
++                            'deleted': str(len(keys))}})
++                body = {'succeeded': bool(ok), 'responses': out}
++                if ops and self.after_write:
++                    self.after_write()
++            body['header'] = {'revision': str(self.revision)}
++            response = mock.Mock(status_code=200)
++            response.json.return_value = copy.deepcopy(body)
++            return response
++
++
++@ddt.ddt
++class ReceivingComputeTest(test.NoDBTestCase):
++    REQUIRES_LOCKING = True
++    STUB_COMPUTE_ID = False
++
++    def setUp(self):
++        super().setUp()
++        self.flags(enabled=True, cooldown=0.01, admission_timeout=0.05,
++                   poll_interval=0.005, group='powerops_evacuation_guard')
++        self.flags(api_servers=['http://image.invalid'], group='glance')
++        self.useFixture(fixtures.EventReporterStub())
++        self.context = context.get_admin_context()
++        self.gateway = Gateway()
++        self._patch(requests, 'post', self.gateway.post)
++        self.guard = guard_config.from_conf(nova.conf.CONF)
++        self.guard.initialize('unit-test', 'isolated test namespace')
++        self.instances = {}
++        self.migrations = {}
++        self.spawns = []
++        self.spawn_effect = None
++        self.save_effect = None
++        self._patch(objects.Instance, 'save',
++                    lambda inst, **kw: self._save_instance(inst, **kw))
++        self._patch(objects.Migration, 'save',
++                    lambda mig, **kw: self._save_migration(mig, **kw))
++        self._patch(objects.Instance, 'get_by_uuid',
++                    lambda ctxt, uuid, **kw: self.instances[uuid].obj_clone())
++        self._patch(objects.Migration, 'get_by_uuid',
++                    lambda ctxt, uid: self.migrations[uid].obj_clone())
++        self._patch(db, 'instance_extra_update_by_uuid', lambda *a, **kw: None)
++        self._patch(objects.InstanceFault, 'create', lambda fault: None)
++        self._patch(objects.ShareMappingList, 'get_by_instance_uuid',
++                    lambda *a, **kw: objects.ShareMappingList(objects=[]))
++        self._patch(objects.BlockDeviceMappingList, 'get_by_instance_uuid',
++                    lambda *a, **kw: objects.BlockDeviceMappingList(
++                        objects=[]))
++        for name in ('notify_about_instance_rebuild', 'notify_usage_exists',
++                     'notify_about_instance_action',
++                     'notify_about_instance_usage'):
++            self._patch(compute_utils, name, lambda *a, **kw: None)
++        self.compute, self.node = self._compute('target-a', 'node-a')
++        self._patch(objects.ComputeNode, 'get_by_host_and_nodename',
++                    lambda ctxt, host, node: self.nodes[
++                        (host, node)].obj_clone())
++        self._patch(objects.ComputeNode,
++                    'get_first_node_by_host_for_old_compat',
++                    lambda ctxt, host: next(cn.obj_clone() for (h, n), cn in
++                                            self.nodes.items() if h == host))
++
++    def _patch(self, obj, name, value):
++        patch = mock.patch.object(obj, name, value)
++        patch.start()
++        self.addCleanup(patch.stop)
++
++    def _save_instance(self, inst, **kw):
++        self.instances[inst.uuid] = inst.obj_clone()
++        if self.save_effect:
++            self.save_effect(inst)
++
++    def _save_migration(self, mig, **kw):
++        self.migrations[mig.uuid] = mig.obj_clone()
++
++    def _compute(self, host, node):
++        compute = manager.ComputeManager(host=host)
++        compute.rt = fake_resource_tracker.FakeResourceTracker(
++            host, compute.driver)
++        template = test_resource_tracker._COMPUTE_NODE_FIXTURES[0]
++        values = {k: getattr(template, k) for k in template.fields
++                  if template.obj_attr_is_set(k)}
++        values.update(uuid=new_uuid(), host=host, hypervisor_hostname=node)
++        cn = objects.ComputeNode(**values)
++        compute.rt.compute_nodes[node] = cn
++        self.nodes = getattr(self, 'nodes', {})
++        self.nodes[(host, node)] = cn
++        compute.reportclient = mock.Mock()
++        compute.reportclient.get_allocations_for_consumer.return_value = {}
++        compute.rt.reportclient = compute.reportclient
++        compute.network_api = mock.Mock()
++        compute.network_api.get_instance_nw_info.return_value = []
++        compute.query_client = mock.Mock()
++        self._patch(compute.driver, 'get_available_nodes', lambda: [node])
++        self._patch(compute.driver, 'instance_exists', lambda inst: False)
++        self._patch(compute.driver, 'instance_on_disk', lambda inst: False)
++        original_spawn = compute.driver.spawn
++
++        def spawn(*args, **kwargs):
++            self._spawn(*args, **kwargs)
++            original_spawn(*args, **kwargs)
++        self._patch(compute.driver, 'spawn', spawn)
++        return compute, cn
++
++    def _spawn(self, ctxt, inst, *args, **kw):
++        self.spawns.append(inst.uuid)
++        if self.spawn_effect:
++            self.spawn_effect(inst)
++
++    def _work(self, compute=None, node=None):
++        compute, node = compute or self.compute, node or self.node
++        inst = fake_instance.fake_instance_obj(
++            self.context, uuid=new_uuid(), host='source', node='source-node',
++            vm_state=vm_states.ACTIVE, task_state=task_states.REBUILDING,
++            image_ref=new_uuid())
++        inst.system_metadata = {}
++        inst.metadata = {}
++        inst.numa_topology = None
++        inst.pci_requests = None
++        inst.pci_devices = objects.PciDeviceList(objects=[])
++        inst.trusted_certs = None
++        inst.info_cache = None
++        mig = objects.Migration(
++            self.context, uuid=new_uuid(), id=len(self.migrations) + 1,
++            instance_uuid=inst.uuid, source_compute='source',
++            source_node='source-node', dest_compute=compute.host,
++            dest_node=node.hypervisor_hostname, dest_compute_id=node.id,
++            status='accepted', migration_type='evacuation',
++            old_instance_type_id=inst.flavor.id,
++            new_instance_type_id=inst.flavor.id)
++        self._save_instance(inst)
++        self._save_migration(mig)
++        return inst, mig
++
++    def _run(self, inst, mig, compute=None, scheduled_node='node-a', **kw):
++        return (compute or self.compute).rebuild_instance(
++            self.context, inst, None, None, [], None, {}, [],
++            kw.pop('recreate', True), False, False, mig, scheduled_node,
++            {}, None, [], **kw)
++
++    def test_disabled_real_rebuild_path(self):
++        self.flags(enabled=False, group='powerops_evacuation_guard')
++        inst, mig = self._work()
++        self._run(inst, mig)
++        self.assertEqual([inst.uuid], self.spawns)
++        self.assertEqual('done', self.migrations[mig.uuid].status)
++        self.assertEqual('target-a', self.instances[inst.uuid].host)
++
++    def test_duplicate_running_never_enters_rebuild_decorators(self):
++        inst, mig = self._work()
++        owner = new_uuid()
++        self.guard.register(mig.uuid, inst.uuid, 'source', self.node.uuid,
++                            'target-a', owner)
++        self.guard.try_admit(mig.uuid, owner)
++        before = self.instances[inst.uuid].obj_to_primitive()
++        self._run(inst, mig)
++        self.assertEqual([], self.spawns)
++        self.assertEqual(before, self.instances[inst.uuid].obj_to_primitive())
++        self.assertEqual('accepted', self.migrations[mig.uuid].status)
++        self.assertEqual('RUNNING',
++                         self.guard.get_operation(mig.uuid)['state'])
++
++    def test_success_honors_scheduler_with_unbound_migration(self):
++        inst, mig = self._work()
++        mig.dest_compute = None
++        mig.dest_node = None
++        mig.dest_compute_id = None
++        self._save_migration(mig)
++        self._run(inst, mig)
++        op = self.guard.get_operation(mig.uuid)
++        self.assertEqual('DONE', op['state'])
++        self.assertEqual(self.node.uuid, op['target_uuid'])
++        self.assertEqual('target-a', op['target_host'])
++        self.assertEqual('done', self.migrations[mig.uuid].status)
++        self.assertEqual('node-a', self.instances[inst.uuid].node)
++        self.assertIsNone(self.instances[inst.uuid].task_state)
++
++    def test_missing_migration_denied_before_spawn(self):
++        inst, mig = self._work()
++        self.assertRaises(GuardDenied, self._run, inst, None)
++        self.assertEqual([], self.spawns)
++        self.assertEqual(task_states.REBUILDING,
++                         self.instances[inst.uuid].task_state)
++
++    def test_missing_compute_uuid_denied_before_spawn(self):
++        inst, mig = self._work()
++        del self.node.uuid
++        self.assertRaises(GuardDenied, self._run, inst, mig)
++        self.assertEqual([], self.spawns)
++
++    def test_wrong_migration_vm_denied_before_spawn(self):
++        inst, mig = self._work()
++        self.migrations[mig.uuid].instance_uuid = new_uuid()
++        self.assertRaises(GuardDenied, self._run, inst, mig)
++        self.assertEqual([], self.spawns)
++
++    def test_same_target_waits_while_other_target_spawns(self):
++        import eventlet
++        from eventlet import event
++        entered, release = event.Event(), event.Event()
++        inst1, mig1 = self._work()
++        inst2, mig2 = self._work()
++        other, node = self._compute('target-b', 'node-b')
++        inst3, mig3 = self._work(other, node)
++
++        def block_first(inst):
++            if inst.uuid == inst1.uuid:
++                entered.send()
++                release.wait()
++        self.spawn_effect = block_first
++        first = eventlet.spawn(self._run, inst1, mig1)
++        try:
++            with eventlet.timeout.Timeout(2):
++                entered.wait()
++                self._run(inst3, mig3, other, 'node-b')
++                self.assertRaises(GuardDenied, self._run, inst2, mig2)
++            self.assertEqual([inst1.uuid, inst3.uuid], self.spawns)
++            self.assertEqual('RUNNING',
++                             self.guard.get_operation(mig1.uuid)['state'])
++            self.assertEqual('DENIED',
++                             self.guard.get_operation(mig2.uuid)['state'])
++            # A timed-out attempt can never execute on later delivery.
++            self._run(inst2, mig2)
++            self.assertEqual([inst1.uuid, inst3.uuid], self.spawns)
++        finally:
++            release.send()
++            first.wait()
++
++    def test_stale_normal_result_retains_unknown(self):
++        inst, mig = self._work()
++        original_save = self._save_migration
++
++        def stale_save(migration, **kw):
++            original_save(migration, **kw)
++            if migration.status == 'done':
++                self.migrations[migration.uuid].status = 'pre-migrating'
++        self._patch(objects.Migration, 'save', stale_save)
++        self.assertRaises(GuardDenied, self._run, inst, mig)
++        self.assertEqual([inst.uuid], self.spawns)
++        self.assertEqual('UNKNOWN',
++                         self.guard.get_operation(mig.uuid)['state'])
++
++    def test_backend_failure_before_registration_has_no_effects(self):
++        inst, mig = self._work()
++
++        def unavailable(*a, **kw):
++            raise requests.ConnectionError('backend down')
++        self._patch(requests, 'post', unavailable)
++        self.assertRaises(GuardDenied, self._run, inst, mig)
++        self.assertEqual([], self.spawns)
++        self.assertEqual('accepted', self.migrations[mig.uuid].status)
++
++    def test_rpc_migration_binding_must_match_database(self):
++        inst, mig = self._work()
++        mig.source_compute = 'other-source'
++        self.assertRaises(GuardDenied, self._run, inst, mig)
++        self.assertEqual([], self.spawns)
++        self.assertEqual('accepted', self.migrations[mig.uuid].status)
++
++    def test_lost_completion_response_duplicate_recovers_full_cooldown(self):
++        import time
++        inst, mig = self._work()
++
++        def lose_completion():
++            op = self.guard.get_operation(mig.uuid)
++            if op['state'] == 'COOLDOWN':
++                self.gateway.after_write = None
++                raise requests.ConnectionError('lost successful response')
++        self.gateway.after_write = lose_completion
++        self.assertRaises(GuardDenied, self._run, inst, mig)
++        self.assertEqual('COOLDOWN',
++                         self.guard.get_operation(mig.uuid)['state'])
++        started = time.monotonic()
++        self._run(inst, mig)
++        self.assertGreaterEqual(time.monotonic() - started, 0.01)
++        self.assertEqual([inst.uuid], self.spawns)
++        self.assertEqual('DONE', self.guard.get_operation(mig.uuid)['state'])
++
++    def test_claim_held_during_finish_evacuation_and_cooldown(self):
++        from powerops_evacuation_guard import GuardBusy
++        inst, mig = self._work()
++        waiting_inst, waiting_mig = self._work()
++        owner = new_uuid()
++        self.guard.register(waiting_mig.uuid, waiting_inst.uuid, 'source',
++                            self.node.uuid, 'target-a', owner)
++        observed = []
++
++        def during_finish(saved):
++            if saved.uuid == inst.uuid and saved.host == 'target-a':
++                observed.append(self.guard.get_operation(mig.uuid)['state'])
++                self.assertRaises(GuardBusy, self.guard.try_admit,
++                                  waiting_mig.uuid, owner)
++                self.assertNotEqual('done', self.migrations[mig.uuid].status)
++        self.save_effect = during_finish
++
++        def during_cooldown():
++            if self.guard.get_operation(mig.uuid)['state'] == 'COOLDOWN':
++                self.gateway.after_write = None
++                observed.append('COOLDOWN')
++                self.assertEqual('done', self.migrations[mig.uuid].status)
++                self.assertRaises(GuardBusy, self.guard.try_admit,
++                                  waiting_mig.uuid, owner)
++        self.gateway.after_write = during_cooldown
++        self._run(inst, mig)
++        self.assertEqual(['RUNNING', 'COOLDOWN'], observed)
++        self.guard.try_admit(waiting_mig.uuid, owner)
++        self.assertEqual('RUNNING',
++                         self.guard.get_operation(waiting_mig.uuid)['state'])
++
++    def test_thrown_spawn_failure_retains_unknown(self):
++        inst, mig = self._work()
++
++        def fail(inst):
++            raise RuntimeError('virt spawn failed')
++        self.spawn_effect = fail
++        self.assertRaises(RuntimeError, self._run, inst, mig)
++        self.assertEqual('UNKNOWN',
++                         self.guard.get_operation(mig.uuid)['state'])
++        self.assertEqual('failed', self.migrations[mig.uuid].status)
++        self.assertEqual(vm_states.ERROR, self.instances[inst.uuid].vm_state)
++        self._run(inst, mig)
++        self.assertEqual([inst.uuid], self.spawns)
++
++    def test_swallowed_instance_deleted_failure_retains_unknown(self):
++        from nova import exception
++        inst, mig = self._work()
++
++        def fail(inst):
++            raise exception.InstanceNotFound(instance_id=inst.uuid)
++        self.spawn_effect = fail
++        self.assertRaises(GuardDenied, self._run, inst, mig)
++        self.assertEqual('UNKNOWN',
++                         self.guard.get_operation(mig.uuid)['state'])
++        self.assertEqual('failed', self.migrations[mig.uuid].status)
++
++    def test_masakari_correlation_and_duplicate(self):
++        inst, mig = self._work()
++        request_id, attempt = 'req-' + new_uuid(), new_uuid()
++        self.guard.create_intent(attempt, inst.uuid, 'source', request_id,
++                                 'masakari-test')
++        self.context.global_request_id = request_id
++        self._run(inst, mig)
++        self._run(inst, mig)
++        op = self.guard.get_operation(mig.uuid)
++        self.assertEqual(attempt, op['attempt_uuid'])
++        self.assertEqual(request_id, op['request_id'])
++        self.assertEqual([inst.uuid], self.spawns)
++
++    def test_correlation_does_not_authorize_different_vm(self):
++        inst, mig = self._work()
++        request_id = 'req-' + new_uuid()
++        self.guard.create_intent(new_uuid(), new_uuid(), 'source', request_id,
++                                 'masakari-test')
++        self.context.global_request_id = request_id
++        self.assertRaises(GuardDenied, self._run, inst, mig)
++        self.assertEqual([], self.spawns)
++
++    def test_explicit_host_without_scheduled_node_uses_local_compute(self):
++        inst, mig = self._work()
++        self._run(inst, mig, scheduled_node=None)
++        self.assertEqual(self.node.uuid,
++                         self.guard.get_operation(mig.uuid)['target_uuid'])
++        self.assertEqual('node-a', self.instances[inst.uuid].node)
++
++    def test_recreate_false_preserves_original_behavior_when_enabled(self):
++        from nova.compute import power_state
++        from nova.virt import fake
++        inst, mig = self._work()
++        self.compute.driver.instances[inst.uuid] = fake.FakeInstance(
++            inst.name, power_state.RUNNING, inst.uuid)
++        self._run(inst, None, recreate=False)
++        self.assertEqual([inst.uuid], self.spawns)
++        self.assertEqual('accepted', self.migrations[mig.uuid].status)
++        self.assertEqual([], [r for r in self.guard.status()['records']
++                              if r['kind'] == 'operation'])
++
++    def test_missing_migration_uuid_is_rejected(self):
++        inst, mig = self._work()
++        del mig.uuid
++        self.assertRaises(GuardDenied, self._run, inst, mig)
++        self.assertEqual([], self.spawns)
++
++    def test_stale_migration_lookup_identity_is_rejected_before_spawn(self):
++        inst, mig = self._work()
++        stale = mig.obj_clone()
++        stale.uuid = new_uuid()
++        self.migrations[mig.uuid] = stale
++        self.assertRaises(GuardDenied, self._run, inst, mig)
++        self.assertEqual([], self.spawns)
++
++    @ddt.data(('dest_compute', 'wrong-target'), ('dest_node', 'wrong-node'),
++              ('dest_compute_id', 999))
++    @ddt.unpack
++    def test_populated_destination_mismatch_is_rejected(self, field, value):
++        inst, mig = self._work()
++        setattr(self.migrations[mig.uuid], field, value)
++        self.assertRaises(GuardDenied, self._run, inst, mig)
++        self.assertEqual([], self.spawns)
++        self.assertEqual(task_states.REBUILDING,
++                         self.instances[inst.uuid].task_state)
++
++    @ddt.data(('vm_state', vm_states.ERROR), ('vm_state', vm_states.STOPPED),
++              ('task_state', task_states.REBUILDING), ('host', 'source'),
++              ('node', 'wrong-node'), ('compute_id', 999))
++    @ddt.unpack
++    def test_final_instance_mismatch_retains_claim(self, field, value):
++        inst, mig = self._work()
++        save = self._save_migration
++
++        def corrupt_result(migration, **kw):
++            save(migration, **kw)
++            if migration.status == 'done':
++                setattr(self.instances[inst.uuid], field, value)
++        self._patch(objects.Migration, 'save', corrupt_result)
++        self.assertRaises(GuardDenied, self._run, inst, mig)
++        self.assertEqual('UNKNOWN',
++                         self.guard.get_operation(mig.uuid)['state'])
++        self.assertEqual([inst.uuid], self.spawns)
++
++    def test_stopped_target_state_is_verified_after_actual_stop(self):
++        inst, mig = self._work()
++        self._run(inst, mig, target_state=vm_states.STOPPED)
++        self.assertEqual('DONE', self.guard.get_operation(mig.uuid)['state'])
++        self.assertEqual('stopped', self.instances[inst.uuid].vm_state)
++        self.assertIsNone(self.instances[inst.uuid].task_state)
++
++    def test_lost_admission_response_never_spawns_and_blocks_duplicate(self):
++        inst, mig = self._work()
++
++        def lose_admission():
++            if self.guard.get_operation(mig.uuid)['state'] == 'RUNNING':
++                self.gateway.after_write = None
++                raise requests.ConnectionError('lost admission response')
++        self.gateway.after_write = lose_admission
++        self.assertRaises(GuardDenied, self._run, inst, mig)
++        self.assertEqual('UNKNOWN',
++                         self.guard.get_operation(mig.uuid)['state'])
++        self._run(inst, mig)
++        self.assertEqual([], self.spawns)
++        self.assertEqual(task_states.REBUILDING,
++                         self.instances[inst.uuid].task_state)
++
++    def test_lost_release_response_never_reexecutes(self):
++        inst, mig = self._work()
++
++        def lose_release():
++            if self.guard.get_operation(mig.uuid)['state'] == 'DONE':
++                self.gateway.after_write = None
++                raise requests.ConnectionError('lost release response')
++        self.gateway.after_write = lose_release
++        self.assertRaises(GuardDenied, self._run, inst, mig)
++        self.assertEqual('DONE', self.guard.get_operation(mig.uuid)['state'])
++        self._run(inst, mig)
++        self.assertEqual([inst.uuid], self.spawns)
++
++    def test_bound_masakari_request_cannot_execute_another_migration(self):
++        inst, mig = self._work()
++        request_id = 'req-' + new_uuid()
++        self.guard.create_intent(new_uuid(), inst.uuid, 'source', request_id,
++                                 'masakari-test')
++        self.context.global_request_id = request_id
++        self._run(inst, mig)
++        other = mig.obj_clone()
++        other.uuid = new_uuid()
++        self._save_migration(other)
++        self._run(inst, other)
++        self.assertEqual([inst.uuid], self.spawns)
++
++    def test_late_admission_response_does_not_execute_after_deadline(self):
++        import time
++        inst, mig = self._work()
++
++        def delayed_admission():
++            if self.guard.get_operation(mig.uuid)['state'] == 'RUNNING':
++                self.gateway.after_write = None
++                time.sleep(0.06)
++        self.gateway.after_write = delayed_admission
++        self.assertRaises(GuardDenied, self._run, inst, mig)
++        self.assertEqual([], self.spawns)
++        self.assertEqual('UNKNOWN',
++                         self.guard.get_operation(mig.uuid)['state'])
++
++    def test_global_limit_blocks_fourth_target(self):
++        import eventlet
++        from eventlet import event
++        release = event.Event()
++        entered = [event.Event() for _ in range(3)]
++        works = [self._work()]
++        computes = [self.compute]
++        for number in range(1, 4):
++            compute, node = self._compute('target-%s' % number,
++                                          'node-%s' % number)
++            computes.append(compute)
++            works.append(self._work(compute, node))
++        blocked = {work[0].uuid: entered[i]
++                   for i, work in enumerate(works[:3])}
++
++        def hold(inst):
++            if inst.uuid in blocked:
++                blocked[inst.uuid].send()
++                release.wait()
++        self.spawn_effect = hold
++        running = []
++        try:
++            with eventlet.timeout.Timeout(2):
++                for i in range(3):
++                    inst, mig = works[i]
++                    running.append(eventlet.spawn(
++                        self._run, inst, mig, computes[i], mig.dest_node))
++                    entered[i].wait()
++                inst, mig = works[3]
++                self.assertRaises(GuardDenied, self._run, inst, mig,
++                                  computes[3], mig.dest_node)
++            self.assertEqual([w[0].uuid for w in works[:3]], self.spawns)
++            states = [self.guard.get_operation(m.uuid)['state']
++                      for inst, m in works]
++            self.assertEqual(['RUNNING', 'RUNNING', 'RUNNING', 'DENIED'],
++                             states)
++        finally:
++            release.send()
++            for worker in running:
++                worker.wait()
+diff --git a/requirements.txt b/requirements.txt
+index 1670ecc..4a91617 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -63,3 +63,5 @@ python-dateutil>=2.7.0 # BSD
+ futurist>=1.8.0 # Apache-2.0
+ openstacksdk>=4.4.0 # Apache-2.0
+ PyYAML>=5.1 # MIT
++
++powerops-evacuation-guard==0.1.0 # Apache-2.0
+-- 
+2.49.0
+
