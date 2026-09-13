@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "powerops-evacuation-guard"
+version = "0.1.0"
+description = "Durable per-target Nova evacuation admission and Masakari intents"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+dependencies = ["requests>=2.25.1", "oslo.config>=9.0.0"]
+
+[project.scripts]
+powerops-evacuation-guard = "powerops_evacuation_guard.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["powerops_evacuation_guard*"]
