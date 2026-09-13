@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "powerops-watcher-guard"
+version = "0.1.0"
+description = "Durable etcd admission for scheduled Watcher automation"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "Apache-2.0"}
+dependencies = ["requests>=2.25.1", "oslo.config>=9.0.0"]
+
+[project.scripts]
+powerops-watcher-guard = "powerops_watcher_guard.cli:main"
+
+[project.entry-points."oslo.config.opts"]
+powerops_watcher_guard = "powerops_watcher_guard.config:list_opts"
+
+[tool.setuptools.packages.find]
+include = ["powerops_watcher_guard*"]
