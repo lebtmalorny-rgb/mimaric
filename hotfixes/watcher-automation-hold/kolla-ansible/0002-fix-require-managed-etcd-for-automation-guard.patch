@@ -1,0 +1,96 @@
+From 3c8d0b9b04053855541fc33f5be91ab0541a6a77 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Sun, 13 Sep 2026 14:25:39 +0300
+Subject: [PATCH 2/2] fix: require managed etcd for automation guard
+
+
+diff --git a/ansible/roles/watcher-automation-guard/tasks/main.yml b/ansible/roles/watcher-automation-guard/tasks/main.yml
+index 96cef25a919255db67d798fd2add3ce383b2fbd1..7609168fb94c1eb31d741380714478953b995228 100644
+--- a/ansible/roles/watcher-automation-guard/tasks/main.yml
++++ b/ansible/roles/watcher-automation-guard/tasks/main.yml
+@@ -5,10 +5,7 @@
+       - enable_watcher | bool
+       - enable_masakari | bool
+       - enable_powerops | bool
+-      - >-
+-        enable_etcd | bool or
+-        watcher_automation_guard_endpoint !=
+-        watcher_automation_guard_default_endpoint
++      - enable_etcd | bool
+       - watcher_automation_guard_endpoint is string
+       - >-
+         watcher_automation_guard_endpoint |
+@@ -57,8 +54,8 @@
+         ) is not none
+     fail_msg: >-
+       The Watcher automation guard requires Watcher, Masakari and PowerOps,
+-      Kolla etcd or an explicit HTTP(S) etcd v3 endpoint, and valid shared
+-      container TLS paths. Optional client certificate and key files must be
++      Kolla etcd, a valid HTTP(S) etcd v3 endpoint, and valid shared container
++      TLS paths. Optional client certificate and key files must be
+       preprovisioned in every patched Masakari API/engine and Watcher image.
+       A non-empty patched Masakari API image and tag are mandatory.
+   when: watcher_automation_guard_enabled | bool
+diff --git a/kolla_ansible/tests/unit/test_powerops_configuration_contract.py b/kolla_ansible/tests/unit/test_powerops_configuration_contract.py
+index ef805c9480c07b01ae8b4ea47d8767789d6b3398..e825097cbf11f9c3a42e7f91cd13f8d64865bbba 100644
+--- a/kolla_ansible/tests/unit/test_powerops_configuration_contract.py
++++ b/kolla_ansible/tests/unit/test_powerops_configuration_contract.py
+@@ -404,8 +404,17 @@ class PowerOpsConfigurationContractTest(unittest.TestCase):
+             "watcher_automation_guard_enabled": "yes",
+             "enable_watcher": "yes",
+             "enable_masakari": "yes",
++            "enable_ironic": "yes",
++            "enable_mistral": "yes",
+             "enable_powerops": "yes",
+             "enable_etcd": "yes",
++            "powerops_coordination_url": (
++                "etcd3+https://controller.internal:2379?api_version=v3"
++            ),
++            "powerops_allowed_project_names": ["powerops-project"],
++            "powerops_allowed_user_names": ["powerops-user"],
++            "powerops_masakari_engine_image": "patched/masakari-engine",
++            "powerops_masakari_engine_tag": "guard",
+             "watcher_automation_guard_default_endpoint": (
+                 "https://controller.internal:2379"
+             ),
+@@ -444,7 +453,9 @@ class PowerOpsConfigurationContractTest(unittest.TestCase):
+         )
+ 
+         task = _guard_assertion()
++        powerops_task = _powerops_assertion("masakari")
+         self.assertIsNotNone(task)
++        self.assertIsNotNone(powerops_task)
+         self.assertEqual(
+             "watcher_automation_guard_enabled | bool",
+             task.get("when"),
+@@ -466,7 +477,6 @@ class PowerOpsConfigurationContractTest(unittest.TestCase):
+ 
+         dedicated = {
+             **valid,
+-            "enable_etcd": "no",
+             "watcher_automation_guard_endpoint": (
+                 "https://dedicated-etcd.internal:2379"
+             ),
+@@ -477,7 +487,18 @@ class PowerOpsConfigurationContractTest(unittest.TestCase):
+                 "/etc/ssl/powerops/client.key"
+             ),
+         }
+-        self.assertEqual("passed", _assertion_outcome(task, dedicated))
++        self.assertEqual(
++            ("passed", "passed"),
++            (_assertion_outcome(task, dedicated),
++             _assertion_outcome(powerops_task, dedicated)),
++        )
++
++        no_managed_etcd = {**dedicated, "enable_etcd": "no"}
++        self.assertEqual(
++            ("failed", "failed"),
++            (_assertion_outcome(task, no_managed_etcd),
++             _assertion_outcome(powerops_task, no_managed_etcd)),
++        )
+ 
+     def test_service_prechecks_import_one_shared_guard_contract(self):
+         expected = {"name": "watcher-automation-guard"}
+-- 
+2.49.0
+

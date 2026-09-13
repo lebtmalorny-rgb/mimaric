@@ -10,3 +10,5 @@ __pycache__/
 artifacts/
 .coverage
 .pytest_cache/
+packages/powerops-watcher-guard/build/
+packages/powerops-watcher-guard/*.egg-info/

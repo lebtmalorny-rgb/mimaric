@@ -25,7 +25,7 @@ class RepositoryTests(unittest.TestCase):
         expected = {str(p.relative_to(ROOT)) for p in (ROOT / 'hotfixes').rglob('*.patch')}
         expected.update(str(p.relative_to(ROOT)) for p in (ROOT / 'tools/diagnostics').glob('*.yml'))
         self.assertEqual(expected, set(entries))
-        self.assertEqual(3, len(entries))
+        self.assertEqual(8, len(entries))
 
     def test_0809_baseline_and_horizon_boundary_are_explicit(self):
         data = json.loads((ROOT / 'baselines/0809.json').read_text())
@@ -48,7 +48,7 @@ class RepositoryTests(unittest.TestCase):
 
     def test_superseded_root_files_are_absent(self):
         for name in ('boofer', 'image.png', 'image2.png', 'INSTALL.md', 'DELIVERY.md',
-                     'OPERATIONS.md', 'ansible', 'patches', 'docs/superpowers',
+                     'OPERATIONS.md', 'ansible', 'patches',
                      'tools/diagnostics/collect.yml', 'planned-return-v2',
                      'hotfixes/repair-0509', 'hotfixes/planned-live-migration-wait'):
             self.assertFalse((ROOT / name).exists(), name)

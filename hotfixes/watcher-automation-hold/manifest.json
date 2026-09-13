@@ -1,0 +1,94 @@
+{
+  "schema": 1,
+  "name": "powerops-watcher-automation-hold",
+  "package": {
+    "path": "package/powerops_watcher_guard-0.1.0-py3-none-any.whl",
+    "sha256": "8dcdb3d1b0fd4ac57287c5df08db24b4f636107b479e60fed79e46f317dfbd63",
+    "version": "0.1.0",
+    "published_index": false,
+    "build": {
+      "python": "3.11.15",
+      "build_frontend": "build 1.6.1",
+      "setuptools": "80.9.0",
+      "source_date_epoch": 1789295229,
+      "command": "SOURCE_DATE_EPOCH=1789295229 python3.11 -m build --wheel --no-isolation --outdir <output> packages/powerops-watcher-guard"
+    }
+  },
+  "components": {
+    "watcher": {
+      "source": {
+        "type": "git",
+        "url": "https://opendev.org/openstack/watcher.git",
+        "branch": "stable/2025.1"
+      },
+      "base_commit": "5cf30fbbfd6b94be098d3f1f8c21c1efd331badc",
+      "base_tree": "2a7737a49e85f5d5323cb1822cda30795baa498c",
+      "final_commit": "a063d5759520ca19525c18c3ec5d5b57e4c98655",
+      "final_tree": "30e2ec8225db08ce46b71844bbcdb4a00767ab8d",
+      "prerequisites": [],
+      "patches": [
+        {
+          "path": "watcher/0001-Guard-scheduled-Watcher-audits-and-actions-with-pers.patch",
+          "sha256": "45afea83f4be40e3a66da35d1a0ca0da920fc43dfc08cc48016ccde2577a104f"
+        }
+      ],
+      "excluded_paths": []
+    },
+    "masakari": {
+      "source": {
+        "type": "archive",
+        "file": "masakari-integration-powerops-masakari-2025.1_0809.zip",
+        "sha256": "0bbda50f9553b65a5757d7cc43ed47b4d2a8cf99641c4b9ce88a01d09f1bcde9"
+      },
+      "base_commit": "e7943dbce5f693bf67b22fa33ce137c937313346",
+      "base_tree": "1e0d18ec2de5b76e8693d13e7a57ee2ee8ec5c13",
+      "final_commit": "0c2fa56a36e71612e32bf50e174c465138d0c8fb",
+      "final_tree": "f7eb2f799ba9db0ac44b01ca949c1070bd4b6f96",
+      "prerequisites": [
+        {
+          "path": "masakari/0000-prerequisite-post-fence-nova-down.patch",
+          "sha256": "319e1814cd4ab42be9df0bb7007e9c3cc36d9f7cbbc396a1a0b7558dc50ee43c",
+          "applied_before_base": true
+        }
+      ],
+      "patches": [
+        {
+          "path": "masakari/0001-feat-hold-Watcher-automation-on-host-failure.patch",
+          "sha256": "6f297c862e210772dde0d5c967ee11c33278bd23d9347df2014cffb8193916ea"
+        }
+      ],
+      "excluded_paths": []
+    },
+    "kolla-ansible": {
+      "source": {
+        "type": "archive",
+        "file": "kolla-ansible-enroll-ironic-patch-3_0809.zip",
+        "sha256": "b5958f14a09b1bdad4edc9c6b3dd092f4376b55dee9d5814fd2ad78fdffb1be9"
+      },
+      "base_commit": "8981294daabf31c11db6b7f942492dbb02e8ea7d",
+      "base_tree": "ab0c2a2293c0d93dc7ebdbd6cd800df5c9dc283a",
+      "final_commit": "3c8d0b9b04053855541fc33f5be91ab0541a6a77",
+      "final_tree": "d68e9dcf20ca05e2bea7fb07ab93e80aab40e2a2",
+      "prerequisites": [],
+      "patches": [
+        {
+          "path": "kolla-ansible/0001-feat-configure-shared-Watcher-automation-guard.patch",
+          "sha256": "3759a5868faceed4d43fa39a54234b7ded0863d2acaef19472388dbc6a2b1de8"
+        },
+        {
+          "path": "kolla-ansible/0002-fix-require-managed-etcd-for-automation-guard.patch",
+          "sha256": "36aa72631bac871efe780f9ae09824da4324cab2dd816b00557ea4c5c958f8e3"
+        }
+      ],
+      "excluded_paths": [
+        "etc/kolla/passwords.yml"
+      ],
+      "required_symlinks": [
+        "tools/generate_passwords.py",
+        "tools/merge_passwords.py",
+        "tools/read_passwords.py",
+        "tools/write_passwords.py"
+      ]
+    }
+  }
+}

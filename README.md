@@ -22,6 +22,7 @@
 | Универсальный сбор PowerOps | [collect-v2.yml](tools/diagnostics/collect-v2.yml) |
 | Медленный Mistral, 504, зависшие executions | [collect-mistral.yml](tools/diagnostics/collect-mistral.yml) |
 | Masakari: Nova down после fencing | [Патч и порядок применения](hotfixes/masakari-post-fence-nova-down/README.md) |
+| Аварийная блокировка периодической автоматизации Watcher | [Комплект и runbook](docs/WATCHER-AUTOMATION-HOLD.md) |
 | Horizon: исходники и зависимые патчи | [horizon/README.md](horizon/README.md) |
 
 Плейбуки автономные: достаточно скопировать нужный YAML. Запускать из обычного

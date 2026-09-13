@@ -1,3 +1,8 @@
 f7aa10ee6482595396b56e827bece9114d726877ed42128b9b374e4f9f7f4752  tools/diagnostics/collect-v2.yml
 100be2e5921a11859f6b6f4dd37ddc98aaf6b387adff1d7f3a36c9c8764024cc  tools/diagnostics/collect-mistral.yml
 319e1814cd4ab42be9df0bb7007e9c3cc36d9f7cbbc396a1a0b7558dc50ee43c  hotfixes/masakari-post-fence-nova-down/0001-fix-wait-for-Nova-down-after-confirmed-fencing.patch
+3759a5868faceed4d43fa39a54234b7ded0863d2acaef19472388dbc6a2b1de8  hotfixes/watcher-automation-hold/kolla-ansible/0001-feat-configure-shared-Watcher-automation-guard.patch
+36aa72631bac871efe780f9ae09824da4324cab2dd816b00557ea4c5c958f8e3  hotfixes/watcher-automation-hold/kolla-ansible/0002-fix-require-managed-etcd-for-automation-guard.patch
+319e1814cd4ab42be9df0bb7007e9c3cc36d9f7cbbc396a1a0b7558dc50ee43c  hotfixes/watcher-automation-hold/masakari/0000-prerequisite-post-fence-nova-down.patch
+6f297c862e210772dde0d5c967ee11c33278bd23d9347df2014cffb8193916ea  hotfixes/watcher-automation-hold/masakari/0001-feat-hold-Watcher-automation-on-host-failure.patch
+45afea83f4be40e3a66da35d1a0ca0da920fc43dfc08cc48016ccde2577a104f  hotfixes/watcher-automation-hold/watcher/0001-Guard-scheduled-Watcher-audits-and-actions-with-pers.patch

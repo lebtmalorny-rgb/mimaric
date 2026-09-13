@@ -1,0 +1,625 @@
+From 0c2fa56a36e71612e32bf50e174c465138d0c8fb Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Sun, 13 Sep 2026 14:17:56 +0300
+Subject: [PATCH] feat: hold Watcher automation on host failure
+
+
+diff --git a/masakari/conf/__init__.py b/masakari/conf/__init__.py
+index ca04ccd5e6f48c67d4039555e1197d4dd7709f0f..331a66c38f01ac60b21fc132b5a3fdce436ba989 100644
+--- a/masakari/conf/__init__.py
++++ b/masakari/conf/__init__.py
+@@ -28,6 +28,7 @@ from masakari.conf import paths
+ from masakari.conf import powerops
+ from masakari.conf import service
+ from masakari.conf import ssl
++from masakari.conf import watcher_automation_guard
+ from masakari.conf import wsgi
+ 
+ CONF = cfg.CONF
+@@ -45,4 +46,5 @@ paths.register_opts(CONF)
+ powerops.register_opts(CONF)
+ ssl.register_opts(CONF)
+ service.register_opts(CONF)
++watcher_automation_guard.register_opts(CONF)
+ wsgi.register_opts(CONF)
+diff --git a/masakari/conf/watcher_automation_guard.py b/masakari/conf/watcher_automation_guard.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..afeae922bbbd3f6f91cc4834043f8d87e78b2f95
+--- /dev/null
++++ b/masakari/conf/watcher_automation_guard.py
+@@ -0,0 +1,25 @@
++# Copyright 2026 OpenInfra Foundation
++#
++# Licensed under the Apache License, Version 2.0 (the "License"); you may
++# not use this file except in compliance with the License. You may obtain
++# a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++# License for the specific language governing permissions and limitations
++# under the License.
++
++"""Masakari registration for the shared Watcher automation guard."""
++
++from powerops_watcher_guard import config
++
++
++def register_opts(conf):
++    config.register_opts(conf)
++
++
++def list_opts():
++    return dict(config.list_opts())
+diff --git a/masakari/engine/manager.py b/masakari/engine/manager.py
+index 7309fbe1b1c3d4d068d8157aa93e87adb3c6da96..9262ba93a18e3370d63df09a6215be78ed002131 100644
+--- a/masakari/engine/manager.py
++++ b/masakari/engine/manager.py
+@@ -27,6 +27,7 @@ from oslo_log import log as logging
+ import oslo_messaging as messaging
+ from oslo_service import periodic_task
+ from oslo_utils import timeutils
++from powerops_watcher_guard.gate import GuardDenied
+ 
+ import masakari.conf
+ from masakari.engine import driver
+@@ -38,6 +39,7 @@ from masakari.i18n import _
+ from masakari import manager
+ from masakari import objects
+ from masakari.objects import fields
++from masakari.powerops import watcher_automation
+ from masakari import utils
+ 
+ CONF = masakari.conf.CONF
+@@ -203,50 +205,59 @@ class MasakariManager(manager.Manager):
+             host_name = host_obj.name
+             recovery_method = host_obj.failover_segment.recovery_method
+ 
+-            # Mark host on_maintenance mode as True
+-            update_data = {
+-                'on_maintenance': True,
+-            }
++            try:
++                watcher_automation.hold(notification, host_name)
++            except GuardDenied as e:
++                notification_status = fields.NotificationStatus.ERROR
++                exception_info = e
++                LOG.error("Automation guard denied notification '%(uuid)s'.",
++                          {"uuid": notification.notification_uuid})
++            else:
++                # Mark host on_maintenance mode as True
++                update_data = {
++                    'on_maintenance': True,
++                }
+ 
+-            # Set reserved flag to False if this host is reserved
+-            if host_obj.reserved:
+-                update_data['reserved'] = False
++                # Set reserved flag to False if this host is reserved
++                if host_obj.reserved:
++                    update_data['reserved'] = False
+ 
+-            LOG.info("Set host %s on maintenance.", host_name)
+-            host_obj.update(update_data)
+-            host_obj.save()
++                LOG.info("Set host %s on maintenance.", host_name)
++                host_obj.update(update_data)
++                host_obj.save()
+ 
+-            reserved_host_list = None
++                reserved_host_list = None
+ 
+-            if not recovery_method == (
+-                    fields.FailoverSegmentRecoveryMethod.AUTO):
+-                reserved_host_object_list = objects.HostList.get_all(
+-                    context, filters={
+-                        'failover_segment_id': host_obj.failover_segment.uuid,
+-                        'reserved': True,
+-                        'on_maintenance': False
++                if not recovery_method == (
++                        fields.FailoverSegmentRecoveryMethod.AUTO):
++                    reserved_host_object_list = objects.HostList.get_all(
++                        context, filters={
++                            'failover_segment_id':
++                                host_obj.failover_segment.uuid,
++                            'reserved': True,
++                            'on_maintenance': False
+                         })
+-                # Create list of host name from reserved_host_object_list
+-                reserved_host_list = [host.name for host in
+-                                      reserved_host_object_list]
+-
+-            try:
+-                self.driver.execute_host_failure(
+-                    context, host_name, recovery_method,
+-                    notification.notification_uuid,
+-                    update_host_method=update_host_method,
+-                    reserved_host_list=reserved_host_list)
+-            except exception.SkipHostRecoveryException:
+-                notification_status = fields.NotificationStatus.FINISHED
+-            except (exception.HostRecoveryFailureException,
+-                    exception.ReservedHostsUnavailable,
+-                    exception.MasakariException) as e:
+-                notification_status = fields.NotificationStatus.ERROR
+-                LOG.error("Failed to process notification '%(uuid)s'."
+-                          " Reason: %(error)s",
+-                          {"uuid": notification.notification_uuid,
+-                           "error": e.message})
+-                exception_info = e
++                    # Create list of host name from reserved_host_object_list
++                    reserved_host_list = [host.name for host in
++                                          reserved_host_object_list]
++
++                try:
++                    self.driver.execute_host_failure(
++                        context, host_name, recovery_method,
++                        notification.notification_uuid,
++                        update_host_method=update_host_method,
++                        reserved_host_list=reserved_host_list)
++                except exception.SkipHostRecoveryException:
++                    notification_status = fields.NotificationStatus.FINISHED
++                except (exception.HostRecoveryFailureException,
++                        exception.ReservedHostsUnavailable,
++                        exception.MasakariException) as e:
++                    notification_status = fields.NotificationStatus.ERROR
++                    LOG.error("Failed to process notification '%(uuid)s'."
++                              " Reason: %(error)s",
++                              {"uuid": notification.notification_uuid,
++                               "error": e.message})
++                    exception_info = e
+         else:
+             LOG.warning("Invalid event: %(event)s received for "
+                         "notification type: %(type)s",
+diff --git a/masakari/ha/api.py b/masakari/ha/api.py
+index 15c4e6248e252e0e7b32038f28fb1b9d9d506947..e53118f4daef4e39cc91fd03e16d4c99bba59b93 100644
+--- a/masakari/ha/api.py
++++ b/masakari/ha/api.py
+@@ -29,6 +29,7 @@ from masakari import exception
+ from masakari.i18n import _
+ from masakari import objects
+ from masakari.objects import fields
++from masakari.powerops import watcher_automation
+ 
+ 
+ CONF = masakari.conf.CONF
+@@ -324,6 +325,8 @@ class NotificationAPI(object):
+             raise exception.DuplicateNotification(message=message)
+ 
+         try:
++            notification.notification_uuid = uuidutils.generate_uuid()
++            watcher_automation.hold(notification, host_name)
+             notification.create()
+             self.engine_rpcapi.process_notification(context, notification)
+         except Exception as e:
+diff --git a/masakari/powerops/watcher_automation.py b/masakari/powerops/watcher_automation.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..70e68ce59b3b244a2841b0c5e3c343132add6086
+--- /dev/null
++++ b/masakari/powerops/watcher_automation.py
+@@ -0,0 +1,42 @@
++# Copyright 2026 OpenInfra Foundation
++#
++# Licensed under the Apache License, Version 2.0 (the "License"); you may
++# not use this file except in compliance with the License. You may obtain
++# a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++# License for the specific language governing permissions and limitations
++# under the License.
++
++"""Bridge Masakari host-failure notifications to the automation guard."""
++
++from powerops_watcher_guard import config
++
++import masakari.conf
++from masakari.objects import fields
++
++
++CONF = masakari.conf.CONF
++
++
++def hold(notification, host):
++    """Hold scheduled automation for an eligible host failure."""
++    if not CONF.watcher_automation_guard.enabled:
++        return None
++    if notification.type != fields.NotificationType.COMPUTE_HOST:
++        return None
++
++    event = notification.payload.get('event')
++    host_status = notification.payload.get('host_status')
++    if not isinstance(event, str) or event.upper() != 'STOPPED':
++        return None
++    if not isinstance(host_status, str):
++        return None
++    if host_status.upper() != fields.HostStatusType.NORMAL:
++        return None
++
++    return config.from_conf(CONF).hold(notification.notification_uuid, host)
+diff --git a/masakari/tests/unit/engine/test_engine_mgr.py b/masakari/tests/unit/engine/test_engine_mgr.py
+index 03566528240d39dff8cb284295cc356c79ae2334..e5e2b16f3c34388530f9800c8d2fb22e83b1dba4 100644
+--- a/masakari/tests/unit/engine/test_engine_mgr.py
++++ b/masakari/tests/unit/engine/test_engine_mgr.py
+@@ -18,6 +18,7 @@ from unittest import mock
+ 
+ from oslo_utils import importutils
+ from oslo_utils import timeutils
++from powerops_watcher_guard.gate import GuardDenied
+ 
+ from masakari.compute import nova
+ import masakari.conf
+@@ -90,6 +91,83 @@ class EngineManagerUnitTestCase(test.NoDBTestCase):
+             status="new",
+             notification_uuid=uuidsentinel.fake_notification)
+ 
++    @mock.patch.object(host_obj.Host, "get_by_uuid")
++    @mock.patch.object(host_obj.HostList, "get_all")
++    @mock.patch("masakari.engine.drivers.taskflow."
++                "TaskFlowDriver.execute_host_failure")
++    def test_queued_host_failure_hold_precedes_maintenance_and_recovery(
++            self, mock_host_failure, mock_get_all, mock_host_get,
++            mock_notification_get):
++        events = []
++        notification = self._get_compute_host_type_notification()
++        fake_host = fakes.create_fake_host()
++        fake_host.failover_segment = fakes.create_fake_failover_segment()
++        mock_host_get.return_value = fake_host
++        mock_get_all.return_value = None
++        mock_host_failure.side_effect = lambda *args, **kwargs: events.append(
++            'recover')
++        fake_host.save = mock.Mock(side_effect=lambda: events.append(
++            'maintenance'))
++        guard = mock.Mock()
++        guard.hold.side_effect = lambda notification, host: events.append(
++            ('hold', notification.notification_uuid, host))
++
++        with mock.patch.object(
++                manager, 'watcher_automation', guard, create=True):
++            status = self.engine._handle_notification_type_host(
++                self.context, notification)
++
++        self.assertEqual(fields.NotificationStatus.FINISHED, status)
++        self.assertEqual(
++            [('hold', uuidsentinel.fake_notification, 'fake_host'),
++             'maintenance', 'recover'],
++            events,
++        )
++
++    @mock.patch.object(host_obj.Host, "get_by_uuid")
++    @mock.patch("masakari.engine.drivers.taskflow."
++                "TaskFlowDriver.execute_host_failure")
++    @mock.patch.object(notification_obj.Notification, "save")
++    @mock.patch.object(engine_utils, 'notify_about_notification_update')
++    def test_guard_denial_marks_queued_notification_error_without_recovery(
++            self, mock_notify, mock_notification_save, mock_host_failure,
++            mock_host_get, mock_notification_get):
++        notification = self._get_compute_host_type_notification()
++        mock_notification_get.return_value = notification
++        fake_host = fakes.create_fake_host()
++        fake_host.failover_segment = fakes.create_fake_failover_segment()
++        fake_host.save = mock.Mock()
++        mock_host_get.return_value = fake_host
++        guard = mock.Mock()
++        guard.hold.side_effect = GuardDenied('guard denied')
++
++        with mock.patch.object(
++                manager, 'watcher_automation', guard, create=True):
++            self.engine._process_notification(
++                self.context, notification=notification)
++
++        self.assertEqual(fields.NotificationStatus.ERROR, notification.status)
++        fake_host.save.assert_not_called()
++        mock_host_failure.assert_not_called()
++        self.assertEqual(fields.EventNotificationPhase.ERROR,
++                         mock_notify.call_args.kwargs['phase'])
++
++    def test_started_and_process_notifications_do_not_hold(
++            self, mock_notification_get):
++        guard = mock.Mock()
++        started = self._get_compute_host_type_notification()
++        started.payload['event'] = 'STARTED'
++        process = self._get_process_type_notification()
++        process.payload['event'] = 'STARTED'
++
++        with mock.patch.object(
++                manager, 'watcher_automation', guard, create=True):
++            self.engine._handle_notification_type_host(self.context, started)
++            self.engine._handle_notification_type_process(
++                self.context, process)
++
++        guard.hold.assert_not_called()
++
+     @mock.patch.object(host_obj.Host, "get_by_uuid")
+     @mock.patch.object(notification_obj.Notification, "save")
+     @mock.patch.object(engine_utils, 'notify_about_notification_update')
+diff --git a/masakari/tests/unit/ha/test_api.py b/masakari/tests/unit/ha/test_api.py
+index 404f51cd455f5753589e6acfc5a38da9c9311caf..d468cc68ff5d8e1eef02246af25fb3a2ac9af835 100644
+--- a/masakari/tests/unit/ha/test_api.py
++++ b/masakari/tests/unit/ha/test_api.py
+@@ -732,6 +732,88 @@ class NotificationAPITestCase(test.NoDBTestCase):
+         self.assertTrue(obj_base.obj_equal_prims(expected, actual),
+                         "The notification objects were not equal")
+ 
++    def _host_failure_data(self):
++        return {
++            "hostname": "host_1",
++            "payload": {
++                "event": "STOPPED",
++                "host_status": "NORMAL",
++                "cluster_status": "ONLINE",
++            },
++            "type": "COMPUTE_HOST",
++            "generated_time": str(NOW),
++        }
++
++    @mock.patch.object(api_utils, 'notify_about_notification_api')
++    @mock.patch.object(notification_obj.NotificationList, 'get_all')
++    @mock.patch.object(notification_obj.Notification, 'create')
++    @mock.patch.object(objects, 'Notification')
++    @mock.patch.object(host_obj.Host, 'get_by_name')
++    @mock.patch.object(ha_api.uuidutils, 'generate_uuid')
++    def test_host_failure_hold_precedes_create_and_rpc(
++            self, mock_generate_uuid, mock_host, mock_notification_class,
++            mock_create, mock_get_all, mock_notify):
++        events = []
++        notification_uuid = '11111111-1111-4111-8111-111111111111'
++        mock_generate_uuid.return_value = notification_uuid
++        mock_host.return_value = self.host
++        mock_notification_class.return_value = self.notification
++        mock_get_all.return_value = []
++        mock_create.side_effect = lambda: events.append('create')
++        process_notification = (
++            self.notification_api.engine_rpcapi.process_notification)
++        process_notification.side_effect = lambda *args: events.append('rpc')
++        guard = mock.Mock()
++        guard.hold.side_effect = lambda notification, host: events.append(
++            ('hold', notification.notification_uuid, host))
++
++        with mock.patch.object(
++                ha_api, 'watcher_automation', guard, create=True):
++            result = self.notification_api.create_notification(
++                self.context, self._host_failure_data())
++
++        self.assertIs(self.notification, result)
++        self.assertEqual(
++            [('hold', notification_uuid, 'host_1'),
++             'create', 'rpc'],
++            events,
++        )
++
++    @mock.patch.object(api_utils, 'notify_about_notification_api')
++    @mock.patch.object(notification_obj.NotificationList, 'get_all')
++    @mock.patch.object(notification_obj.Notification, 'create')
++    @mock.patch.object(objects, 'Notification')
++    @mock.patch.object(host_obj.Host, 'get_by_name')
++    @mock.patch.object(ha_api.uuidutils, 'generate_uuid')
++    def test_host_failure_guard_denial_is_not_accepted(
++            self, mock_generate_uuid, mock_host, mock_notification_class,
++            mock_create, mock_get_all, mock_notify):
++        notification_uuid = '11111111-1111-4111-8111-111111111111'
++        mock_generate_uuid.return_value = notification_uuid
++        mock_host.return_value = self.host
++        mock_notification_class.return_value = self.notification
++        mock_get_all.return_value = []
++        guard = mock.Mock()
++        guard.hold.side_effect = RuntimeError('guard denied')
++
++        with mock.patch.object(
++                ha_api, 'watcher_automation', guard, create=True):
++            self.assertRaises(
++                RuntimeError,
++                self.notification_api.create_notification,
++                self.context,
++                self._host_failure_data(),
++            )
++
++        self.assertEqual(
++            notification_uuid,
++            self.notification.notification_uuid,
++        )
++        mock_create.assert_not_called()
++        process_notification = (
++            self.notification_api.engine_rpcapi.process_notification)
++        process_notification.assert_not_called()
++
+     @mock.patch.object(notification_obj.NotificationList, 'get_all')
+     @mock.patch.object(notification_obj, 'Notification')
+     @mock.patch.object(notification_obj.Notification, 'create')
+@@ -817,9 +899,13 @@ class NotificationAPITestCase(test.NoDBTestCase):
+                              "type": "COMPUTE_HOST",
+                              "generated_time": str(NOW)}
+ 
+-        self.assertRaises(exception.HostOnMaintenanceError,
+-                          self.notification_api.create_notification,
+-                          self.context, notification_data)
++        guard = mock.Mock()
++        with mock.patch.object(
++                ha_api, 'watcher_automation', guard, create=True):
++            self.assertRaises(exception.HostOnMaintenanceError,
++                              self.notification_api.create_notification,
++                              self.context, notification_data)
++        guard.hold.assert_not_called()
+ 
+     @mock.patch.object(exception, 'DuplicateNotification')
+     @mock.patch.object(objects, 'Notification')
+@@ -844,9 +930,13 @@ class NotificationAPITestCase(test.NoDBTestCase):
+         mock_notification_obj.return_value = self.notification
+         mock_DuplicateNotification.return_value = self.exception_duplicate
+ 
+-        self.assertRaises(type(self.exception_duplicate),
+-                          self.notification_api.create_notification,
+-                          self.context, notification_data)
++        guard = mock.Mock()
++        with mock.patch.object(
++                ha_api, 'watcher_automation', guard, create=True):
++            self.assertRaises(type(self.exception_duplicate),
++                              self.notification_api.create_notification,
++                              self.context, notification_data)
++        guard.hold.assert_not_called()
+ 
+     @mock.patch.object(notification_obj.NotificationList, 'get_all')
+     def test_create_is_duplicate_true(self, mock_get_all):
+diff --git a/masakari/tests/unit/powerops/test_watcher_automation.py b/masakari/tests/unit/powerops/test_watcher_automation.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..39c59816f6867a847f39288dd0be61fac8a859e3
+--- /dev/null
++++ b/masakari/tests/unit/powerops/test_watcher_automation.py
+@@ -0,0 +1,106 @@
++# Copyright 2026 OpenInfra Foundation
++#
++# Licensed under the Apache License, Version 2.0 (the "License"); you may
++# not use this file except in compliance with the License. You may obtain
++# a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++# License for the specific language governing permissions and limitations
++# under the License.
++
++from unittest import mock
++
++from masakari.powerops import watcher_automation
++from masakari import test
++from masakari.tests.unit import fakes
++from masakari.tests import uuidsentinel
++
++
++class WatcherAutomationHoldTest(test.NoDBTestCase):
++
++    @staticmethod
++    def _notification(notification_type='COMPUTE_HOST', event='STOPPED',
++                      host_status='NORMAL'):
++        return fakes.create_fake_notification(
++            type=notification_type,
++            payload={
++                'event': event,
++                'host_status': host_status,
++                'cluster_status': 'ONLINE',
++            },
++            notification_uuid=uuidsentinel.fake_notification,
++        )
++
++    @mock.patch.object(watcher_automation.config, 'from_conf')
++    def test_eligible_host_failure_holds_with_notification_identity(
++            self, mock_from_conf):
++        conf = mock.Mock()
++        conf.watcher_automation_guard.enabled = True
++        gate = mock_from_conf.return_value
++
++        with mock.patch.object(watcher_automation, 'CONF', conf):
++            result = watcher_automation.hold(
++                self._notification(event='stopped', host_status='normal'),
++                'compute-01',
++            )
++
++        self.assertIs(gate.hold.return_value, result)
++        mock_from_conf.assert_called_once_with(conf)
++        gate.hold.assert_called_once_with(
++            uuidsentinel.fake_notification,
++            'compute-01',
++        )
++
++    @mock.patch.object(watcher_automation.config, 'from_conf')
++    def test_disabled_guard_does_not_contact_backend(self, mock_from_conf):
++        conf = mock.Mock()
++        conf.watcher_automation_guard.enabled = False
++
++        with mock.patch.object(watcher_automation, 'CONF', conf):
++            result = watcher_automation.hold(
++                self._notification(), 'compute-01')
++
++        self.assertIsNone(result)
++        mock_from_conf.assert_not_called()
++
++    @mock.patch.object(watcher_automation.config, 'from_conf')
++    def test_ineligible_notification_does_not_contact_backend(
++            self, mock_from_conf):
++        conf = mock.Mock()
++        conf.watcher_automation_guard.enabled = True
++        missing_status = self._notification()
++        missing_status.payload.pop('host_status')
++        cases = (
++            self._notification(notification_type='PROCESS'),
++            self._notification(event='STARTED'),
++            self._notification(event='UNKNOWN'),
++            self._notification(host_status='UNKNOWN'),
++            missing_status,
++        )
++
++        with mock.patch.object(watcher_automation, 'CONF', conf):
++            for notification in cases:
++                with self.subTest(notification=notification):
++                    self.assertIsNone(watcher_automation.hold(
++                        notification, 'compute-01'))
++
++        mock_from_conf.assert_not_called()
++
++    @mock.patch.object(watcher_automation.config, 'from_conf')
++    def test_replayed_notification_reuses_incident_uuid(self, mock_from_conf):
++        conf = mock.Mock()
++        conf.watcher_automation_guard.enabled = True
++        notification = self._notification()
++
++        with mock.patch.object(watcher_automation, 'CONF', conf):
++            watcher_automation.hold(notification, 'compute-01')
++            watcher_automation.hold(notification, 'compute-01')
++
++        self.assertEqual(
++            [mock.call(uuidsentinel.fake_notification, 'compute-01')] * 2,
++            mock_from_conf.return_value.hold.call_args_list,
++        )
+diff --git a/masakari/tests/unit/test_conf.py b/masakari/tests/unit/test_conf.py
+index 84193f587bdceb1de185c42e93aaef302f8532c1..ca3f67ebb7f5283f17d50aec2657c15d8cba6432 100644
+--- a/masakari/tests/unit/test_conf.py
++++ b/masakari/tests/unit/test_conf.py
+@@ -19,6 +19,7 @@ import fixtures
+ from oslo_config import cfg
+ 
+ import masakari.conf.api
++from masakari.conf import opts
+ from masakari import test
+ 
+ 
+@@ -79,3 +80,22 @@ class ConfTest(test.NoDBTestCase):
+         # a dict.
+         actual = 1000
+         self.assertEqual(actual, self.conf.osapi_max_limit)
++
++    def test_watcher_automation_guard_options_are_in_sample_namespace(self):
++        groups = dict(opts.list_opts())
++
++        self.assertIn('watcher_automation_guard', groups)
++        actual = {option.name: option.default
++                  for option in groups['watcher_automation_guard']}
++        self.assertEqual(
++            {
++                'enabled': False,
++                'endpoint': 'http://127.0.0.1:2379',
++                'prefix': '/powerops/watcher-automation/v1',
++                'timeout': 5.0,
++                'ca_file': None,
++                'cert_file': None,
++                'key_file': None,
++            },
++            actual,
++        )
+diff --git a/requirements.txt b/requirements.txt
+index 15b02d12fde2d2e13c6b7a5f746a9d395b8cd33b..abe9b02ec4667b6177d8949fb75aeb5c87e5c079 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -26,3 +26,4 @@ taskflow>=2.16.0 # Apache-2.0
+ tooz>=2.10.1 # Apache-2.0
+ etcd3gw!=0.2.2,!=0.2.3,!=0.2.6 # Apache-2.0
+ openstacksdk # Apache-2.0
++powerops-watcher-guard>=0.1.0 # Apache-2.0
+-- 
+2.49.0
+

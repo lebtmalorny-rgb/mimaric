@@ -1,0 +1,1399 @@
+From a063d5759520ca19525c18c3ec5d5b57e4c98655 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Sun, 13 Sep 2026 13:50:09 +0300
+Subject: [PATCH] Guard scheduled Watcher audits and actions with persistent
+ epochs
+
+
+diff --git a/requirements.txt b/requirements.txt
+index 44740691cceccc229cad7ad15e57f850541664e1..3292794c5a839c25cd83e42f58458f91568dc993 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -47,3 +47,5 @@ WSME>=0.9.2 # MIT
+ networkx>=2.4 # BSD
+ microversion-parse>=0.2.1 # Apache-2.0
+ futurist>=1.8.0 # Apache-2.0
++
++powerops-watcher-guard>=0.1.0,<0.2.0
+diff --git a/watcher/api/controllers/v1/action_plan.py b/watcher/api/controllers/v1/action_plan.py
+index a0e7db92ec62e0c47e1b311d85810aaa644e3dc4..29800018fd5b8e3899862971f9ce2a03f0733b94 100644
+--- a/watcher/api/controllers/v1/action_plan.py
++++ b/watcher/api/controllers/v1/action_plan.py
+@@ -112,7 +112,7 @@ class ActionPlanPatchType(types.JsonPatchType):
+ 
+     @staticmethod
+     def internal_attrs():
+-        return types.JsonPatchType.internal_attrs()
++        return types.JsonPatchType.internal_attrs() + ['/automation_epoch']
+ 
+     @staticmethod
+     def mandatory_attrs():
+diff --git a/watcher/applier/action_plan/default.py b/watcher/applier/action_plan/default.py
+index be48ad5384934336fd96aede2f2cc6a78ff6e0b0..5ab1728e8275fc2cda2cf3097d6253b4bfe10524 100644
+--- a/watcher/applier/action_plan/default.py
++++ b/watcher/applier/action_plan/default.py
+@@ -21,6 +21,7 @@ from oslo_log import log
+ 
+ from watcher.applier.action_plan import base
+ from watcher.applier import default
++from watcher.common import automation_guard
+ from watcher.common import exception
+ from watcher import notifications
+ from watcher import objects
+@@ -45,6 +46,7 @@ class DefaultActionPlanHandler(base.BaseActionPlanHandler):
+             if action_plan.state == objects.action_plan.State.CANCELLED:
+                 self._update_action_from_pending_to_cancelled()
+                 return
++            automation_guard.validate_plan(action_plan)
+             action_plan.hostname = CONF.host
+             action_plan.state = objects.action_plan.State.ONGOING
+             action_plan.save()
+diff --git a/watcher/applier/workflow_engine/default.py b/watcher/applier/workflow_engine/default.py
+index d7f677bb49d495e81a74e089567aa57ed980e022..658ff217c755be7508f3e7ae7289060a10c2d698 100644
+--- a/watcher/applier/workflow_engine/default.py
++++ b/watcher/applier/workflow_engine/default.py
+@@ -24,6 +24,8 @@ from taskflow.patterns import graph_flow as gf
+ from taskflow import task as flow_task
+ 
+ from watcher.applier.workflow_engine import base
++from watcher.common import automation_guard
++from watcher.common.automation_guard import GuardDenied
+ from watcher.common import exception
+ from watcher import conf
+ from watcher import objects
+@@ -148,6 +150,7 @@ class TaskFlowActionContainer(base.BaseTaskFlowActionContainer):
+ 
+         # NOTE:Some actions(such as migrate) will return None when exception
+         #      Only when True is returned, the action state is set to SUCCEEDED
++        automation_guard.validate_action(self.engine.context, self._db_action)
+         result = self.action.execute()
+         if result is True:
+             return self.engine.notify(self._db_action,
+@@ -169,6 +172,13 @@ class TaskFlowActionContainer(base.BaseTaskFlowActionContainer):
+                      "the following action will be skipped: %s", self.name)
+             return
+ 
++        try:
++            automation_guard.validate_action(
++                self.engine.context, self._db_action)
++        except GuardDenied:
++            LOG.info("Automation guard suppressed rollback: %s", self.name)
++            return
++
+         LOG.warning("Revert action: %s", self.name)
+         try:
+             # TODO(jed): do we need to update the states in case of failure?
+diff --git a/watcher/common/automation_guard.py b/watcher/common/automation_guard.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..e3f9035174e34eadff767de2b85d618d5679da21
+--- /dev/null
++++ b/watcher/common/automation_guard.py
+@@ -0,0 +1,131 @@
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++"""Scheduled automation admission and immutable action-plan provenance."""
++import inspect
++import uuid
++
++from powerops_watcher_guard import config
++from powerops_watcher_guard.gate import GuardDenied
++
++from watcher import conf
++from watcher import objects
++
++
++MANUAL = 'manual'
++
++
++def enabled():
++    return conf.CONF.watcher_automation_guard.enabled
++
++
++def validate_epoch(epoch):
++    if not enabled():
++        return
++    if epoch == MANUAL:
++        return
++    try:
++        valid = isinstance(epoch, str) and str(uuid.UUID(epoch)) == epoch
++    except (ValueError, AttributeError):
++        valid = False
++    if not valid:
++        raise GuardDenied(
++            'Unclassified action plan; recompute before applying')
++    config.from_conf(conf.CONF).admit(expected_epoch=epoch)
++
++
++def admit_audit(audit):
++    if not enabled():
++        return None
++    if audit.audit_type in ('ONESHOT', 'EVENT'):
++        return MANUAL
++    if audit.audit_type != 'CONTINUOUS':
++        raise GuardDenied('Unclassified audit type')
++    return config.from_conf(conf.CONF).admit()
++
++
++def validate_plan(plan):
++    if enabled():
++        try:
++            epoch = plan.automation_epoch
++        except (AttributeError, NotImplementedError):
++            epoch = None
++        validate_epoch(epoch)
++
++
++def validate_action(context, action):
++    if enabled():
++        validate_plan(objects.ActionPlan.get_by_id(context,
++                                                   action.action_plan_id))
++
++
++def schedule(planner, context, audit_id, solution, epoch):
++    # Reject old plugin signatures BEFORE invoking potentially effectful code.
++    try:
++        inspect.signature(planner.schedule).bind(
++            context, audit_id, solution, automation_epoch=epoch)
++    except (TypeError, ValueError):
++        raise GuardDenied('Planner must support automation_epoch') from None
++    validate_epoch(epoch)
++    plan = planner.schedule(
++        context, audit_id, solution, automation_epoch=epoch)
++    if getattr(plan, 'automation_epoch', None) != epoch:
++        raise GuardDenied('Planner did not preserve automation provenance')
++    return plan
++
++
++def fresh_model(collector, epoch):
++    if not enabled() or epoch in (None, MANUAL):
++        return collector.get_latest_cluster_data_model()
++    # The same lock covers normal background synchronize, its entire build,
++    # and the deep copy. Pre-hold builds cannot overwrite our refresh.
++    with collector.lock:
++        validate_epoch(epoch)
++        try:
++            if getattr(collector, '_automation_epoch', None) != epoch:
++                collector.synchronize()
++                validate_epoch(epoch)
++            model = collector.get_latest_cluster_data_model()
++            if model is None or model.stale:
++                raise GuardDenied('Fresh cluster model is unavailable')
++            collector._automation_epoch = epoch
++        except GuardDenied:
++            collector._automation_epoch = None
++            raise
++        except Exception:
++            collector._automation_epoch = None
++            raise GuardDenied(
++                'Cluster model refresh failed; retry next tick') from None
++        validate_epoch(epoch)
++        return model
++
++
++def scoped_model(collector, audit_scope, epoch):
++    # Scope selection can invalidate the collector cache. Serialize it with
++    # background builds and the snapshot for this invocation, including manual
++    # consumers of the same collector. Never share a mutable scope handler.
++    guarded = enabled() and epoch not in (None, MANUAL)
++    with collector.lock:
++        try:
++            handler = collector.get_audit_scope_handler(
++                audit_scope=audit_scope)
++            model = handler.get_scoped_model(fresh_model(collector, epoch))
++            if guarded:
++                validate_epoch(epoch)
++            return model
++        except GuardDenied:
++            raise
++        except Exception:
++            if not guarded:
++                raise
++            raise GuardDenied(
++                'Model scope refresh failed; retry next tick') from None
+diff --git a/watcher/conf/__init__.py b/watcher/conf/__init__.py
+index fc43283d407b8dfccc9779cd38937402a0037f67..836624582dd2f19f0ede767536082aa84de52dee 100644
+--- a/watcher/conf/__init__.py
++++ b/watcher/conf/__init__.py
+@@ -21,6 +21,7 @@ from oslo_config import cfg
+ 
+ from watcher.conf import api
+ from watcher.conf import applier
++from watcher.conf import automation_guard
+ from watcher.conf import cinder_client
+ from watcher.conf import clients_auth
+ from watcher.conf import collector
+@@ -46,6 +47,7 @@ from watcher.conf import service
+ 
+ CONF = cfg.CONF
+ 
++automation_guard.register_opts(CONF)
+ service.register_opts(CONF)
+ api.register_opts(CONF)
+ paths.register_opts(CONF)
+diff --git a/watcher/conf/automation_guard.py b/watcher/conf/automation_guard.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..a01efe8bf20f70aa8f0cddf0ad35111358b0dc4e
+--- /dev/null
++++ b/watcher/conf/automation_guard.py
+@@ -0,0 +1,15 @@
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++"""Shared Watcher/Masakari automation guard configuration."""
++from powerops_watcher_guard.config import list_opts  # noqa: F401
++from powerops_watcher_guard.config import register_opts  # noqa: F401
+diff --git a/watcher/db/sqlalchemy/alembic/versions/a91c3f82d047_add_automation_epoch.py b/watcher/db/sqlalchemy/alembic/versions/a91c3f82d047_add_automation_epoch.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..0bd580447f37e5e8dd4e0bad3f383bd21bc97d85
+--- /dev/null
++++ b/watcher/db/sqlalchemy/alembic/versions/a91c3f82d047_add_automation_epoch.py
+@@ -0,0 +1,31 @@
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++"""Add private action plan automation provenance.
++
++Revision ID: a91c3f82d047
++Revises: 609bec748f2a
++"""
++from alembic import op
++import sqlalchemy as sa
++
++revision = 'a91c3f82d047'
++down_revision = '609bec748f2a'
++
++
++def upgrade():
++    op.add_column('action_plans', sa.Column('automation_epoch', sa.String(36),
++                                          nullable=True))
++
++
++def downgrade():
++    op.drop_column('action_plans', 'automation_epoch')
+diff --git a/watcher/db/sqlalchemy/models.py b/watcher/db/sqlalchemy/models.py
+index 6ae06378f4218a861c59c78ee9100714f3d306b2..77f3d9eebf4f69b96fda0babf8410065f0aa42fd 100644
+--- a/watcher/db/sqlalchemy/models.py
++++ b/watcher/db/sqlalchemy/models.py
+@@ -199,6 +199,8 @@ class ActionPlan(Base):
+     global_efficacy = Column(JSONEncodedList, nullable=True)
+     hostname = Column(String(255), nullable=True)
+ 
++    automation_epoch = Column(String(36), nullable=True)
++
+     audit = orm.relationship(Audit, foreign_keys=audit_id, lazy=None)
+     strategy = orm.relationship(Strategy, foreign_keys=strategy_id, lazy=None)
+ 
+diff --git a/watcher/decision_engine/audit/base.py b/watcher/decision_engine/audit/base.py
+index 37cf721823c0f5b96c94c9530103bcc111e0e34e..827e2b2d285579d969cf951a46bf20184f512a88 100644
+--- a/watcher/decision_engine/audit/base.py
++++ b/watcher/decision_engine/audit/base.py
+@@ -23,6 +23,8 @@ from oslo_config import cfg
+ from oslo_log import log
+ 
+ from watcher.applier import rpcapi
++from watcher.common import automation_guard
++from watcher.common.automation_guard import GuardDenied
+ from watcher.common import exception
+ from watcher.common import service
+ from watcher.decision_engine.loading import default as loader
+@@ -50,11 +52,12 @@ class BaseAuditHandler(object, metaclass=BaseMetaClass):
+         raise NotImplementedError()
+ 
+     @abc.abstractmethod
+-    def do_execute(self, audit, request_context):
++    def do_execute(self, audit, request_context, automation_epoch=None):
+         raise NotImplementedError()
+ 
+     @abc.abstractmethod
+-    def post_execute(self, audit, solution, request_context):
++    def post_execute(self, audit, solution, request_context,
++                     automation_epoch=None):
+         raise NotImplementedError()
+ 
+ 
+@@ -78,21 +81,30 @@ class AuditHandler(BaseAuditHandler, metaclass=abc.ABCMeta):
+     def strategy_context(self):
+         return self._strategy_context
+ 
+-    def do_execute(self, audit, request_context):
++    def do_execute(self, audit, request_context, automation_epoch=None):
+         # execute the strategy
++        kwargs = ({'automation_epoch': automation_epoch}
++                  if automation_epoch is not None else {})
+         solution = self.strategy_context.execute_strategy(
+-            audit, request_context)
++            audit, request_context, **kwargs)
+ 
+         return solution
+ 
+-    def do_schedule(self, request_context, audit, solution):
++    def do_schedule(self, request_context, audit, solution,
++                    automation_epoch=None):
+         try:
+             notifications.audit.send_action_notification(
+                 request_context, audit,
+                 action=fields.NotificationAction.PLANNER,
+                 phase=fields.NotificationPhase.START)
+             planner = self.get_planner(solution)
+-            action_plan = planner.schedule(request_context, audit.id, solution)
++            if automation_guard.enabled():
++                action_plan = automation_guard.schedule(
++                    planner, request_context, audit.id, solution,
++                    automation_epoch)
++            else:
++                action_plan = planner.schedule(
++                    request_context, audit.id, solution)
+             notifications.audit.send_action_notification(
+                 request_context, audit,
+                 action=fields.NotificationAction.PLANNER,
+@@ -133,17 +145,29 @@ class AuditHandler(BaseAuditHandler, metaclass=abc.ABCMeta):
+         # change state of the audit to ONGOING
+         self.update_audit_state(audit, objects.audit.State.ONGOING)
+ 
+-    def post_execute(self, audit, solution, request_context):
+-        action_plan = self.do_schedule(request_context, audit, solution)
++    def post_execute(self, audit, solution, request_context,
++                     automation_epoch=None):
++        kwargs = ({'automation_epoch': automation_epoch}
++                  if automation_epoch is not None else {})
++        action_plan = self.do_schedule(request_context, audit, solution,
++                                       **kwargs)
+         if audit.auto_trigger:
++            automation_guard.validate_plan(action_plan)
+             self.applier_client.launch_action_plan(request_context,
+                                                    action_plan.uuid)
+ 
+     def execute(self, audit, request_context):
+         try:
++            epoch = automation_guard.admit_audit(audit)
++            kwargs = ({'automation_epoch': epoch}
++                      if epoch is not None else {})
+             self.pre_execute(audit, request_context)
+-            solution = self.do_execute(audit, request_context)
+-            self.post_execute(audit, solution, request_context)
++            solution = self.do_execute(audit, request_context, **kwargs)
++            automation_guard.validate_epoch(epoch)
++            self.post_execute(audit, solution, request_context, **kwargs)
++        except GuardDenied:
++            LOG.info("Automation guard skipped audit %s; retry next tick",
++                     audit.uuid)
+         except exception.ActionPlanIsOngoing as e:
+             LOG.warning(e)
+             if audit.audit_type == objects.audit.AuditType.ONESHOT.value:
+diff --git a/watcher/decision_engine/audit/continuous.py b/watcher/decision_engine/audit/continuous.py
+index e9ae1bec19c016ad3fcffe0f041cc28a4baa279a..9924ce4b94c0b6b23fb261fb61db71fbfbc5763d 100644
+--- a/watcher/decision_engine/audit/continuous.py
++++ b/watcher/decision_engine/audit/continuous.py
+@@ -24,6 +24,7 @@ from croniter import croniter
+ from dateutil import tz
+ from oslo_utils import timeutils
+ 
++from watcher.common import automation_guard
+ from watcher.common import context
+ from watcher.common import scheduling
+ from watcher.common import utils
+@@ -81,9 +82,12 @@ class ContinuousAuditHandler(base.AuditHandler):
+ 
+         return False
+ 
+-    def do_execute(self, audit, request_context):
++    def do_execute(self, audit, request_context, automation_epoch=None):
++        kwargs = ({'automation_epoch': automation_epoch}
++                  if automation_epoch is not None else {})
+         solution = super(ContinuousAuditHandler, self)\
+-            .do_execute(audit, request_context)
++            .do_execute(audit, request_context, **kwargs)
++        automation_guard.validate_epoch(automation_epoch)
+ 
+         if audit.audit_type == objects.audit.AuditType.CONTINUOUS.value:
+             a_plan_filters = {'audit_uuid': audit.uuid,
+@@ -124,6 +128,8 @@ class ContinuousAuditHandler(base.AuditHandler):
+         # We should convert UTC time to local time without tzinfo
+         trigger_args[time_var] = trigger_args[time_var].replace(
+             tzinfo=tz.tzutc()).astimezone(tz.tzlocal()).replace(tzinfo=None)
++        if automation_guard.enabled():
++            trigger_args['coalesce'] = True
+         self.scheduler.add_job(self.execute_audit, trigger,
+                                args=[audit, audit_context],
+                                name='execute_audit',
+diff --git a/watcher/decision_engine/audit/event.py b/watcher/decision_engine/audit/event.py
+index 3cb1b868615561ef12f52da19e6993778d9872e1..c5e69f39cb99b865e0d11fbd06db9a82fd747649 100644
+--- a/watcher/decision_engine/audit/event.py
++++ b/watcher/decision_engine/audit/event.py
+@@ -20,8 +20,10 @@ from watcher import objects
+ 
+ class EventAuditHandler(base.AuditHandler):
+ 
+-    def post_execute(self, audit, solution, request_context):
+-        super(EventAuditHandler, self).post_execute(audit, solution,
+-                                                    request_context)
++    def post_execute(self, audit, solution, request_context,
++                     automation_epoch=None):
++        kwargs = ({'automation_epoch': automation_epoch}
++                  if automation_epoch is not None else {})
++        super().post_execute(audit, solution, request_context, **kwargs)
+         # change state of the audit to SUCCEEDED
+         self.update_audit_state(audit, objects.audit.State.SUCCEEDED)
+diff --git a/watcher/decision_engine/audit/oneshot.py b/watcher/decision_engine/audit/oneshot.py
+index a3628be333d8e311cf7b969200edfea46fc17cb6..01c1eeea8a73abe86ee5671c8463266466d74d55 100644
+--- a/watcher/decision_engine/audit/oneshot.py
++++ b/watcher/decision_engine/audit/oneshot.py
+@@ -20,8 +20,10 @@ from watcher import objects
+ 
+ class OneShotAuditHandler(base.AuditHandler):
+ 
+-    def post_execute(self, audit, solution, request_context):
+-        super(OneShotAuditHandler, self).post_execute(audit, solution,
+-                                                      request_context)
++    def post_execute(self, audit, solution, request_context,
++                     automation_epoch=None):
++        kwargs = ({'automation_epoch': automation_epoch}
++                  if automation_epoch is not None else {})
++        super().post_execute(audit, solution, request_context, **kwargs)
+         # change state of the audit to SUCCEEDED
+         self.update_audit_state(audit, objects.audit.State.SUCCEEDED)
+diff --git a/watcher/decision_engine/model/collector/base.py b/watcher/decision_engine/model/collector/base.py
+index 5c20a8de0d97caf73f2ceedd5e6b9d1d321dc65b..558ebaa0e8322aacf117c6640216632a591b51de 100644
+--- a/watcher/decision_engine/model/collector/base.py
++++ b/watcher/decision_engine/model/collector/base.py
+@@ -134,18 +134,15 @@ class BaseClusterDataModelCollector(loadable.LoadableSingleton,
+ 
+     @property
+     def cluster_data_model(self):
+-        if self._cluster_data_model is None:
+-            self.lock.acquire()
+-            self._cluster_data_model = self.execute()
+-            self.lock.release()
+-
+-        return self._cluster_data_model
++        with self.lock:
++            if self._cluster_data_model is None:
++                self._cluster_data_model = self.execute()
++            return self._cluster_data_model
+ 
+     @cluster_data_model.setter
+     def cluster_data_model(self, model):
+-        self.lock.acquire()
+-        self._cluster_data_model = model
+-        self.lock.release()
++        with self.lock:
++            self._cluster_data_model = model
+ 
+     @property
+     @abc.abstractmethod
+@@ -181,9 +178,10 @@ class BaseClusterDataModelCollector(loadable.LoadableSingleton,
+         ]
+ 
+     def get_latest_cluster_data_model(self):
+-        LOG.debug("Creating copy")
+-        LOG.debug(self.cluster_data_model.to_xml())
+-        return copy.deepcopy(self.cluster_data_model)
++        with self.lock:
++            LOG.debug("Creating copy")
++            LOG.debug(self.cluster_data_model.to_xml())
++            return copy.deepcopy(self.cluster_data_model)
+ 
+     def synchronize(self):
+         """Synchronize the cluster data model
+@@ -191,7 +189,8 @@ class BaseClusterDataModelCollector(loadable.LoadableSingleton,
+         Whenever called this synchronization will perform a drop-in replacement
+         with the existing cluster data model
+         """
+-        self.cluster_data_model = self.execute()
++        with self.lock:
++            self.cluster_data_model = self.execute()
+ 
+ 
+ class BaseModelBuilder(object):
+diff --git a/watcher/decision_engine/planner/base.py b/watcher/decision_engine/planner/base.py
+index 7e8a132d1887753522626f87b890f5905d2f8854..25050b67338998ecc95c3e860d74d5c44e709ab4 100644
+--- a/watcher/decision_engine/planner/base.py
++++ b/watcher/decision_engine/planner/base.py
+@@ -61,7 +61,7 @@ class BasePlanner(loadable.Loadable, metaclass=abc.ABCMeta):
+         return []
+ 
+     @abc.abstractmethod
+-    def schedule(self, context, audit_uuid, solution):
++    def schedule(self, context, audit_uuid, solution, automation_epoch=None):
+         """The planner receives a solution to schedule
+ 
+         :param solution: A solution provided by a strategy for scheduling
+@@ -70,6 +70,10 @@ class BasePlanner(loadable.Loadable, metaclass=abc.ABCMeta):
+         :type audit_uuid: str
+         :return: Action plan with an ordered sequence of actions such that all
+                  security, dependency, and performance requirements are met.
++        :param automation_epoch: Private captured audit provenance. Plugins
++            used with the guard enabled must accept this keyword and persist
++            it on ActionPlan before create(). Do not infer it from audit type
++            later. Legacy plugin signatures are only supported while disabled.
+         :rtype: :py:class:`watcher.objects.ActionPlan` instance
+         """
+         # example: directed acyclic graph
+diff --git a/watcher/decision_engine/planner/node_resource_consolidation.py b/watcher/decision_engine/planner/node_resource_consolidation.py
+index 9f0602975936ea9b66d6d223235f17ff3922fe96..f013ccfcdc04d137dc4363795fe5bc7fe895bcd9 100644
+--- a/watcher/decision_engine/planner/node_resource_consolidation.py
++++ b/watcher/decision_engine/planner/node_resource_consolidation.py
+@@ -52,9 +52,10 @@ class NodeResourceConsolidationPlanner(base.BasePlanner):
+ 
+         return action
+ 
+-    def schedule(self, context, audit_id, solution):
++    def schedule(self, context, audit_id, solution, automation_epoch=None):
+         LOG.debug('Creating an action plan for the audit uuid: %s', audit_id)
+-        action_plan = self._create_action_plan(context, audit_id, solution)
++        action_plan = self._create_action_plan(
++            context, audit_id, solution, automation_epoch=automation_epoch)
+ 
+         actions = list(solution.actions)
+         if len(actions) == 0:
+@@ -114,7 +115,8 @@ class NodeResourceConsolidationPlanner(base.BasePlanner):
+ 
+         return action_plan
+ 
+-    def _create_action_plan(self, context, audit_id, solution):
++    def _create_action_plan(self, context, audit_id, solution,
++                            automation_epoch=None):
+         strategy = objects.Strategy.get_by_name(
+             context, solution.strategy.name)
+ 
+@@ -127,6 +129,7 @@ class NodeResourceConsolidationPlanner(base.BasePlanner):
+         }
+ 
+         new_action_plan = objects.ActionPlan(context, **action_plan_dict)
++        new_action_plan.automation_epoch = automation_epoch
+         new_action_plan.create()
+ 
+         return new_action_plan
+diff --git a/watcher/decision_engine/planner/weight.py b/watcher/decision_engine/planner/weight.py
+index ad074f4d5830cd769ccbae8f5aaebf5bbcfa6784..0eb677544db3e892e64415f8ab534068b18bf18c 100644
+--- a/watcher/decision_engine/planner/weight.py
++++ b/watcher/decision_engine/planner/weight.py
+@@ -141,9 +141,10 @@ class WeightPlanner(base.BasePlanner):
+ 
+         return action_graph
+ 
+-    def schedule(self, context, audit_id, solution):
++    def schedule(self, context, audit_id, solution, automation_epoch=None):
+         LOG.debug('Creating an action plan for the audit uuid: %s', audit_id)
+-        action_plan = self.create_action_plan(context, audit_id, solution)
++        action_plan = self.create_action_plan(
++            context, audit_id, solution, automation_epoch=automation_epoch)
+ 
+         sorted_weighted_actions = self.get_sorted_actions_by_weight(
+             context, action_plan, solution)
+@@ -186,7 +187,8 @@ class WeightPlanner(base.BasePlanner):
+                 LOG.exception(exc)
+                 raise
+ 
+-    def create_action_plan(self, context, audit_id, solution):
++    def create_action_plan(self, context, audit_id, solution,
++                           automation_epoch=None):
+         strategy = objects.Strategy.get_by_name(
+             context, solution.strategy.name)
+ 
+@@ -199,6 +201,7 @@ class WeightPlanner(base.BasePlanner):
+         }
+ 
+         new_action_plan = objects.ActionPlan(context, **action_plan_dict)
++        new_action_plan.automation_epoch = automation_epoch
+         new_action_plan.create()
+ 
+         return new_action_plan
+diff --git a/watcher/decision_engine/planner/workload_stabilization.py b/watcher/decision_engine/planner/workload_stabilization.py
+index 9b9d0d38bcf1a3bc0ada162584951621054236c1..3696f7a305db53602ad967677b9e986f22456779 100644
+--- a/watcher/decision_engine/planner/workload_stabilization.py
++++ b/watcher/decision_engine/planner/workload_stabilization.py
+@@ -92,10 +92,11 @@ class WorkloadStabilizationPlanner(base.BasePlanner):
+                 return c()
+         return None
+ 
+-    def schedule(self, context, audit_id, solution):
++    def schedule(self, context, audit_id, solution, automation_epoch=None):
+         LOG.debug('Creating an action plan for the audit uuid: %s', audit_id)
+         weights = self.config.weights
+-        action_plan = self._create_action_plan(context, audit_id, solution)
++        action_plan = self._create_action_plan(
++            context, audit_id, solution, automation_epoch=automation_epoch)
+ 
+         actions = list(solution.actions)
+         to_schedule = []
+@@ -169,7 +170,8 @@ class WorkloadStabilizationPlanner(base.BasePlanner):
+ 
+         return action_plan
+ 
+-    def _create_action_plan(self, context, audit_id, solution):
++    def _create_action_plan(self, context, audit_id, solution,
++                            automation_epoch=None):
+         strategy = objects.Strategy.get_by_name(
+             context, solution.strategy.name)
+ 
+@@ -182,6 +184,7 @@ class WorkloadStabilizationPlanner(base.BasePlanner):
+         }
+ 
+         new_action_plan = objects.ActionPlan(context, **action_plan_dict)
++        new_action_plan.automation_epoch = automation_epoch
+         new_action_plan.create()
+ 
+         return new_action_plan
+diff --git a/watcher/decision_engine/strategy/context/base.py b/watcher/decision_engine/strategy/context/base.py
+index 1e59871c85f55b4dc0634c80385e248c61e2627f..21ec01c8117eedd01f3474177cfd8e64c5bd9e2c 100644
+--- a/watcher/decision_engine/strategy/context/base.py
++++ b/watcher/decision_engine/strategy/context/base.py
+@@ -25,7 +25,7 @@ from watcher.objects import fields
+ 
+ class StrategyContext(object, metaclass=abc.ABCMeta):
+ 
+-    def execute_strategy(self, audit, request_context):
++    def execute_strategy(self, audit, request_context, automation_epoch=None):
+         """Execute the strategy for the given an audit
+ 
+         :param audit: Audit object
+@@ -40,7 +40,10 @@ class StrategyContext(object, metaclass=abc.ABCMeta):
+                 request_context, audit,
+                 action=fields.NotificationAction.STRATEGY,
+                 phase=fields.NotificationPhase.START)
+-            solution = self.do_execute_strategy(audit, request_context)
++            kwargs = ({'automation_epoch': automation_epoch}
++                      if automation_epoch is not None else {})
++            solution = self.do_execute_strategy(
++                audit, request_context, **kwargs)
+             notifications.audit.send_action_notification(
+                 request_context, audit,
+                 action=fields.NotificationAction.STRATEGY,
+@@ -55,7 +58,8 @@ class StrategyContext(object, metaclass=abc.ABCMeta):
+             raise
+ 
+     @abc.abstractmethod
+-    def do_execute_strategy(self, audit, request_context):
++    def do_execute_strategy(self, audit, request_context,
++                            automation_epoch=None):
+         """Execute the strategy for the given an audit
+ 
+         :param audit: Audit object
+diff --git a/watcher/decision_engine/strategy/context/default.py b/watcher/decision_engine/strategy/context/default.py
+index f0536938b99268ff2cb352f28f04bd0221e5d757..c06d388ef8119e1604a85dead7ac5a240a90f8d8 100644
+--- a/watcher/decision_engine/strategy/context/default.py
++++ b/watcher/decision_engine/strategy/context/default.py
+@@ -53,9 +53,11 @@ class DefaultStrategyContext(base.StrategyContext):
+             osc=osc)
+         return strategy_selector.select()
+ 
+-    def do_execute_strategy(self, audit, request_context):
++    def do_execute_strategy(self, audit, request_context,
++                            automation_epoch=None):
+         selected_strategy = self.select_strategy(audit, request_context)
+         selected_strategy.audit_scope = audit.scope
++        selected_strategy._automation_epoch = automation_epoch
+ 
+         schema = selected_strategy.get_schema()
+         if not audit.parameters and schema:
+diff --git a/watcher/decision_engine/strategy/strategies/base.py b/watcher/decision_engine/strategy/strategies/base.py
+index 6ba103c0c3ffa461e1df0e4d459e12e4977e28f8..9fcabe0bd2bdf4bba436307563b51303c21a3f73 100644
+--- a/watcher/decision_engine/strategy/strategies/base.py
++++ b/watcher/decision_engine/strategy/strategies/base.py
+@@ -42,6 +42,7 @@ from oslo_config import cfg
+ from oslo_log import log
+ from oslo_utils import strutils
+ 
++from watcher.common import automation_guard
+ from watcher.common import clients
+ from watcher.common import context
+ from watcher.common import exception
+@@ -153,6 +154,7 @@ class BaseStrategy(loadable.Loadable, metaclass=abc.ABCMeta):
+         self._solution = default.DefaultSolution(goal=self.goal, strategy=self)
+         self._osc = osc
+         self._collector_manager = None
++        self._automation_epoch = None
+         self._compute_model = None
+         self._storage_model = None
+         self._baremetal_model = None
+@@ -286,10 +288,8 @@ class BaseStrategy(loadable.Loadable, metaclass=abc.ABCMeta):
+         if self._compute_model is None:
+             collector = self.collector_manager.get_cluster_model_collector(
+                 'compute', osc=self.osc)
+-            audit_scope_handler = collector.get_audit_scope_handler(
+-                audit_scope=self.audit_scope)
+-            self._compute_model = audit_scope_handler.get_scoped_model(
+-                collector.get_latest_cluster_data_model())
++            self._compute_model = automation_guard.scoped_model(
++                collector, self.audit_scope, self._automation_epoch)
+ 
+         if not self._compute_model:
+             raise exception.ClusterStateNotDefined()
+@@ -309,10 +309,8 @@ class BaseStrategy(loadable.Loadable, metaclass=abc.ABCMeta):
+         if self._storage_model is None:
+             collector = self.collector_manager.get_cluster_model_collector(
+                 'storage', osc=self.osc)
+-            audit_scope_handler = collector.get_audit_scope_handler(
+-                audit_scope=self.audit_scope)
+-            self._storage_model = audit_scope_handler.get_scoped_model(
+-                collector.get_latest_cluster_data_model())
++            self._storage_model = automation_guard.scoped_model(
++                collector, self.audit_scope, self._automation_epoch)
+ 
+         if not self._storage_model:
+             raise exception.ClusterStateNotDefined()
+@@ -332,10 +330,8 @@ class BaseStrategy(loadable.Loadable, metaclass=abc.ABCMeta):
+         if self._baremetal_model is None:
+             collector = self.collector_manager.get_cluster_model_collector(
+                 'baremetal', osc=self.osc)
+-            audit_scope_handler = collector.get_audit_scope_handler(
+-                audit_scope=self.audit_scope)
+-            self._baremetal_model = audit_scope_handler.get_scoped_model(
+-                collector.get_latest_cluster_data_model())
++            self._baremetal_model = automation_guard.scoped_model(
++                collector, self.audit_scope, self._automation_epoch)
+ 
+         if not self._baremetal_model:
+             raise exception.ClusterStateNotDefined()
+diff --git a/watcher/objects/action_plan.py b/watcher/objects/action_plan.py
+index c35e8e4a64cd9fb12dc8a6e59d09d58036f1e7c1..e857d58283de12a932a2829d67475bbda80d7100 100644
+--- a/watcher/objects/action_plan.py
++++ b/watcher/objects/action_plan.py
+@@ -74,6 +74,7 @@ state may be one of the following:
+ import datetime
+ 
+ from oslo_utils import timeutils
++from oslo_utils import versionutils
+ 
+ from watcher.common import exception
+ from watcher.common import utils
+@@ -109,7 +110,8 @@ class ActionPlan(base.WatcherPersistentObject, base.WatcherObject,
+     # Version 2.0: Removed 'first_action_id' object field
+     # Version 2.1: Changed global_efficacy type
+     # Version 2.2: Added 'hostname' field
+-    VERSION = '2.2'
++    # Version 2.3: Private automation provenance
++    VERSION = '2.3'
+ 
+     dbapi = db_api.get_instance()
+ 
+@@ -121,6 +123,7 @@ class ActionPlan(base.WatcherPersistentObject, base.WatcherObject,
+         'state': wfields.StringField(nullable=True),
+         'global_efficacy': wfields.FlexibleListOfDictField(nullable=True),
+         'hostname': wfields.StringField(nullable=True),
++        'automation_epoch': wfields.StringField(nullable=True),
+ 
+         'audit': wfields.ObjectField('Audit', nullable=True),
+         'strategy': wfields.ObjectField('Strategy', nullable=True),
+@@ -131,6 +134,11 @@ class ActionPlan(base.WatcherPersistentObject, base.WatcherObject,
+         'strategy': (objects.Strategy, 'strategy_id'),
+     }
+ 
++    def obj_make_compatible(self, primitive, target_version):
++        super().obj_make_compatible(primitive, target_version)
++        if versionutils.convert_version_to_tuple(target_version) < (2, 3):
++            primitive.pop('automation_epoch', None)
++
+     # Proxified field so we can keep the previous value after an update
+     _state = None
+     _old_state = None
+diff --git a/watcher/tests/common/test_automation_guard.py b/watcher/tests/common/test_automation_guard.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..ab648d54ac79ec30b9df1fab7adfce3d1e59f693
+--- /dev/null
++++ b/watcher/tests/common/test_automation_guard.py
+@@ -0,0 +1,185 @@
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++"""Collector ordering, schema and configuration contract tests."""
++from concurrent import futures
++import importlib
++import threading
++import unittest
++from unittest import mock
++import uuid
++
++from alembic import migration
++from alembic import operations
++from powerops_watcher_guard.gate import Gate
++import sqlalchemy as sa
++
++from watcher.common import automation_guard
++from watcher import conf
++from watcher.conf import opts
++from watcher.decision_engine.model import model_root
++from watcher.decision_engine.model.collector import nova
++from watcher import objects
++
++
++class TestGuardContract(unittest.TestCase):
++    def setUp(self):
++        self.epoch = str(uuid.uuid4())
++        conf.CONF.set_override('enabled', True,
++                               group='watcher_automation_guard')
++        self.addCleanup(conf.CONF.clear_override, 'enabled',
++                        group='watcher_automation_guard')
++        patcher = mock.patch.object(Gate, 'admit', return_value=self.epoch)
++        patcher.start()
++        self.addCleanup(patcher.stop)
++
++    def test_background_old_build_cannot_overwrite_resumed_snapshot(self):
++        collector = nova.NovaClusterDataModelCollector(mock.Mock())
++        old_started = threading.Event()
++        release_old = threading.Event()
++        calls = []
++        old = model_root.ModelRoot()
++        old.marker = 'old'
++        fresh = model_root.ModelRoot()
++        fresh.marker = 'fresh'
++
++        def build():
++            calls.append(True)
++            if len(calls) == 1:
++                old_started.set()
++                if not release_old.wait(5):
++                    raise RuntimeError('test timeout')
++                return old
++            return fresh
++
++        with mock.patch.object(collector, 'execute', side_effect=build):
++            with futures.ThreadPoolExecutor(2) as pool:
++                background = pool.submit(collector.synchronize)
++                self.assertTrue(old_started.wait(5))
++                # Prove the entire old build holds the SAME snapshot lock;
++                # this avoids relying on worker timing for the regression.
++                acquired = collector.lock.acquire(blocking=False)
++                if acquired:
++                    collector.lock.release()
++                    release_old.set()
++                self.assertFalse(acquired)
++                resumed = pool.submit(automation_guard.fresh_model,
++                                      collector, self.epoch)
++                release_old.set()
++                background.result(timeout=5)
++                self.assertEqual('fresh', resumed.result(timeout=5).marker)
++            self.assertEqual('fresh', collector.cluster_data_model.marker)
++            self.assertEqual(2, len(calls))
++
++    def test_object_backport_drops_private_epoch(self):
++        plan = objects.ActionPlan(automation_epoch=self.epoch)
++        primitive = plan.obj_to_primitive(target_version='2.2')
++        self.assertNotIn('automation_epoch', primitive['watcher_object.data'])
++        current = objects.ActionPlan.obj_from_primitive(
++            plan.obj_to_primitive())
++        self.assertEqual(self.epoch, current.automation_epoch)
++
++    def test_alembic_preserves_legacy_null_and_new_epoch(self):
++        revision = importlib.import_module(
++            'watcher.db.sqlalchemy.alembic.versions.'
++            'a91c3f82d047_add_automation_epoch')
++        self.assertEqual('609bec748f2a', revision.down_revision)
++        engine = sa.create_engine('sqlite://')
++        self.addCleanup(engine.dispose)
++        with engine.begin() as conn:
++            conn.exec_driver_sql(
++                'CREATE TABLE action_plans (id INTEGER PRIMARY KEY)')
++            conn.exec_driver_sql('INSERT INTO action_plans (id) VALUES (1)')
++            context = migration.MigrationContext.configure(conn)
++            with operations.Operations.context(context):
++                revision.upgrade()
++                self.assertIsNone(conn.exec_driver_sql(
++                    'SELECT automation_epoch FROM action_plans '
++                    'WHERE id=1').scalar())
++                conn.execute(sa.text(
++                    'INSERT INTO action_plans (id, automation_epoch) '
++                    'VALUES (2, :epoch)'),
++                    {'epoch': self.epoch})
++                self.assertEqual(self.epoch, conn.exec_driver_sql(
++                    'SELECT automation_epoch FROM action_plans '
++                    'WHERE id=2').scalar())
++                revision.downgrade()
++                columns = sa.inspect(conn).get_columns('action_plans')
++                self.assertEqual(['id'], [c['name'] for c in columns])
++
++    def test_sample_discovers_shared_group(self):
++        groups = dict(opts.list_opts())
++        self.assertIn('watcher_automation_guard', groups)
++        options = {option.name: option
++                   for option in groups['watcher_automation_guard']}
++        self.assertFalse(options['enabled'].default)
++
++    def test_rest_rejects_private_provenance_patch(self):
++        from watcher.api.controllers.v1 import action_plan
++        import wsme
++        for operation in ('add', 'replace', 'remove'):
++            patch = action_plan.ActionPlanPatchType(
++                path='/automation_epoch', op=operation, value='manual')
++            self.assertRaises(wsme.exc.ClientSideError,
++                              action_plan.ActionPlanPatchType.validate, patch)
++
++    def test_custom_legacy_planner_fails_before_side_effect(self):
++        class Planner:
++            called = False
++
++            def schedule(self, context, audit_id, solution):
++                self.called = True
++
++        planner = Planner()
++        self.assertRaises(automation_guard.GuardDenied,
++                          automation_guard.schedule, planner, None, 1,
++                          None, self.epoch)
++        self.assertFalse(planner.called)
++
++    def test_custom_planner_cannot_discard_provenance(self):
++        class Planner:
++            def schedule(self, context, audit_id, solution,
++                         automation_epoch=None):
++                return objects.ActionPlan(automation_epoch=None)
++
++        self.assertRaises(automation_guard.GuardDenied,
++                          automation_guard.schedule, Planner(), None, 1,
++                          None, self.epoch)
++
++    def test_failed_initial_model_build_releases_collector_lock(self):
++        collector = nova.NovaClusterDataModelCollector(mock.Mock())
++        collector._cluster_data_model = None
++        lock = threading.RLock()
++
++        def can_acquire():
++            acquired = lock.acquire(blocking=False)
++            if acquired:
++                lock.release()
++            return acquired
++
++        with mock.patch.object(collector, 'lock', lock), \
++                mock.patch.object(collector, 'execute',
++                                  side_effect=RuntimeError('unavailable')):
++            self.assertRaises(RuntimeError,
++                              collector.get_latest_cluster_data_model)
++            try:
++                with futures.ThreadPoolExecutor(1) as pool:
++                    self.assertTrue(pool.submit(can_acquire).result(timeout=5))
++            finally:
++                # Clean up the baseline's leaked recursive lock after RED.
++                while lock._is_owned():
++                    lock.release()
++
++    def test_old_rpc_object_is_guard_denied(self):
++        plan = objects.ActionPlan()
++        self.assertRaises(automation_guard.GuardDenied,
++                          automation_guard.validate_plan, plan)
+diff --git a/watcher/tests/db/utils.py b/watcher/tests/db/utils.py
+index 830c9e1b3260028801c7d01d79c28525cba5b282..716968eb5018fa71acbf29f6b013c3c67ebffec1 100644
+--- a/watcher/tests/db/utils.py
++++ b/watcher/tests/db/utils.py
+@@ -177,6 +177,7 @@ def get_test_action_plan(**kwargs):
+         'updated_at': kwargs.get('updated_at'),
+         'deleted_at': kwargs.get('deleted_at'),
+         'hostname': kwargs.get('hostname', 'host_1'),
++        'automation_epoch': kwargs.get('automation_epoch'),
+     }
+ 
+     # ObjectField doesn't allow None nor dict, so if we want to simulate a
+diff --git a/watcher/tests/decision_engine/audit/test_automation_guard.py b/watcher/tests/decision_engine/audit/test_automation_guard.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..351860b5e30006aab948a783e97008eeeae06907
+--- /dev/null
++++ b/watcher/tests/decision_engine/audit/test_automation_guard.py
+@@ -0,0 +1,356 @@
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++"""Guarded automation through Watcher audit/planner/database boundaries."""
++from unittest import mock
++import uuid
++
++from oslo_config import cfg
++from oslo_utils import timeutils
++from powerops_watcher_guard import config as guard_config
++from powerops_watcher_guard.gate import Gate, GuardDenied
++
++from watcher.applier.action_plan import default as plan_handler
++from watcher.applier import default as applier
++from watcher.applier.workflow_engine import default as workflow
++from watcher.decision_engine.audit import continuous, oneshot
++from watcher.decision_engine.model.collector import nova
++from watcher.decision_engine.model import model_root
++from watcher import objects
++from watcher.tests.db import base
++from watcher.tests.objects import utils
++
++
++class TestAutomationGuard(base.DbTestCase):
++    def setUp(self):
++        super().setUp()
++        guard_config.register_opts(cfg.CONF)
++        self.config(enabled=True, group='watcher_automation_guard')
++        self.epoch = str(uuid.uuid4())
++        self.blocked = False
++        self.gate = self.patch(Gate, 'admit', side_effect=self.admit)
++        self.model = model_root.ModelRoot()
++        self.build = self.patch(nova.NovaClusterDataModelCollector, 'execute',
++                                return_value=self.model)
++        self.goal = utils.create_test_goal(self.context, name='dummy')
++        self.strategy = utils.create_test_strategy(self.context, name='dummy',
++                                                   goal_id=self.goal.id)
++        self.audit = utils.create_test_audit(
++            self.context, goal_id=self.goal.id, strategy_id=self.strategy.id,
++            audit_type='CONTINUOUS', hostname=cfg.CONF.host,
++            next_run_time=timeutils.utcnow(), auto_trigger=True)
++        self.rpc = self.patch(
++            continuous.ContinuousAuditHandler().applier_client,
++            'launch_action_plan')
++
++    def patch(self, obj, name, **kwargs):
++        patcher = mock.patch.object(obj, name, **kwargs)
++        value = patcher.start()
++        self.addCleanup(patcher.stop)
++        return value
++
++    def admit(self, expected_epoch=None):
++        if self.blocked or (expected_epoch and expected_epoch != self.epoch):
++            raise GuardDenied('blocked or stale')
++        return self.epoch
++
++    def plans(self):
++        return objects.ActionPlan.list(self.context)
++
++    def tick(self):
++        continuous.ContinuousAuditHandler.execute_audit(
++            self.audit, self.context)
++        self.audit.refresh()
++
++    def test_blocked_tick_preserves_state_and_advances_time(self):
++        before = self.audit.next_run_time
++        self.blocked = True
++        self.tick()
++        self.assertEqual('PENDING', self.audit.state)
++        self.assertGreater(self.audit.next_run_time, before)
++        self.assertEqual([], self.plans())
++        self.assertEqual(0, self.build.call_count)
++        self.rpc.assert_not_called()
++
++    def test_scheduled_plan_roundtrip_and_manual_provenance(self):
++        self.tick()
++        self.assertEqual(self.epoch, self.plans()[0].automation_epoch)
++        plan = self.plans()[0]
++        self.audit.audit_type = 'ONESHOT'
++        self.audit.save()
++        self.blocked = True
++        self.run_plan(plan)
++        self.assertEqual('FAILED', objects.ActionPlan.get_by_uuid(
++            self.context, plan.uuid).state)
++
++    def run_plan(self, plan):
++        with mock.patch.object(applier.DefaultApplier, 'execute') as execute:
++            plan_handler.DefaultActionPlanHandler(
++                self.context, mock.Mock(), plan.uuid).execute()
++            execute.assert_not_called()
++
++    def test_failure_during_refresh_retries_without_failed_audit(self):
++        self.build.side_effect = RuntimeError('Nova unavailable')
++        self.tick()
++        self.assertNotEqual('FAILED', self.audit.state)
++        self.assertEqual([], self.plans())
++        self.build.side_effect = None
++        self.tick()
++        self.assertEqual(1, len(self.plans()))
++
++    def test_refresh_once_per_epoch_and_again_after_resume(self):
++        self.tick()
++        self.tick()
++        self.assertEqual(1, self.build.call_count)
++        self.epoch = str(uuid.uuid4())
++        self.tick()
++        self.assertEqual(2, self.build.call_count)
++
++    def test_hold_during_model_build_prevents_plan_and_launch(self):
++        def build():
++            self.blocked = True
++            return self.model
++        self.build.side_effect = build
++        self.tick()
++        self.assertEqual([], self.plans())
++        self.rpc.assert_not_called()
++        self.assertNotEqual('FAILED', self.audit.state)
++
++    def test_legacy_plan_is_denied(self):
++        plan = utils.create_test_action_plan(
++            self.context, state='RECOMMENDED')
++        self.run_plan(plan)
++        plan.refresh()
++        self.assertEqual('FAILED', plan.state)
++
++    def test_new_manual_plan_works_during_hold(self):
++        self.audit.audit_type = 'ONESHOT'
++        self.audit.save()
++        self.blocked = True
++        oneshot.OneShotAuditHandler().execute(self.audit, self.context)
++        plan = self.plans()[0]
++        self.assertEqual('manual', plan.automation_epoch)
++        with mock.patch.object(applier.DefaultApplier, 'execute') as execute:
++            plan_handler.DefaultActionPlanHandler(
++                self.context, mock.Mock(), plan.uuid).execute()
++            execute.assert_called_once_with(plan.uuid)
++
++    def test_next_action_and_rollback_denied_after_resume(self):
++        self.tick()
++        plan = self.plans()[0]
++        action = objects.Action.list(self.context)[0]
++        engine = workflow.DefaultWorkFlowEngine(mock.Mock(), self.context)
++        container = workflow.TaskFlowActionContainer(action, engine)
++        # Nop is a real action; its external effect is logging its message.
++        container.do_execute()
++        action.refresh()
++        self.assertEqual('SUCCEEDED', action.state)
++        self.epoch = str(uuid.uuid4())
++        self.config(rollback_when_actionplan_failed=True,
++                    group='watcher_applier')
++        with mock.patch.object(container.action, 'execute') as execute, \
++                mock.patch.object(container.action, 'revert') as revert:
++            self.assertRaises(GuardDenied, container.do_execute)
++            container.do_revert()
++            execute.assert_not_called()
++            revert.assert_not_called()
++        plan.refresh()
++        self.assertNotIn(plan.state, ('CANCELLED', 'CANCELLING'))
++
++    def test_hold_after_calculation_prevents_launch(self):
++        from watcher.decision_engine.strategy.strategies import dummy_strategy
++        original = dummy_strategy.DummyStrategy.do_execute
++
++        def calculation(strategy, audit=None):
++            original(strategy, audit=audit)
++            self.blocked = True
++
++        with mock.patch.object(dummy_strategy.DummyStrategy, 'do_execute',
++                               calculation):
++            self.tick()
++        self.assertEqual([], self.plans())
++        self.rpc.assert_not_called()
++        self.assertNotEqual('FAILED', self.audit.state)
++
++    def test_overlapping_audits_keep_captured_epochs(self):
++        from watcher.decision_engine.strategy.strategies import dummy_strategy
++        original = dummy_strategy.DummyStrategy.do_execute
++        first_epoch = self.epoch
++        other = utils.create_test_audit(
++            self.context, uuid=str(uuid.uuid4()), name='other',
++            goal_id=self.goal.id, strategy_id=self.strategy.id,
++            audit_type='CONTINUOUS', hostname=cfg.CONF.host, auto_trigger=True)
++
++        def calculation(strategy, audit=None):
++            original(strategy, audit=audit)
++            if audit.uuid == self.audit.uuid:
++                self.epoch = str(uuid.uuid4())
++                continuous.ContinuousAuditHandler().execute(
++                    other, self.context)
++
++        with mock.patch.object(dummy_strategy.DummyStrategy, 'do_execute',
++                               calculation):
++            self.tick()
++        plans = self.plans()
++        self.assertEqual(1, len(plans))
++        self.assertEqual(other.id, plans[0].audit_id)
++        self.assertEqual(self.epoch, plans[0].automation_epoch)
++        self.assertNotEqual(first_epoch, plans[0].automation_epoch)
++        self.rpc.assert_called_once_with(self.context, plans[0].uuid)
++
++    def test_unknown_provenance_cannot_execute_or_rollback(self):
++        from watcher.applier.actions import nop
++        for value in (None, 'bogus', ''):
++            plan = utils.create_test_action_plan(
++                self.context, uuid=str(uuid.uuid4()), automation_epoch=value)
++            action = utils.create_test_action(
++                self.context, uuid=str(uuid.uuid4()), action_plan_id=plan.id,
++                action_type='nop', input_parameters={'message': 'forbidden'})
++            container = workflow.TaskFlowActionContainer(
++                action, workflow.DefaultWorkFlowEngine(
++                    mock.Mock(), self.context))
++            self.config(rollback_when_actionplan_failed=True,
++                        group='watcher_applier')
++            with mock.patch.object(nop.LOG, 'debug') as log:
++                self.assertRaises(GuardDenied, container.do_execute)
++                container.do_revert()
++                log.assert_not_called()
++
++    def test_disabled_plan_remains_unclassified(self):
++        self.config(enabled=False, group='watcher_automation_guard')
++        self.audit.audit_type = 'ONESHOT'
++        self.audit.save()
++        self.blocked = True
++        oneshot.OneShotAuditHandler().execute(self.audit, self.context)
++        self.assertIsNone(self.plans()[0].automation_epoch)
++        self.gate.assert_not_called()
++
++    def test_stale_refresh_is_retryable(self):
++        self.model.stale = True
++        self.tick()
++        self.assertEqual([], self.plans())
++        self.build.return_value = model_root.ModelRoot()
++        self.tick()
++        self.assertEqual(1, len(self.plans()))
++        self.assertEqual(2, self.build.call_count)
++
++    def test_running_migration_finishes_next_migration_is_blocked(self):
++        from watcher.common import nova_helper
++        plan = utils.create_test_action_plan(
++            self.context, state='RECOMMENDED', automation_epoch=self.epoch)
++        parameters = {'migration_type': 'live', 'source_node': 'source',
++                      'destination_node': 'destination',
++                      'resource_id': str(uuid.uuid4())}
++        first = utils.create_test_action(
++            self.context, uuid=str(uuid.uuid4()), action_plan_id=plan.id,
++            action_type='migrate', input_parameters=parameters,
++            state='PENDING', parents=[])
++        second = utils.create_test_action(
++            self.context, uuid=str(uuid.uuid4()), action_plan_id=plan.id,
++            action_type='migrate', input_parameters=parameters,
++            state='PENDING', parents=[first.uuid])
++        self.config(rollback_when_actionplan_failed=True,
++                    group='watcher_applier')
++
++        def migrate(**kwargs):
++            self.blocked = True
++            return True
++
++        with mock.patch.object(nova_helper.NovaHelper, 'find_instance',
++                               return_value=object()), \
++                mock.patch.object(nova_helper.NovaHelper,
++                                  'live_migrate_instance',
++                                  side_effect=migrate) as migrations, \
++                mock.patch.object(nova_helper.NovaHelper,
++                                  'abort_live_migrate') as abort:
++            plan_handler.DefaultActionPlanHandler(
++                self.context, mock.Mock(), plan.uuid).execute()
++            first.refresh()
++            second.refresh()
++            plan.refresh()
++            self.assertEqual('SUCCEEDED', first.state)
++            self.assertEqual('FAILED', second.state)
++            self.assertEqual('FAILED', plan.state)
++            # Explicitly exercise TaskFlow's rollback wrapper as well: default
++            # upstream swallows task errors and may not request a revert.
++            container = workflow.TaskFlowActionContainer(
++                first, workflow.DefaultWorkFlowEngine(
++                    mock.Mock(), self.context))
++            container.revert()
++            migrations.assert_called_once_with(
++                instance_id=parameters['resource_id'],
++                dest_hostname='destination')
++            abort.assert_not_called()
++
++    def test_all_builtin_planners_stamp_before_create(self):
++        from watcher.decision_engine.loading import default
++        from watcher.decision_engine.solution import default as solution_module
++        from watcher.decision_engine.strategy.strategies import dummy_strategy
++        strategy = dummy_strategy.DummyStrategy(mock.Mock())
++        solution = solution_module.DefaultSolution(
++            goal=strategy.goal, strategy=strategy)
++        solution.compute_global_efficacy()
++        for name in ('weight', 'node_resource_consolidation',
++                     'workload_stabilization'):
++            planner = default.DefaultPlannerLoader().load(name)
++            plan = planner.schedule(self.context, self.audit.id, solution,
++                                    automation_epoch=self.epoch)
++            plan.refresh()
++            self.assertEqual(self.epoch, plan.automation_epoch)
++
++    def test_scope_api_refresh_failure_is_retryable(self):
++        from watcher.common import nova_helper
++        self.audit.scope = [{'compute': [{'host_aggregates': [{'id': 1}]}]}]
++        self.audit.save()
++        with mock.patch.object(
++                nova_helper.NovaHelper, 'get_aggregate_list',
++                side_effect=RuntimeError('Nova unavailable')) as api:
++            self.tick()
++            api.assert_called_once_with()
++        self.assertNotEqual('FAILED', self.audit.state)
++        self.assertEqual([], self.plans())
++        self.rpc.assert_not_called()
++
++    def test_only_required_collector_is_refreshed(self):
++        from watcher.decision_engine.model.collector import cinder
++        from watcher.decision_engine.model.collector import ironic
++        with mock.patch.object(cinder.CinderClusterDataModelCollector,
++                               'execute') as storage, \
++                mock.patch.object(ironic.BaremetalClusterDataModelCollector,
++                                  'execute') as baremetal:
++            self.tick()
++        self.assertEqual(1, len(self.plans()))
++        self.assertEqual(1, self.build.call_count)
++        storage.assert_not_called()
++        baremetal.assert_not_called()
++
++    def test_event_plan_is_manual_during_hold(self):
++        from watcher.decision_engine.audit import event
++        self.audit.audit_type = 'EVENT'
++        self.audit.save()
++        self.blocked = True
++        event.EventAuditHandler().execute(self.audit, self.context)
++        self.audit.refresh()
++        self.assertEqual('SUCCEEDED', self.audit.state)
++        self.assertEqual('manual', self.plans()[0].automation_epoch)
++        self.gate.assert_not_called()
++
++    def test_guarded_scheduler_overrides_catchup_default(self):
++        from watcher.common import scheduling
++        handler = continuous.ContinuousAuditHandler()
++        handler._audit_scheduler = scheduling.BackgroundSchedulerService(
++            job_defaults={'coalesce': False})
++        handler._add_job('interval', self.audit, self.context,
++                         seconds=3600, next_run_time=timeutils.utcnow())
++        jobs = handler.scheduler.get_jobs()
++        self.assertEqual(1, len(jobs))
++        self.assertTrue(getattr(jobs[0], 'coalesce', False))
+diff --git a/watcher/tests/objects/test_objects.py b/watcher/tests/objects/test_objects.py
+index 5b65c411e753d70c41a6a11ac63baa1d6aaa39c0..b31303d260761b42cba6369240ee601a023176d5 100644
+--- a/watcher/tests/objects/test_objects.py
++++ b/watcher/tests/objects/test_objects.py
+@@ -411,7 +411,7 @@ expected_object_fingerprints = {
+     'Strategy': '1.1-73f164491bdd4c034f48083a51bdeb7b',
+     'AuditTemplate': '1.1-b291973ffc5efa2c61b24fe34fdccc0b',
+     'Audit': '1.7-19bc991c0b048263df021a36c8624f4d',
+-    'ActionPlan': '2.2-3331270cb3666c93408934826d03c08d',
++    'ActionPlan': '2.3-18cfda86fa3e2f874b5c633d5e6fa4fa',
+     'Action': '2.0-1dd4959a7e7ac30c62ef170fe08dd935',
+     'EfficacyIndicator': '1.0-655b71234a82bc7478aff964639c4bb0',
+     'ScoringEngine': '1.0-4abbe833544000728e17bd9e83f97576',
+-- 
+2.49.0
+

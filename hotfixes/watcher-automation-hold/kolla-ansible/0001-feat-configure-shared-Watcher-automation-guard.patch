@@ -1,0 +1,646 @@
+From ae68c256ca91332723fa4ad664c54e33dcbe9d35 Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Sun, 13 Sep 2026 14:18:06 +0300
+Subject: [PATCH 1/2] feat: configure shared Watcher automation guard
+
+
+diff --git a/ansible/group_vars/all.yml b/ansible/group_vars/all.yml
+index ce0f7c63b95fdc18f96d38c812bb9696ea67e4e1..3c54caa805ec9921ba4cc082c0d1aae46a7d6c0d 100644
+--- a/ansible/group_vars/all.yml
++++ b/ansible/group_vars/all.yml
+@@ -1219,6 +1219,19 @@ enable_zun: "no"
+ ####################
+ enable_powerops: "no"
+ 
++# Shared durable gate between Masakari host recovery and scheduled Watcher
++# automation. Enable only after both patched services and the gate state are
++# deployed and initialized together.
++watcher_automation_guard_enabled: "no"
++watcher_automation_guard_default_endpoint: >-
++  {{ 'https' if internal_protocol == 'https' else 'http' }}://{{ kolla_internal_fqdn }}:{{ etcd_client_port }}
++watcher_automation_guard_endpoint: "{{ watcher_automation_guard_default_endpoint }}"
++watcher_automation_guard_prefix: "/powerops/watcher-automation/v1"
++watcher_automation_guard_timeout: 5.0
++watcher_automation_guard_ca_file: "{{ openstack_cacert }}"
++watcher_automation_guard_cert_file: ""
++watcher_automation_guard_key_file: ""
++
+ powerops_coordination_url: >-
+   etcd3+{{ internal_protocol }}://{{ kolla_internal_fqdn }}:{{ etcd_client_port }}?api_version=v3{% if openstack_cacert %}&ca_cert={{ openstack_cacert }}{% endif %}
+ powerops_host_lock_timeout: 30
+@@ -1240,6 +1253,8 @@ powerops_allowed_user_names:
+ 
+ powerops_masakari_engine_image: ""
+ powerops_masakari_engine_tag: ""
++powerops_masakari_api_image: ""
++powerops_masakari_api_tag: ""
+ powerops_mistral_api_image: ""
+ powerops_mistral_api_tag: ""
+ powerops_mistral_engine_image: ""
+diff --git a/ansible/roles/masakari/defaults/main.yml b/ansible/roles/masakari/defaults/main.yml
+index e6207cf217d7d649e32247097b1b151aad3aba61..960ca9ee89ff38f088e7baff8e86a50da2a3790e 100644
+--- a/ansible/roles/masakari/defaults/main.yml
++++ b/ansible/roles/masakari/defaults/main.yml
+@@ -4,7 +4,10 @@ masakari_services:
+     container_name: masakari_api
+     group: masakari-api
+     enabled: true
+-    image: "{{ masakari_api_image_full }}"
++    image: >-
++      {{ powerops_masakari_api_image ~ ':' ~ powerops_masakari_api_tag
++         if watcher_automation_guard_enabled | bool
++         else masakari_api_image_full }}
+     volumes: "{{ masakari_api_default_volumes + masakari_api_extra_volumes }}"
+     dimensions: "{{ masakari_api_dimensions }}"
+     haproxy:
+diff --git a/ansible/roles/masakari/tasks/precheck.yml b/ansible/roles/masakari/tasks/precheck.yml
+index 5afa541cb14cb58dafd74c9c26e8ffe327c5e8dd..fec7e52532a0e2f71e6787d558083130ffba314a 100644
+--- a/ansible/roles/masakari/tasks/precheck.yml
++++ b/ansible/roles/masakari/tasks/precheck.yml
+@@ -1,4 +1,7 @@
+ ---
++- import_role:
++    name: watcher-automation-guard
++
+ - name: Validate PowerOps service and coordination dependencies
+   ansible.builtin.assert:
+     that:
+diff --git a/ansible/roles/masakari/templates/masakari.conf.j2 b/ansible/roles/masakari/templates/masakari.conf.j2
+index e00364e240f53150f60d5dd153bce4a6af9adc2b..913584d701f7b4d38bd9526fdbd137b3a3c8ea29 100644
+--- a/ansible/roles/masakari/templates/masakari.conf.j2
++++ b/ansible/roles/masakari/templates/masakari.conf.j2
+@@ -84,6 +84,20 @@ policy_file = {{ masakari_policy_file }}
+ [taskflow]
+ connection = mysql+pymysql://{{ masakari_database_user }}:{{ masakari_database_password }}@{{ masakari_database_address }}/{{ masakari_database_name }}{% if mariadb_enable_mtls_backend | bool %}?ssl_ca={{ database_cacert }}&ssl_cert=/etc/masakari/certs/masakari-cert.pem&ssl_key=/etc/masakari/certs/masakari-key.pem&ssl_check_hostname=true{% endif %}
+ 
++[watcher_automation_guard]
++enabled = {{ watcher_automation_guard_enabled | bool | string | lower }}
++endpoint = {{ watcher_automation_guard_endpoint }}
++prefix = {{ watcher_automation_guard_prefix }}
++timeout = {{ watcher_automation_guard_timeout }}
++{% if watcher_automation_guard_ca_file | length > 0 %}
++ca_file = {{ watcher_automation_guard_ca_file }}
++{% endif %}
++{% if watcher_automation_guard_cert_file | length > 0 %}
++cert_file = {{ watcher_automation_guard_cert_file }}
++{% endif %}
++{% if watcher_automation_guard_key_file | length > 0 %}
++key_file = {{ watcher_automation_guard_key_file }}
++{% endif %}
+ 
+ {% if enable_powerops | bool %}
+ {% if service_name in ['masakari-api', 'masakari-engine'] %}
+diff --git a/ansible/roles/watcher-automation-guard/tasks/main.yml b/ansible/roles/watcher-automation-guard/tasks/main.yml
+new file mode 100644
+index 0000000000000000000000000000000000000000..96cef25a919255db67d798fd2add3ce383b2fbd1
+--- /dev/null
++++ b/ansible/roles/watcher-automation-guard/tasks/main.yml
+@@ -0,0 +1,64 @@
++---
++- name: Validate Watcher automation guard dependencies
++  ansible.builtin.assert:
++    that:
++      - enable_watcher | bool
++      - enable_masakari | bool
++      - enable_powerops | bool
++      - >-
++        enable_etcd | bool or
++        watcher_automation_guard_endpoint !=
++        watcher_automation_guard_default_endpoint
++      - watcher_automation_guard_endpoint is string
++      - >-
++        watcher_automation_guard_endpoint |
++        regex_search(
++          '^https?://(?:\[[0-9A-Fa-f:]+\]|[^\s:/?#]+):[0-9]+$'
++        ) is not none
++      - watcher_automation_guard_prefix is string
++      - >-
++        watcher_automation_guard_prefix |
++        regex_search(
++          '^/[^\s/](?:[^\s]*[^/])?$'
++        ) is not none
++      - watcher_automation_guard_prefix | regex_search('//') is none
++      - >-
++        watcher_automation_guard_prefix |
++        regex_search('(?:^|/)\.\.?($|/)') is none
++      - watcher_automation_guard_timeout is number
++      - watcher_automation_guard_timeout | float > 0
++      - watcher_automation_guard_ca_file is string
++      - watcher_automation_guard_cert_file is string
++      - watcher_automation_guard_key_file is string
++      - powerops_masakari_api_image is string
++      - powerops_masakari_api_image | trim | length > 0
++      - powerops_masakari_api_tag is string
++      - powerops_masakari_api_tag | trim | length > 0
++      - >-
++        (watcher_automation_guard_cert_file | length > 0) ==
++        (watcher_automation_guard_key_file | length > 0)
++      - >-
++        watcher_automation_guard_ca_file | length == 0 or
++        watcher_automation_guard_ca_file |
++        regex_search(
++          '^/(?:etc/pki|etc/ssl|var/lib/kolla/share/ca-certificates)/(?!.*\.\.)[^\s]+$'
++        ) is not none
++      - >-
++        watcher_automation_guard_cert_file | length == 0 or
++        watcher_automation_guard_cert_file |
++        regex_search(
++          '^/(?:etc/pki|etc/ssl|var/lib/kolla/share/ca-certificates)/(?!.*\.\.)[^\s]+$'
++        ) is not none
++      - >-
++        watcher_automation_guard_key_file | length == 0 or
++        watcher_automation_guard_key_file |
++        regex_search(
++          '^/(?:etc/pki|etc/ssl|var/lib/kolla/share/ca-certificates)/(?!.*\.\.)[^\s]+$'
++        ) is not none
++    fail_msg: >-
++      The Watcher automation guard requires Watcher, Masakari and PowerOps,
++      Kolla etcd or an explicit HTTP(S) etcd v3 endpoint, and valid shared
++      container TLS paths. Optional client certificate and key files must be
++      preprovisioned in every patched Masakari API/engine and Watcher image.
++      A non-empty patched Masakari API image and tag are mandatory.
++  when: watcher_automation_guard_enabled | bool
+diff --git a/ansible/roles/watcher/tasks/precheck.yml b/ansible/roles/watcher/tasks/precheck.yml
+index 9d7465d7031441f1bc493431590ab4bd706d832e..d1495bd6ab5a71a1bfd05217d152cfd2446fed4a 100644
+--- a/ansible/roles/watcher/tasks/precheck.yml
++++ b/ansible/roles/watcher/tasks/precheck.yml
+@@ -1,4 +1,7 @@
+ ---
++- import_role:
++    name: watcher-automation-guard
++
+ - import_role:
+     name: service-precheck
+   vars:
+diff --git a/ansible/roles/watcher/templates/watcher.conf.j2 b/ansible/roles/watcher/templates/watcher.conf.j2
+index 3ef3acba5ac1ebf0bfe9288ac776ed74aa135f11..e546bed5c2e32b7701c3ad7ff1b185b87855cc48 100644
+--- a/ansible/roles/watcher/templates/watcher.conf.j2
++++ b/ansible/roles/watcher/templates/watcher.conf.j2
+@@ -49,6 +49,21 @@ periodic_task_interval = {{ watcher_cdm_periodic_task_interval }}
+ coalesce = {{ watcher_audit_coalesce | bool | string | lower }}
+ misfire_grace_time = {{ watcher_audit_misfire_grace_time }}
+ 
++[watcher_automation_guard]
++enabled = {{ watcher_automation_guard_enabled | bool | string | lower }}
++endpoint = {{ watcher_automation_guard_endpoint }}
++prefix = {{ watcher_automation_guard_prefix }}
++timeout = {{ watcher_automation_guard_timeout }}
++{% if watcher_automation_guard_ca_file | length > 0 %}
++ca_file = {{ watcher_automation_guard_ca_file }}
++{% endif %}
++{% if watcher_automation_guard_cert_file | length > 0 %}
++cert_file = {{ watcher_automation_guard_cert_file }}
++{% endif %}
++{% if watcher_automation_guard_key_file | length > 0 %}
++key_file = {{ watcher_automation_guard_key_file }}
++{% endif %}
++
+ [database]
+ connection = mysql+pymysql://{{ watcher_database_user }}:{{ watcher_database_password }}@{{ watcher_database_address }}/{{ watcher_database_name }}{% if mariadb_enable_mtls_backend | bool %}?ssl_ca={{ database_cacert }}&ssl_cert=/etc/watcher/certs/watcher-cert.pem&ssl_key=/etc/watcher/certs/watcher-key.pem&ssl_check_hostname=true{% endif %}
+ 
+diff --git a/etc/kolla/globals.yml b/etc/kolla/globals.yml
+index b941052ae7b25d800640fb3d4a4a7f9e34605c05..96f3b2e312abf88db4cbaf1aae4f06ce1974fece 100644
+--- a/etc/kolla/globals.yml
++++ b/etc/kolla/globals.yml
+@@ -457,6 +457,18 @@ ironic_conductor_extra_volumes: []
+ ####################
+ #enable_powerops: "no"
+ 
++# Keep disabled until the patched Masakari API/engine and Watcher images are
++# deployed and the shared gate state has been initialized by the operator.
++#watcher_automation_guard_enabled: "no"
++#watcher_automation_guard_default_endpoint: >-
++#  {{ 'https' if internal_protocol == 'https' else 'http' }}://{{ kolla_internal_fqdn }}:{{ etcd_client_port }}
++#watcher_automation_guard_endpoint: "{{ watcher_automation_guard_default_endpoint }}"
++#watcher_automation_guard_prefix: "/powerops/watcher-automation/v1"
++#watcher_automation_guard_timeout: 5.0
++#watcher_automation_guard_ca_file: "{{ openstack_cacert }}"
++#watcher_automation_guard_cert_file: ""
++#watcher_automation_guard_key_file: ""
++
+ #powerops_coordination_url: >-
+ #  etcd3+{{ internal_protocol }}://{{ kolla_internal_fqdn }}:{{ etcd_client_port }}?api_version=v3{% if openstack_cacert %}&ca_cert={{ openstack_cacert }}{% endif %}
+ #powerops_host_lock_timeout: 30
+@@ -480,6 +492,8 @@ ironic_conductor_extra_volumes: []
+ # enabled. Empty examples intentionally prevent accidental image selection.
+ #powerops_masakari_engine_image: ""
+ #powerops_masakari_engine_tag: ""
++#powerops_masakari_api_image: ""
++#powerops_masakari_api_tag: ""
+ #powerops_mistral_api_image: ""
+ #powerops_mistral_api_tag: ""
+ #powerops_mistral_engine_image: ""
+diff --git a/kolla_ansible/tests/unit/test_powerops_configuration_contract.py b/kolla_ansible/tests/unit/test_powerops_configuration_contract.py
+index 69d95c56a36f408930450f2cabc7900ef819b1cc..ef805c9480c07b01ae8b4ea47d8767789d6b3398 100644
+--- a/kolla_ansible/tests/unit/test_powerops_configuration_contract.py
++++ b/kolla_ansible/tests/unit/test_powerops_configuration_contract.py
+@@ -29,6 +29,9 @@ GLOBAL_PRECHECK_MAIN = ROOT / "ansible/roles/prechecks/tasks/main.yml"
+ GLOBAL_POWEROPS_PRECHECK = (
+     ROOT / "ansible/roles/prechecks/tasks/powerops_checks.yml"
+ )
++SHARED_GUARD_PRECHECK = (
++    ROOT / "ansible/roles/watcher-automation-guard/tasks/main.yml"
++)
+ 
+ POWEROPS_TIMING_DEFAULTS = {
+     "powerops_host_lock_timeout": 30,
+@@ -44,6 +47,8 @@ POWEROPS_TIMING_DEFAULTS = {
+ }
+ 
+ POWEROPS_IMAGE_DEFAULTS = {
++    "powerops_masakari_api_image": "",
++    "powerops_masakari_api_tag": "",
+     "powerops_masakari_engine_image": "",
+     "powerops_masakari_engine_tag": "",
+     "powerops_mistral_api_image": "",
+@@ -73,6 +78,22 @@ POWEROPS_DEFAULTS = {
+     **POWEROPS_IMAGE_DEFAULTS,
+ }
+ 
++WATCHER_AUTOMATION_GUARD_DEFAULTS = {
++    "watcher_automation_guard_enabled": "no",
++    "watcher_automation_guard_default_endpoint": (
++        "{{ 'https' if internal_protocol == 'https' else 'http' }}://"
++        "{{ kolla_internal_fqdn }}:{{ etcd_client_port }}"
++    ),
++    "watcher_automation_guard_endpoint": (
++        "{{ watcher_automation_guard_default_endpoint }}"
++    ),
++    "watcher_automation_guard_prefix": "/powerops/watcher-automation/v1",
++    "watcher_automation_guard_timeout": 5.0,
++    "watcher_automation_guard_ca_file": "{{ openstack_cacert }}",
++    "watcher_automation_guard_cert_file": "",
++    "watcher_automation_guard_key_file": "",
++}
++
+ ROLE_PATHS = {
+     "masakari": {
+         "defaults": ROOT / "ansible/roles/masakari/defaults/main.yml",
+@@ -84,6 +105,11 @@ ROLE_PATHS = {
+     },
+ }
+ 
++GUARD_SERVICE_PRECHECKS = {
++    "masakari": ROOT / "ansible/roles/masakari/tasks/precheck.yml",
++    "watcher": ROOT / "ansible/roles/watcher/tasks/precheck.yml",
++}
++
+ PATCHED_SERVICES = {
+     "masakari": {
+         "masakari-engine": (
+@@ -159,6 +185,19 @@ def _powerops_assertion(role):
+     return matches[0]
+ 
+ 
++def _guard_assertion():
++    tasks = _load_yaml(SHARED_GUARD_PRECHECK)
++    matches = [
++        task for task in tasks
++        if task.get("name") == (
++            "Validate Watcher automation guard dependencies"
++        )
++    ]
++    if len(matches) != 1:
++        return None
++    return matches[0]
++
++
+ def _conditions_pass(conditions, variables):
+     templar = Templar(loader=DataLoader(), variables=variables)
+     with warnings.catch_warnings():
+@@ -187,6 +226,28 @@ def _assertion_outcome(task, variables):
+ 
+ class PowerOpsConfigurationContractTest(unittest.TestCase):
+ 
++    def test_watcher_automation_guard_defaults_are_exact_and_safe(self):
++        variables = _load_yaml(GROUP_VARS)
++        actual = {
++            name: variables.get(name)
++            for name in WATCHER_AUTOMATION_GUARD_DEFAULTS
++        }
++        self.assertEqual(WATCHER_AUTOMATION_GUARD_DEFAULTS, actual)
++
++        environment = _jinja_environment()
++        expression = variables["watcher_automation_guard_default_endpoint"]
++        for protocol, expected_scheme in (
++                ("http", "http"), ("https", "https"), ("ftp", "http")):
++            with self.subTest(protocol=protocol):
++                self.assertEqual(
++                    f"{expected_scheme}://controller.internal:2379",
++                    environment.from_string(expression).render(
++                        internal_protocol=protocol,
++                        kolla_internal_fqdn="controller.internal",
++                        etcd_client_port=2379,
++                    ),
++                )
++
+     def test_powerops_is_disabled_by_default(self):
+         variables = _load_yaml(GROUP_VARS)
+ 
+@@ -247,6 +308,8 @@ class PowerOpsConfigurationContractTest(unittest.TestCase):
+                 rf"(?m)^#{name}: \"\"$",
+                 f"{name} must not contain a concrete repository or tag",
+             )
++        for name in WATCHER_AUTOMATION_GUARD_DEFAULTS:
++            self.assertRegex(text, rf"(?m)^#{name}:")
+ 
+     def test_patched_images_are_selected_for_exact_service_scope(self):
+         environment = _jinja_environment()
+@@ -291,7 +354,6 @@ class PowerOpsConfigurationContractTest(unittest.TestCase):
+ 
+         self.assertEqual(
+             {
+-                "masakari-api": "{{ masakari_api_image_full }}",
+                 "masakari-instancemonitor": (
+                     "{{ masakari_monitors_image_full }}"
+                 ),
+@@ -303,7 +365,7 @@ class PowerOpsConfigurationContractTest(unittest.TestCase):
+             {
+                 service: values["image"]
+                 for service, values in masakari["masakari_services"].items()
+-                if service != "masakari-engine"
++                if service not in ("masakari-api", "masakari-engine")
+             },
+         )
+         self.assertEqual(
+@@ -311,6 +373,124 @@ class PowerOpsConfigurationContractTest(unittest.TestCase):
+             mistral["mistral_services"]["mistral-event-engine"]["image"],
+         )
+ 
++    def test_masakari_api_image_is_selected_only_for_enabled_guard(self):
++        defaults = _load_yaml(ROLE_PATHS["masakari"]["defaults"])
++        expression = defaults["masakari_services"]["masakari-api"]["image"]
++        environment = _jinja_environment()
++
++        self.assertEqual(
++            "upstream/masakari-api:2025.1",
++            environment.from_string(expression).render(
++                watcher_automation_guard_enabled="no",
++                enable_powerops="yes",
++                powerops_masakari_api_image="",
++                powerops_masakari_api_tag="",
++                masakari_api_image_full="upstream/masakari-api:2025.1",
++            ),
++        )
++        self.assertEqual(
++            "patched/masakari-api:guard",
++            environment.from_string(expression).render(
++                watcher_automation_guard_enabled="yes",
++                enable_powerops="yes",
++                powerops_masakari_api_image="patched/masakari-api",
++                powerops_masakari_api_tag="guard",
++                masakari_api_image_full="upstream/masakari-api:2025.1",
++            ),
++        )
++
++    def test_guard_prechecks_execute_real_ansible_conditions(self):
++        valid = {
++            "watcher_automation_guard_enabled": "yes",
++            "enable_watcher": "yes",
++            "enable_masakari": "yes",
++            "enable_powerops": "yes",
++            "enable_etcd": "yes",
++            "watcher_automation_guard_default_endpoint": (
++                "https://controller.internal:2379"
++            ),
++            "watcher_automation_guard_endpoint": (
++                "https://controller.internal:2379"
++            ),
++            "watcher_automation_guard_prefix": (
++                "/powerops/watcher-automation/v1"
++            ),
++            "watcher_automation_guard_timeout": 5.0,
++            "watcher_automation_guard_ca_file": (
++                "/etc/pki/tls/certs/ca-bundle.crt"
++            ),
++            "watcher_automation_guard_cert_file": "",
++            "watcher_automation_guard_key_file": "",
++            "powerops_masakari_api_image": "patched/masakari-api",
++            "powerops_masakari_api_tag": "guard",
++        }
++        invalid_cases = (
++            {"enable_watcher": "no"},
++            {"enable_masakari": "no"},
++            {"enable_powerops": "no"},
++            {"enable_etcd": "no"},
++            {"watcher_automation_guard_endpoint": "etcd3+http://etcd:2379"},
++            {"watcher_automation_guard_prefix": "relative"},
++            {"watcher_automation_guard_timeout": 0},
++            {"watcher_automation_guard_ca_file": "relative/ca.pem"},
++            {"watcher_automation_guard_cert_file": "/etc/ssl/client.crt"},
++            {"powerops_masakari_api_image": ""},
++            {"powerops_masakari_api_tag": ""},
++            {
++                "watcher_automation_guard_cert_file":
++                    "/etc/ssl/../client.crt",
++                "watcher_automation_guard_key_file": "/etc/ssl/client.key",
++            },
++        )
++
++        task = _guard_assertion()
++        self.assertIsNotNone(task)
++        self.assertEqual(
++            "watcher_automation_guard_enabled | bool",
++            task.get("when"),
++        )
++        self.assertEqual("passed", _assertion_outcome(task, valid))
++        self.assertEqual(
++            "skipped",
++            _assertion_outcome(
++                task,
++                {**valid, "watcher_automation_guard_enabled": "no"},
++            ),
++        )
++        for updates in invalid_cases:
++            with self.subTest(updates=updates):
++                self.assertEqual(
++                    "failed",
++                    _assertion_outcome(task, {**valid, **updates}),
++                )
++
++        dedicated = {
++            **valid,
++            "enable_etcd": "no",
++            "watcher_automation_guard_endpoint": (
++                "https://dedicated-etcd.internal:2379"
++            ),
++            "watcher_automation_guard_cert_file": (
++                "/etc/ssl/powerops/client.crt"
++            ),
++            "watcher_automation_guard_key_file": (
++                "/etc/ssl/powerops/client.key"
++            ),
++        }
++        self.assertEqual("passed", _assertion_outcome(task, dedicated))
++
++    def test_service_prechecks_import_one_shared_guard_contract(self):
++        expected = {"name": "watcher-automation-guard"}
++        for role in ("masakari", "watcher"):
++            tasks = _load_yaml(GUARD_SERVICE_PRECHECKS[role])
++            imports = [
++                task["import_role"]
++                for task in tasks
++                if ("import_role" in task
++                    and task["import_role"].get("name") == expected["name"])
++            ]
++            self.assertEqual([expected], imports)
++
+     def test_prechecks_are_guarded_and_cover_the_full_contract(self):
+         role_image_variables = {
+             "masakari": {
+diff --git a/kolla_ansible/tests/unit/test_powerops_templates.py b/kolla_ansible/tests/unit/test_powerops_templates.py
+index 1450405d88dba14ce50da991e03268472e62a8da..274edeaffd63683b9732719a1487e978a09b2b12 100644
+--- a/kolla_ansible/tests/unit/test_powerops_templates.py
++++ b/kolla_ansible/tests/unit/test_powerops_templates.py
+@@ -20,6 +20,7 @@ import jinja2
+ ROOT = Path(__file__).resolve().parents[3]
+ MASAKARI_TEMPLATE = "ansible/roles/masakari/templates/masakari.conf.j2"
+ MISTRAL_TEMPLATE = "ansible/roles/mistral/templates/mistral.conf.j2"
++WATCHER_TEMPLATE = "ansible/roles/watcher/templates/watcher.conf.j2"
+ 
+ PLAIN_ETCD_URL = (
+     "etcd3+http://controller.internal:2379?api_version=v3"
+@@ -134,6 +135,17 @@ def _common_variables():
+         **POWEROPS_VALUES,
+         "powerops_allowed_project_names": ["ops-project", "ha-project"],
+         "powerops_allowed_user_names": ["ops-user", "ha-user"],
++        "watcher_automation_guard_enabled": False,
++        "watcher_automation_guard_endpoint": (
++            "http://controller.internal:2379"
++        ),
++        "watcher_automation_guard_prefix": (
++            "/powerops/watcher-automation/v1"
++        ),
++        "watcher_automation_guard_timeout": 5.0,
++        "watcher_automation_guard_ca_file": "",
++        "watcher_automation_guard_cert_file": "",
++        "watcher_automation_guard_key_file": "",
+     }
+ 
+ 
+@@ -187,6 +199,38 @@ def _mistral_variables(service_name, enabled, ca_cert):
+     return variables
+ 
+ 
++def _watcher_variables(service_name):
++    variables = _common_variables()
++    variables.update({
++        "service_name": service_name,
++        "watcher_api_port": 9322,
++        "watcher_api_workers": 4,
++        "watcher_applier_prometheus_client_host": "prometheus.internal",
++        "watcher_cdm_periodic_task_interval": 300,
++        "watcher_database_address": "mariadb.internal:3306",
++        "watcher_database_name": "watcher",
++        "watcher_database_password": "database-secret",
++        "watcher_database_user": "watcher",
++        "watcher_datasources_list": "prometheus",
++        "watcher_enabled_notification_topics": [],
++        "watcher_keystone_memcache": False,
++        "watcher_keystone_password": "keystone-secret",
++        "watcher_keystone_user": "watcher",
++        "watcher_logging_debug": False,
++        "watcher_prometheus_client_cafile": "",
++        "watcher_prometheus_client_fqdn_label": "fqdn",
++        "watcher_prometheus_client_host": "prometheus.internal",
++        "watcher_prometheus_client_instance_uuid_label": "resource",
++        "watcher_prometheus_client_password": "",
++        "watcher_prometheus_client_port": 9090,
++        "watcher_prometheus_client_scheme": "http",
++        "watcher_prometheus_client_username": "",
++        "watcher_audit_coalesce": True,
++        "watcher_audit_misfire_grace_time": 60,
++    })
++    return variables
++
++
+ def _render(relative_path, variables):
+     return _environment().get_template(str(relative_path)).render(**variables)
+ 
+@@ -231,6 +275,7 @@ class MasakariPowerOpsTemplateTest(unittest.TestCase):
+                             ca_cert,
+                         )
+                         expected_sections = set(MASAKARI_BASE_SECTIONS)
++                        expected_sections.add("watcher_automation_guard")
+                         if service_name == "masakari-api":
+                             expected_sections.add("coordination")
+                         self.assertEqual(
+@@ -351,6 +396,75 @@ class MasakariPowerOpsTemplateTest(unittest.TestCase):
+                         self.assertNotIn("?ca_cert=", rendered)
+ 
+ 
++class WatcherAutomationGuardTemplateTest(unittest.TestCase):
++
++    def test_masakari_and_watcher_render_identical_guard_values(self):
++        expected = {
++            "enabled": "false",
++            "endpoint": "http://controller.internal:2379",
++            "prefix": "/powerops/watcher-automation/v1",
++            "timeout": "5.0",
++        }
++        rendered_sections = []
++
++        for service_name in ("masakari-api", "masakari-engine"):
++            variables = _masakari_variables(
++                service_name, False, "redis", "")
++            config = _parse(_render(MASAKARI_TEMPLATE, variables))
++            rendered_sections.append(dict(config["watcher_automation_guard"]))
++
++        for service_name in (
++                "watcher-api", "watcher-engine", "watcher-applier"):
++            config = _parse(_render(
++                WATCHER_TEMPLATE,
++                _watcher_variables(service_name),
++            ))
++            rendered_sections.append(dict(config["watcher_automation_guard"]))
++
++        self.assertEqual([expected] * 5, rendered_sections)
++
++    def test_optional_tls_paths_render_only_when_configured(self):
++        expected = {
++            "enabled": "true",
++            "endpoint": "https://etcd-ha.internal:2379",
++            "prefix": "/powerops/watcher-automation/v1",
++            "timeout": "7.5",
++            "ca_file": "/etc/pki/tls/certs/ca-bundle.crt",
++            "cert_file": "/etc/ssl/powerops/client.crt",
++            "key_file": "/etc/ssl/powerops/client.key",
++        }
++        masakari_variables = _masakari_variables(
++            "masakari-api", True, "etcd", "")
++        watcher_variables = _watcher_variables("watcher-engine")
++        for variables in (masakari_variables, watcher_variables):
++            variables.update({
++                "watcher_automation_guard_enabled": True,
++                "watcher_automation_guard_endpoint": (
++                    "https://etcd-ha.internal:2379"
++                ),
++                "watcher_automation_guard_timeout": 7.5,
++                "watcher_automation_guard_ca_file": (
++                    "/etc/pki/tls/certs/ca-bundle.crt"
++                ),
++                "watcher_automation_guard_cert_file": (
++                    "/etc/ssl/powerops/client.crt"
++                ),
++                "watcher_automation_guard_key_file": (
++                    "/etc/ssl/powerops/client.key"
++                ),
++            })
++
++        configs = (
++            _parse(_render(MASAKARI_TEMPLATE, masakari_variables)),
++            _parse(_render(WATCHER_TEMPLATE, watcher_variables)),
++        )
++        self.assertEqual(
++            [expected, expected],
++            [dict(config["watcher_automation_guard"])
++             for config in configs],
++        )
++
++
+ class MistralPowerOpsTemplateTest(unittest.TestCase):
+ 
+     def _render(self, service_name, enabled, ca_cert):
+-- 
+2.49.0
+
