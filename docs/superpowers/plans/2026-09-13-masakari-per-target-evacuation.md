@@ -176,7 +176,7 @@ self.assertLessEqual(observed_peak_process_submissions, 3)
 
 User clarification during Task4: assume normal configured images already include required patches and the wheel. Do not introduce new image/tag variables, overrides or mandatory image-content validation for this queue. Preserve pre-existing image behavior and the immutable Watcher prerequisite.
 
-- [ ] **RED:** render both actual service templates with enabled/disabled and optional TLS cases; execute real Ansible shared precheck conditions. Cover managed-etcd/PowerOps prerequisites, config limits, valid endpoint syntax/port/no-userinfo, TLS pair/path rules, and unchanged normal Nova image selection in both modes without new guard-specific image variables.
+- [x] **RED:** render both actual service templates with enabled/disabled and optional TLS cases; execute real Ansible shared precheck conditions. Cover managed-etcd/PowerOps prerequisites, config limits, valid endpoint syntax/port/no-userinfo, TLS pair/path rules, and unchanged normal Nova image selection in both modes without new guard-specific image variables.
 
 ```python
 self.assertEqual(nova_guard_options, masakari_guard_options)
@@ -185,10 +185,10 @@ self.assertEqual(legacy_nova_compute_image, disabled_rendered_image)
 self.assertEqual(legacy_nova_compute_image, enabled_rendered_image)
 ```
 
-- [ ] **GREEN:** add `powerops_evacuation_guard_enabled: "no"` and shared endpoint/prefix/timeout/max_parallel/cooldown/admission_timeout/poll_interval/submission_workers/TLS variables. Endpoint may reuse the existing etcd VIP computation; namespace remains independent of Watcher.
-- [ ] Leave existing `nova_compute_image_full` and image defaults unchanged in both modes. No new queue-specific image/tag variables or checks. Masakari continues using its existing image configuration. Shared role imported from effective Nova-cell and Masakari prechecks, requiring Nova/Masakari/PowerOps/managed etcd.
-- [ ] TLS follows preprovisioned container roots `/etc/pki/`, `/etc/ssl/`, `/var/lib/kolla/share/ca-certificates/`, no traversal and cert/key pair. Do not add arbitrary host mounts or infer actual file/image presence from syntax tests. Render group identically; no state initialize/resume in deploy/reconfigure.
-- [ ] Run covering config/template tests and existing powerops config tests; classify unchanged baseline warnings. Commit only component code/tests. Record exact optional/default paths and the user's patched-image assumption for Task5.
+- [x] **GREEN:** add `powerops_evacuation_guard_enabled: "no"` and shared endpoint/prefix/timeout/max_parallel/cooldown/admission_timeout/poll_interval/submission_workers/TLS variables. Endpoint may reuse the existing etcd VIP computation; namespace remains independent of Watcher.
+- [x] Leave existing `nova_compute_image_full` and image defaults unchanged in both modes. No new queue-specific image/tag variables or checks. Masakari continues using its existing image configuration. Shared role imported from effective Nova-cell and Masakari prechecks, requiring Nova/Masakari/PowerOps/managed etcd.
+- [x] TLS follows preprovisioned container roots `/etc/pki/`, `/etc/ssl/`, `/var/lib/kolla/share/ca-certificates/`, no traversal and cert/key pair. Do not add arbitrary host mounts or infer actual file/image presence from syntax tests. Render group identically; no state initialize/resume in deploy/reconfigure.
+- [x] Run covering config/template tests and existing powerops config tests; classify unchanged baseline warnings. Commit only component code/tests. Record exact optional/default paths and the user's patched-image assumption for Task5.
 
 ### Task 5: Deliver separate patches, wheel, operator guide and cross-process proof
 
