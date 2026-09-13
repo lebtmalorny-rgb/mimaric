@@ -462,14 +462,14 @@ class Guard:
             if not cursor.startswith(prefix):
                 raise GuardDenied('Invalid cursor namespace')
             start = cursor + '\0'
-        rows, more, revision = self._etcd.range(start, prefix_end(prefix), limit)
+        rows, more, read_revision = self._etcd.range(start, prefix_end(prefix), limit)
         records = []
-        for key, value, revision in rows:
+        for key, value, record_revision in rows:
             suffix = key[len(prefix):].split('/')
             if len(suffix) != 2 or suffix[0] not in ('intents', 'operations'):
                 raise GuardUnavailable('Invalid status key')
             kind = 'intent' if suffix[0] == 'intents' else 'operation'
-            records.append(self._validate(value, revision, kind, suffix[1]))
-        return {'revision': revision, 'configuration': configuration, 'configuration_matches':
+            records.append(self._validate(value, record_revision, kind, suffix[1]))
+        return {'revision': read_revision, 'configuration': configuration, 'configuration_matches':
                 configuration['max_parallel'] == self.max_parallel and configuration['cooldown'] == self.cooldown,
                 'records': records, 'cursor': rows[-1][0] if more else None}

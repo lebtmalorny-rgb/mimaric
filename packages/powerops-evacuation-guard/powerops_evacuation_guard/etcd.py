@@ -54,11 +54,11 @@ def number(value, name, minimum=0, strict=False):
     return float(value)
 
 
-def integer(value, minimum=1):
-    if (type(value) is int or isinstance(value, str) and len(value) <= 19
+def integer(value, minimum=1, maximum=2**63-1):
+    if (type(value) is int or isinstance(value, str) and len(value) <= len(str(maximum))
             and value.isascii() and value.isdecimal()):
         value = int(value)
-        if minimum <= value <= 2**63-1:
+        if minimum <= value <= maximum:
             return value
     raise GuardUnavailable('Invalid backend integer')
 
@@ -191,14 +191,30 @@ class Etcd:
         if (type(succeeded) is not bool or not isinstance(responses, list)
                 or len(responses) != len(expected)):
             raise GuardUnavailable('Invalid backend transaction outcome')
+        revision = self.revision(result)
         for request, response in zip(expected, responses):
             kind = next(iter(request)).replace('request_', 'response_')
             if (not isinstance(response, dict) or set(response) != {kind}
                     or not isinstance(response[kind], dict)):
                 raise GuardUnavailable('Invalid backend transaction operation')
-            if kind == 'response_delete_range' and integer(response[kind].get('deleted', '0'), 0) != 1:
+            payload = response[kind]
+            allowed = {'header', 'deleted'} if kind == 'response_delete_range' else {'header'}
+            if set(payload) - allowed:
+                raise GuardUnavailable('Unexpected backend transaction payload')
+            if 'header' in payload:
+                header = payload['header']
+                if (not isinstance(header, dict)
+                        or set(header) - {'revision', 'cluster_id', 'member_id', 'raft_term'}):
+                    raise GuardUnavailable('Invalid transaction operation header')
+                # Protobuf may omit the header or its default fields. Validate
+                # fields that are supplied without requiring cluster/member/term.
+                if 'revision' in header and integer(header['revision']) != revision:
+                    raise GuardUnavailable('Inconsistent transaction operation revision')
+                for field in ('cluster_id', 'member_id', 'raft_term'):
+                    if field in header:
+                        integer(header[field], 0, 2**64-1)
+            if kind == 'response_delete_range' and integer(payload.get('deleted', '0'), 0) != 1:
                 raise GuardUnavailable('Inconsistent claim deletion')
-        revision = self.revision(result)
         if succeeded and revision <= max((int(c.get('mod_revision', 0)) for c in compare), default=0):
             raise GuardUnavailable('Invalid committed revision')
         return succeeded, revision

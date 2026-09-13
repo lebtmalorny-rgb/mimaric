@@ -326,9 +326,12 @@ def test_reinitialization_does_not_reset_existing_claims(guard):
 def test_status_exposes_integer_read_revision(guard):
     initial = guard.configuration()['revision']
     register(guard, 1)
-    result = guard.status(limit=1)
+    older = register(guard, 2)
+    latest = guard.try_admit(uid(1), uid(301))
+    result = guard.status(limit=2)
     assert type(result.get('revision')) is int
-    assert result['revision'] > initial
+    assert result['revision'] >= latest['revision'] > older['revision'] > initial
+    assert [record['revision'] for record in result['records']] == [latest['revision'], older['revision']]
 
 
 @pytest.mark.parametrize('malformation', ['resolved_without_proof', 'submitting_with_resolution'])

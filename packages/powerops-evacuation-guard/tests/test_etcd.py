@@ -177,3 +177,74 @@ def test_semantically_malformed_payload_is_rejected(guard, backend, damage):
             guard.configuration()
         else:
             guard.get_operation(uid(1))
+
+
+@pytest.mark.parametrize('operation', ['admit', 'deny'])
+@pytest.mark.parametrize('damage', ['error', 'unexpected_field', 'header_type',
+    'header_error', 'header_revision', 'header_revision_mismatch', 'header_member_id'])
+def test_nested_transaction_corruption_never_returns_transition_authority(
+        guard, backend, monkeypatch, operation, damage):
+    """Break: trusting arbitrary response_put/delete dictionaries authorizes an untrusted outcome."""
+    if backend is None:
+        pytest.skip('Nested response corruption is injected at the offline HTTP boundary')
+    register(guard, 1)
+    original = backend.post
+
+    def corrupt(url, **kwargs):
+        result = original(url, **kwargs)
+        if url.endswith('/txn'):
+            kind = 'response_put' if operation == 'admit' else 'response_delete_range'
+            payload = next(r[kind] for r in result.body['responses'] if kind in r)
+            if damage == 'error':
+                payload['error'] = 'invalid transaction operation payload'
+            elif damage == 'unexpected_field':
+                payload['unexpected'] = {}
+            elif damage == 'header_type':
+                payload['header'] = []
+            elif damage == 'header_error':
+                payload['header']['error'] = 'invalid header'
+            elif damage == 'header_revision':
+                payload['header']['revision'] = True
+            elif damage == 'header_revision_mismatch':
+                payload['header']['revision'] = str(int(result.body['header']['revision']) - 1)
+            else:
+                payload['header']['member_id'] = '-1'
+        return result
+
+    monkeypatch.setattr('requests.post', corrupt)
+    with pytest.raises(GuardUnavailable):
+        if operation == 'admit':
+            guard.try_admit(uid(1), uid(301))
+        else:
+            guard.deny_waiting(uid(1), uid(301), 'waiting deadline')
+    # The server already committed: rejecting the response must not fabricate
+    # a rollback or let a second caller execute the migration.
+    assert guard.get_operation(uid(1))['state'] == ('RUNNING' if operation == 'admit' else 'DENIED')
+    from powerops_evacuation_guard import GuardDuplicate
+    with pytest.raises(GuardDuplicate):
+        guard.try_admit(uid(1), uid(301))
+
+
+@pytest.mark.parametrize('shape', ['revision_only', 'omitted_header', 'empty_header', 'uint64_defaults'])
+def test_valid_nested_gateway_protobuf_defaults_still_authorize_once(guard, backend, monkeypatch, shape):
+    if backend is None:
+        pytest.skip('Gateway default variants are injected at the offline HTTP boundary')
+    register(guard, 1)
+    original = backend.post
+
+    def shape_response(url, **kwargs):
+        result = original(url, **kwargs)
+        if url.endswith('/txn'):
+            for response in result.body['responses']:
+                payload = response['response_put']
+                if shape == 'omitted_header':
+                    payload.pop('header')
+                elif shape == 'empty_header':
+                    payload['header'] = {}
+                elif shape == 'uint64_defaults':
+                    payload['header'].update(cluster_id='0', member_id='9767282471509240863', raft_term='0')
+                # revision_only is the actual etcd3.5.21 response observed by root.
+        return result
+
+    monkeypatch.setattr('requests.post', shape_response)
+    assert guard.try_admit(uid(1), uid(301))['state'] == 'RUNNING'
