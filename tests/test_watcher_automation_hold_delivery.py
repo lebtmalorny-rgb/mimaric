@@ -84,7 +84,7 @@ class WatcherAutomationHoldDeliveryTests(unittest.TestCase):
         with self.assertRaisesRegex(tool.DeliveryError, 'SHA256 mismatch'):
             tool.verify_manifest(manifest)
 
-    def test_replay_checks_base_applies_patch_and_matches_final_tree(self):
+    def test_replay_matches_tree_without_storing_excluded_secret_blob(self):
         tool = load_tool()
         source = self.root / 'source'
         source.mkdir()
@@ -120,6 +120,17 @@ class WatcherAutomationHoldDeliveryTests(unittest.TestCase):
         self.assertEqual(final_tree, result['final_tree'])
         self.assertEqual('after\n', (output / 'kept').read_text())
         self.assertEqual('private\n', (output / 'excluded').read_text())
+        secret = b'private\n'
+        blob = hashlib.sha1(
+            b'blob ' + str(len(secret)).encode() + b'\0' + secret,
+            usedforsecurity=False,
+        ).hexdigest()
+        retained = subprocess.run(
+            ['git', '-C', str(output), 'cat-file', '-e', blob + '^{blob}'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertNotEqual(0, retained.returncode)
 
     def test_replay_checks_dependent_patches_in_order(self):
         tool = load_tool()

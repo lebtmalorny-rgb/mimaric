@@ -27,4 +27,5 @@ python3 tools/watcher_automation_hold_delivery.py replay \
 `0000-prerequisite-post-fence-nova-down.patch`; replay принимает уже
 подготовленное дерево базы `e7943db...`. Для Kolla-Ansible нужно сохранить четыре
 исходные ссылки из `required_symlinks`; `etc/kolla/passwords.yml` остаётся в
-рабочем каталоге, но исключается из сравниваемого Git tree и не поставляется.
+рабочем каталоге, но исключается уже из первоначального `git add`, не попадает в
+replay object database и не поставляется.

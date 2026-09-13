@@ -35,6 +35,37 @@ Ran 7 tests in 0.490s
 OK
 ```
 
+### Review fix: исключённый blob
+
+Независимый review заметил, что первая версия tool выполняла `git add -Af` до
+удаления excluded path из индекса. Файл отсутствовал в сравниваемом tree, но его
+blob оставался в disposable object database. Synthetic-secret regression
+сначала подтвердил дефект:
+
+```text
+/tmp/watcher-hold-venv/bin/python -m unittest \
+  tests.test_watcher_automation_hold_delivery.WatcherAutomationHoldDeliveryTests.test_replay_matches_tree_without_storing_excluded_secret_blob -v
+
+FAIL: 0 == 0
+Ran 1 test in 0.154s
+FAILED (failures=1)
+```
+
+Теперь каждый заранее проверенный относительный excluded path передаётся как
+отдельный literal exclude pathspec уже в первоначальный `git add`. Файл никогда
+не добавляется принудительно. Focused GREEN: `Ran 1 test in 0.144s; OK`;
+covering GREEN: `Ran 7 tests in 0.478s; OK`.
+
+Удалены только шесть `.git` каталогов старых Task4 replay outputs под
+`/tmp/watcher-hold-delivery-replay.EGaBlp/replayed-*` и
+`/tmp/watcher-hold-final-replay.VBG0kI/replayed-*`. Исходные/replayed файлы и
+excluded-файл сохранены; kit и component Git metadata не затрагивались. Новые
+outputs `replayed-safe-watcher`, `replayed-safe-masakari` и
+`replayed-safe-kolla` созданы из сохранённых clean bases. Все три base/final tree
+снова совпали с таблицей ниже. Для Kolla отдельная проверка без вывода содержимого
+или digest подтвердила: excluded-файл неизменён, отсутствует в индексе и его blob
+отсутствует в новой object database.
+
 ## Артефакты, replay и сборка
 
 ```text
@@ -55,7 +86,8 @@ Replay из чистых snapshot точных base commits, полученны�
 
 Четыре Kolla symlink после replay сохранили исходные targets. Неизменённый
 `etc/kolla/passwords.yml` исключён из сравниваемого индекса и не включён в
-комплект; его содержимое и digest в evidence не публикуются.
+комплект; он также не попадает в replay object database. Его содержимое и digest
+в evidence не публикуются.
 
 Wheel дважды собран из отдельных копий source следующей командой:
 

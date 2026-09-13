@@ -107,12 +107,13 @@ def _git(root, *args):
 
 def _index_tree(root, excluded_paths):
     _git(root, 'init', '-q')
-    _git(root, '-c', 'core.autocrlf=false', 'add', '-Af', '--', '.')
+    pathspecs = []
     for value in excluded_paths:
         path = pathlib.PurePosixPath(value)
         if path.is_absolute() or '..' in path.parts:
             raise DeliveryError(f'excluded path must be relative: {value!r}')
-        _git(root, 'rm', '--cached', '-q', '--ignore-unmatch', '--', value)
+        pathspecs.append(':(exclude,literal)' + value)
+    _git(root, '-c', 'core.autocrlf=false', 'add', '-Af', '--', '.', *pathspecs)
     return _git(root, 'write-tree')
 
 
