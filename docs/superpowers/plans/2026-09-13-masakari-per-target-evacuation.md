@@ -143,6 +143,8 @@ self.assertIn(VM3, other_target_recorded_spawn_uuids)
 
 **Consumes:** Task1 intent/read/observer protocol and Nova operation state from Task2. Preserve API2.53 and existing guest-state handling. Use old disabled path with GLOBAL_EVACUATION_LOCK exactly as before.
 
+Enabled guard requires `powerops.enabled=True` and a healthy source coordinator at runtime, matching Kolla prerequisites. Reject inconsistent enabled configuration before inventory/VM effects. Recheck a recovery's stop/failure condition after waiting for shared worker capacity so a previously blocked feeder cannot submit fresh work after that recovery failed.
+
 **Full inventory refinement (source-verified):** Existing `API.get_servers` calls `servers.list` without pagination; constrained python-novaclient18.9.0 returns only the first API page, and baseline Nova defaults `api.max_limit=1000`. For enabled new guard mode, retrieve every source-host page before building VMove inventory, using an optional backwards-compatible `all_pages=False` client argument and SDK `limit=-1` when true. Preserve the disabled invocation/behavior. Add a behavioral test through the real SDK pagination path with only HTTP transport faked, proving second-page VMs enter the recovery inventory. Do not claim a complete batch solely from an already truncated injected VMove list.
 
 - [ ] **RED:** multi-VM lists from several simultaneous notifications exercise a SINGLE process-wide bounded pool/semaphore, not independent limits per recovery. At least 12 VMs must all be processed; different target Nova fakes overlap while shared admission keeps same-target spawn serial. Failure stops new submission only for the affected recovery and waits for already-submitted workers. Test unrelated recovery progress and full source-coordinator lifetime.
@@ -183,7 +185,7 @@ self.assertEqual(legacy_nova_compute_image, disabled_rendered_image)
 
 ### Task 5: Deliver separate patches, wheel, operator guide and cross-process proof
 
-**Files:** Create `hotfixes/masakari-per-target-evacuation/` with three ordered component patch series, `manifest.json`, `EVIDENCE.md`, `package/*.whl`; create `docs/MASAKARI-PER-TARGET-EVACUATION.md`; extend kit README/SHA256SUMS and tests; extend reusable delivery verifier/replay with an optional explicit manifest argument or factor its general manifest handling without changing existing Watcher invocation/results. Add `tests/test_masakari_per_target_evacuation_{delivery,crossprocess}.py`.
+**Files:** Create `hotfixes/masakari-per-target-evacuation/` with three ordered component patch series, `manifest.json`, `EVIDENCE.md`, `package/*.whl`; create `docs/MASAKARI-PER-TARGET-EVACUATION.md`; extend kit README/SHA256SUMS and tests. Reuse the existing verifier/replay `--manifest` option (verified at `tools/watcher_automation_hold_delivery.py:214`); change general manifest handling only if the new delivery tests reveal a necessary gap, preserving existing Watcher invocation/results. Add `tests/test_masakari_per_target_evacuation_{delivery,crossprocess}.py`.
 
 **Consumes:** frozen Task1 package + Task2/3/4 component SHAs and base trees. Published Watcher payloads are unchanged prerequisites. New branch remains stacked on published c866d56; do not include original unrelated firewall design or private scratch.
 
