@@ -143,6 +143,8 @@ self.assertIn(VM3, other_target_recorded_spawn_uuids)
 
 **Consumes:** Task1 intent/read/observer protocol and Nova operation state from Task2. Preserve API2.53 and existing guest-state handling. Use old disabled path with GLOBAL_EVACUATION_LOCK exactly as before.
 
+**Full inventory refinement (source-verified):** Existing `API.get_servers` calls `servers.list` without pagination; constrained python-novaclient18.9.0 returns only the first API page, and baseline Nova defaults `api.max_limit=1000`. For enabled new guard mode, retrieve every source-host page before building VMove inventory, using an optional backwards-compatible `all_pages=False` client argument and SDK `limit=-1` when true. Preserve the disabled invocation/behavior. Add a behavioral test through the real SDK pagination path with only HTTP transport faked, proving second-page VMs enter the recovery inventory. Do not claim a complete batch solely from an already truncated injected VMove list.
+
 - [ ] **RED:** multi-VM lists from several simultaneous notifications exercise a SINGLE process-wide bounded pool/semaphore, not independent limits per recovery. At least 12 VMs must all be processed; different target Nova fakes overlap while shared admission keeps same-target spawn serial. Failure stops new submission only for the affected recovery and waits for already-submitted workers. Test unrelated recovery progress and full source-coordinator lifetime.
 
 ```python
