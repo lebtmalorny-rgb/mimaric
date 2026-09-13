@@ -10,7 +10,7 @@
 Core: `7aa25702654a3a7e545123c59a04009f85b30ac0`.
 Nova: `69730e9fc77f1e57ac1ba884bc2dd0c567e01a3a`.
 Masakari: `4e93865141f6113570ce80ac3e33f5bae836e3a6`.
-Kolla: `ac4d05465183572631a57c5c2fc0cc4fc348dc33` (обе новые commits).
+Kolla: `b6b66dfe883b98b9dc6b5dc702caa66eea9a7cdb` (три новых commits).
 Полные BASE..HEAD экспортированы `git format-patch`; исходные worktrees
 не изменялись. Точные SHA256 всех артефактов находятся в [manifest](manifest.json).
 
@@ -49,7 +49,7 @@ manifest/wheel/replay, immutable Watcher check PASS, один opt-in replay skip
 |---|---|---|
 | Nova | `efaa1afe1685ffae2032c46ea1d03b3723c73e6f` | `85d45af66afefeb0317eb42d1d235d28dc61dc90` |
 | Masakari | `f7eb2f799ba9db0ac44b01ca949c1070bd4b6f96` | `568c7daa3e71c85beb22be44252d90c310a98acf` |
-| Kolla | `d68e9dcf20ca05e2bea7fb07ab93e80aab40e2a2` | `f8c12755d41a469c910ee29ea3a37a90e999d5ce` |
+| Kolla | `d68e9dcf20ca05e2bea7fb07ab93e80aab40e2a2` | `f888c531b3d80f1ce2e6b2098933e7a098fb99aa` |
 
 Kolla `etc/kolla/passwords.yml` отсутствует в чистой replay-базе. Настоящий
 приватный файл не читался, не хешировался и не индексировался. Начальный Git
@@ -62,6 +62,16 @@ Wrong-base и no-overwrite отказывают без изменения вхо
 или копий прежней поставки не добавлено. SHA256SUMS покрывает точный набор
 patches, wheels, manifest и диагностических YAML без устаревшего фиксированного
 счётчика файлов.
+
+Финальная коррекция default endpoint добавляет только production-фильтр
+`put_address_in_context('url')` для новой evacuation-настройки. RED доказал,
+что оба IPv6 default под HTTP/HTTPS рендерились без скобок и отклонялись
+настоящим общим precheck; DNS и IPv4 проходили. После исправления все шесть
+вариантов рендерятся точно и проходят precheck. Обновлённый delivery содержит
+ровно шесть новых артефактов: wheel, патчи Nova/Masakari и три Kolla-патча.
+Точный replay всех трёх компонентов — 5 PASS; offline suite — 22 теста,
+19 PASS/3 opt-in SKIP; оба manifest verifier и все 17 записей SHA256SUMS
+прошли. Проверка неизменности прежнего Watcher payload осталась PASS.
 
 ## Composed proof и границы исполнения
 
@@ -119,8 +129,11 @@ Core после parser fix: offline 88 PASS/3 real-only SKIP; actual etcd
 Nova: 35 новых +73 существующих =108 PASS с реальным manager до внешнего virt
 boundary. Masakari: 20 новых +78 legacy +42 root native =140 distinct PASS,
 включая 24 ВМ, ограниченный process pool и настоящий SDK с fake HTTP transport.
-Kolla: 55 PowerOps tests PASS; затем scoped IPv6 fix 30 PASS. Эти неизменённые
-тяжёлые suites в delivery не повторялись.
+Kolla: 55 PowerOps tests PASS; затем два scoped IPv6 correction запуска по
+30 PASS. Финальный запуск рендерит DNS, IPv4 и IPv6 defaults под HTTP/HTTPS
+через production `put_address_in_context('url')` и передаёт каждый результат
+в настоящий общий Ansible precheck. Эти неизменённые тяжёлые suites в delivery
+не повторялись.
 
 Существующее предупреждение eventlet early-import в Nova runner и три baseline
 W503 в Kolla раскрыты ранее; это не чистый Linux runtime/lint результат.

@@ -1,0 +1,128 @@
+From b6b66dfe883b98b9dc6b5dc702caa66eea9a7cdb Mon Sep 17 00:00:00 2001
+From: Lebt <lebtmalorny@gmail.com>
+Date: Sun, 13 Sep 2026 21:58:58 +0300
+Subject: [PATCH 3/3] fix: format evacuation guard IPv6 default endpoint
+
+---
+ ansible/group_vars/all.yml                    |  2 +-
+ .../test_powerops_configuration_contract.py   | 68 ++++++++++++++-----
+ 2 files changed, 53 insertions(+), 17 deletions(-)
+
+diff --git a/ansible/group_vars/all.yml b/ansible/group_vars/all.yml
+index afc2b9d..b6a96c2 100644
+--- a/ansible/group_vars/all.yml
++++ b/ansible/group_vars/all.yml
+@@ -1237,7 +1237,7 @@ watcher_automation_guard_key_file: ""
+ # contain the coordinated patches and the evacuation guard package.
+ powerops_evacuation_guard_enabled: "no"
+ powerops_evacuation_guard_default_endpoint: >-
+-  {{ 'https' if internal_protocol == 'https' else 'http' }}://{{ kolla_internal_fqdn }}:{{ etcd_client_port }}
++  {{ 'https' if internal_protocol == 'https' else 'http' }}://{{ kolla_internal_fqdn | put_address_in_context('url') }}:{{ etcd_client_port }}
+ powerops_evacuation_guard_endpoint: "{{ powerops_evacuation_guard_default_endpoint }}"
+ powerops_evacuation_guard_prefix: "/powerops/evacuation/v1"
+ powerops_evacuation_guard_timeout: 5.0
+diff --git a/kolla_ansible/tests/unit/test_powerops_configuration_contract.py b/kolla_ansible/tests/unit/test_powerops_configuration_contract.py
+index 7a1ef91..10ca5c4 100644
+--- a/kolla_ansible/tests/unit/test_powerops_configuration_contract.py
++++ b/kolla_ansible/tests/unit/test_powerops_configuration_contract.py
+@@ -21,6 +21,8 @@ from ansible.template import Templar
+ import jinja2
+ import yaml
+ 
++from kolla_ansible.put_address_in_context import put_address_in_context
++
+ 
+ ROOT = Path(__file__).resolve().parents[3]
+ GROUP_VARS = ROOT / "ansible/group_vars/all.yml"
+@@ -101,7 +103,8 @@ POWEROPS_EVACUATION_GUARD_DEFAULTS = {
+     "powerops_evacuation_guard_enabled": "no",
+     "powerops_evacuation_guard_default_endpoint": (
+         "{{ 'https' if internal_protocol == 'https' else 'http' }}://"
+-        "{{ kolla_internal_fqdn }}:{{ etcd_client_port }}"
++        "{{ kolla_internal_fqdn | put_address_in_context('url') }}:"
++        "{{ etcd_client_port }}"
+     ),
+     "powerops_evacuation_guard_endpoint": (
+         "{{ powerops_evacuation_guard_default_endpoint }}"
+@@ -193,6 +196,7 @@ def _jinja_environment():
+     )
+     environment.filters.update({
+         "bool": _ansible_bool,
++        "put_address_in_context": put_address_in_context,
+     })
+     return environment
+ 
+@@ -279,23 +283,55 @@ class PowerOpsConfigurationContractTest(unittest.TestCase):
+         expression = variables[
+             "powerops_evacuation_guard_default_endpoint"]
+         environment = _jinja_environment()
+-        self.assertEqual(
+-            "http://controller.internal:2379",
+-            environment.from_string(expression).render(
+-                internal_protocol="http",
+-                kolla_internal_fqdn="controller.internal",
+-                etcd_client_port=2379,
+-            ),
+-        )
+-        self.assertEqual(
+-            "https://controller.internal:2379",
+-            environment.from_string(expression).render(
+-                internal_protocol="https",
+-                kolla_internal_fqdn="controller.internal",
+-                etcd_client_port=2379,
+-            ),
++        task = _evacuation_guard_assertion()
++        self.assertIsNotNone(task)
++        valid_precheck = {
++            "powerops_evacuation_guard_enabled": "yes",
++            "enable_nova": "yes",
++            "enable_masakari": "yes",
++            "enable_powerops": "yes",
++            "enable_etcd": "yes",
++            "powerops_evacuation_guard_prefix": "/powerops/evacuation/v1",
++            "powerops_evacuation_guard_timeout": 5.0,
++            "powerops_evacuation_guard_max_parallel": 3,
++            "powerops_evacuation_guard_cooldown": 5.0,
++            "powerops_evacuation_guard_admission_timeout": 3600.0,
++            "powerops_evacuation_guard_poll_interval": 1.0,
++            "powerops_evacuation_guard_submission_workers": 3,
++            "powerops_evacuation_guard_ca_file": "",
++            "powerops_evacuation_guard_cert_file": "",
++            "powerops_evacuation_guard_key_file": "",
++        }
++        cases = (
++            ("http", "controller.internal",
++             "http://controller.internal:2379"),
++            ("https", "controller.internal",
++             "https://controller.internal:2379"),
++            ("http", "192.0.2.1", "http://192.0.2.1:2379"),
++            ("https", "192.0.2.1", "https://192.0.2.1:2379"),
++            ("http", "2001:db8::1", "http://[2001:db8::1]:2379"),
++            ("https", "2001:db8::1", "https://[2001:db8::1]:2379"),
+         )
+ 
++        for protocol, address, expected in cases:
++            with self.subTest(protocol=protocol, address=address):
++                endpoint = environment.from_string(expression).render(
++                    internal_protocol=protocol,
++                    kolla_internal_fqdn=address,
++                    etcd_client_port=2379,
++                )
++                outcome = _assertion_outcome(
++                    task,
++                    {
++                        **valid_precheck,
++                        "powerops_evacuation_guard_endpoint": endpoint,
++                    },
++                )
++                self.assertEqual(
++                    (expected, "passed"),
++                    (endpoint, outcome),
++                )
++
+     def test_evacuation_guard_preserves_normal_nova_compute_image(self):
+         variables = _load_yaml(GROUP_VARS)
+         defaults = _load_yaml(
+-- 
+2.49.0
+

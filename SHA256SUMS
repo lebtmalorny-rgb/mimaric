@@ -1,6 +1,7 @@
-5d7b1f04c71c3c7cd77f0b01bea2436ac88c4bf55641ac887f72bd178eafa109  hotfixes/masakari-per-target-evacuation/kolla-ansible/0001-feat-configure-per-target-evacuation-guard.patch
-a7bcdf894c8a5ed9d6218545027fa28edd49a3ad7342b78c8560cd07bbc5f88b  hotfixes/masakari-per-target-evacuation/kolla-ansible/0002-fix-validate-evacuation-guard-IPv6-endpoints.patch
-01eda83e7f15e79ab4c9229ca465f0c510f01aabb64f24ab653eefb5784cf8bf  hotfixes/masakari-per-target-evacuation/manifest.json
+92577499a354e3dd40e71c1544c5dcb6215b5fd174ad56aa34c2f69cabd40b43  hotfixes/masakari-per-target-evacuation/kolla-ansible/0001-feat-configure-per-target-evacuation-guard.patch
+12aa3d7dd0709e93d41f1c4471b0753169d322e0ac1782ddcfd062d122927a86  hotfixes/masakari-per-target-evacuation/kolla-ansible/0002-fix-validate-evacuation-guard-IPv6-endpoints.patch
+fcfbd45d4b6602c97781b3bb55ba6601cde9c86455c47c691b550a41f70d3a20  hotfixes/masakari-per-target-evacuation/kolla-ansible/0003-fix-format-evacuation-guard-IPv6-default-endpoint.patch
+03841ff0c5b0de188af5f137078e146cd70e7356d0c605b4f8242ce4097f3b6e  hotfixes/masakari-per-target-evacuation/manifest.json
 fd00c9b1f18c44db3e76dae44eb4194781181ba4531cab0c59d9c9a570de7951  hotfixes/masakari-per-target-evacuation/masakari/0001-Add-durable-evacuation-intents-and-process-wide-Masa.patch
 955cb5760f08eab1223b88ec7201f53708fd5f69eac414f0de7329d0fb706ca4  hotfixes/masakari-per-target-evacuation/nova/0001-Guard-receiving-compute-evacuation-with-durable-per-.patch
 b38359c6c83e868f0fa0e63901a4c93043c13183735e81600996541a71b3544f  hotfixes/masakari-per-target-evacuation/package/powerops_evacuation_guard-0.1.0-py3-none-any.whl

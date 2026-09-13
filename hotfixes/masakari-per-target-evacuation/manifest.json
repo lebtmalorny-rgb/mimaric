@@ -68,17 +68,21 @@
     "kolla-ansible": {
       "base_commit": "3c8d0b9b04053855541fc33f5be91ab0541a6a77",
       "base_tree": "d68e9dcf20ca05e2bea7fb07ab93e80aab40e2a2",
-      "final_commit": "ac4d05465183572631a57c5c2fc0cc4fc348dc33",
-      "final_tree": "f8c12755d41a469c910ee29ea3a37a90e999d5ce",
+      "final_commit": "b6b66dfe883b98b9dc6b5dc702caa66eea9a7cdb",
+      "final_tree": "f888c531b3d80f1ce2e6b2098933e7a098fb99aa",
       "prerequisites": [],
       "patches": [
         {
           "path": "kolla-ansible/0001-feat-configure-per-target-evacuation-guard.patch",
-          "sha256": "5d7b1f04c71c3c7cd77f0b01bea2436ac88c4bf55641ac887f72bd178eafa109"
+          "sha256": "92577499a354e3dd40e71c1544c5dcb6215b5fd174ad56aa34c2f69cabd40b43"
         },
         {
           "path": "kolla-ansible/0002-fix-validate-evacuation-guard-IPv6-endpoints.patch",
-          "sha256": "a7bcdf894c8a5ed9d6218545027fa28edd49a3ad7342b78c8560cd07bbc5f88b"
+          "sha256": "12aa3d7dd0709e93d41f1c4471b0753169d322e0ac1782ddcfd062d122927a86"
+        },
+        {
+          "path": "kolla-ansible/0003-fix-format-evacuation-guard-IPv6-default-endpoint.patch",
+          "sha256": "fcfbd45d4b6602c97781b3bb55ba6601cde9c86455c47c691b550a41f70d3a20"
         }
       ],
       "excluded_paths": [

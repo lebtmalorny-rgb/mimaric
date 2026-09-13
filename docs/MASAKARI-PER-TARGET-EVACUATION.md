@@ -36,7 +36,7 @@ shasum -a 256 -c SHA256SUMS
 |---|---|---|
 | Nova stable/2025.1 | commit `ce37978276744e92d91251210a1d9c2784eea375`, tree `efaa1afe1685ffae2032c46ea1d03b3723c73e6f` | `85d45af66afefeb0317eb42d1d235d28dc61dc90` |
 | Masakari | commit `0c2fa56a36e71612e32bf50e174c465138d0c8fb`, tree `f7eb2f799ba9db0ac44b01ca949c1070bd4b6f96` | `568c7daa3e71c85beb22be44252d90c310a98acf` |
-| Kolla-Ansible | commit `3c8d0b9b04053855541fc33f5be91ab0541a6a77`, tree `d68e9dcf20ca05e2bea7fb07ab93e80aab40e2a2` | `f8c12755d41a469c910ee29ea3a37a90e999d5ce` |
+| Kolla-Ansible | commit `3c8d0b9b04053855541fc33f5be91ab0541a6a77`, tree `d68e9dcf20ca05e2bea7fb07ab93e80aab40e2a2` | `f888c531b3d80f1ce2e6b2098933e7a098fb99aa` |
 
 Для Nova подготовьте чистый checkout указанного commit. Для пользовательских
 архивов `0809` используйте их SHA256 из
@@ -54,7 +54,8 @@ shasum -a 256 -c SHA256SUMS
 4. На точных новых базах: Nova `nova/0001-Guard-receiving-compute-evacuation-with-durable-per-.patch`;
    Masakari `masakari/0001-Add-durable-evacuation-intents-and-process-wide-Masa.patch`;
    Kolla `kolla-ansible/0001-feat-configure-per-target-evacuation-guard.patch`, затем
-   `kolla-ansible/0002-fix-validate-evacuation-guard-IPv6-endpoints.patch`.
+   `kolla-ansible/0002-fix-validate-evacuation-guard-IPv6-endpoints.patch`, затем
+   `kolla-ansible/0003-fix-format-evacuation-guard-IPv6-default-endpoint.patch`.
    Пути этого пункта относительно `hotfixes/masakari-per-target-evacuation/`.
 
 У patch-архивов локальные commit IDs могут отличаться; точная проверка ведётся
@@ -111,9 +112,11 @@ powerops_evacuation_guard_submission_workers: 3
 ```
 
 `powerops_evacuation_guard_endpoint` по умолчанию использует общий Kolla VIP и
-порт etcd; явно заданный endpoint должен иметь вид `http(s)://host:port`
-с портом 1..65535, без логина/пароля, path/query/fragment. При IPv6 нужны
-валидные квадратные скобки. Один общий доступный всем endpoint, namespace,
+порт etcd. Kolla автоматически заключает IPv6 VIP в квадратные скобки как для
+HTTP, так и для HTTPS. Явно заданный endpoint должен иметь вид
+`http(s)://host:port` с портом 1..65535, без логина/пароля,
+path/query/fragment; для явного IPv6 endpoint нужны валидные квадратные скобки.
+Один общий доступный всем endpoint, namespace,
 `max_parallel` и `cooldown` обязательны; localhost каждого контейнера не является
 общим backend. etcd v3 JSON gateway и линейризуемые транзакции обязательны.
 

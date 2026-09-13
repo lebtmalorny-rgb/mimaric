@@ -16,7 +16,7 @@ PARENT = '1d3bd3255b3678347414578fd89dbd6f05430b19'
 TREES = {
     'nova': '85d45af66afefeb0317eb42d1d235d28dc61dc90',
     'masakari': '568c7daa3e71c85beb22be44252d90c310a98acf',
-    'kolla-ansible': 'f8c12755d41a469c910ee29ea3a37a90e999d5ce',
+    'kolla-ansible': 'f888c531b3d80f1ce2e6b2098933e7a098fb99aa',
 }
 
 
@@ -28,7 +28,8 @@ class EvacuationDeliveryTests(unittest.TestCase):
         predecessor, _ = load_tool().verify_manifest(old)
         self.assertEqual(sha256(old), data['dependency']['manifest_sha256'])
         self.assertEqual(set(TREES), set(data['components']))
-        self.assertEqual(5, len(entries))  # wheel + Nova + Masakari + two Kolla patches
+        # Wheel + Nova + Masakari + three ordered Kolla patches.
+        self.assertEqual(6, len(entries))
         for name, tree in TREES.items():
             component = data['components'][name]
             self.assertEqual(tree, component['final_tree'])
@@ -37,7 +38,7 @@ class EvacuationDeliveryTests(unittest.TestCase):
                 self.assertEqual(predecessor['components'][name]['final_tree'], component['base_tree'])
             for patch in component['patches']:
                 self.assertNotIn('..', Path(patch['path']).parts)
-        self.assertEqual(2, len(data['components']['kolla-ansible']['patches']))
+        self.assertEqual(3, len(data['components']['kolla-ansible']['patches']))
 
     def test_watcher_payload_and_source_bytes_unchanged(self):
         names = subprocess.check_output([
