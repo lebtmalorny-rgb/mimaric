@@ -1,0 +1,23 @@
+{
+  "scenario": "planned",
+  "region_name": "RegionOne",
+  "inventory": "/home/DVSokolov/.config/powerops-stand/inventory.ini",
+  "host": "ultra1-3.ultra1.test.pvs.un.sbt",
+  "inventory_host": "ultra1-3",
+  "node_uuid": "dc80b2db-c20f-4e6f-82d9-0f9d4a1b04ee",
+  "segment_uuid": "792c79ca-f5ea-4b75-bc71-36a26e6126a7",
+  "ha_host_uuid": "6fc141ab-a819-46ea-a122-110dc7af6df3",
+  "server_ids": [
+    "e09d747f-c114-4d1f-ab89-b3d2f5d43bda"
+  ],
+  "destination_hosts": [
+    "ultra1-2.ultra1.test.pvs.un.sbt"
+  ],
+  "libvirt": {
+    "backend": "docker",
+    "container": "nova_libvirt"
+  },
+  "timeout": 1800,
+  "poll_interval": 5,
+  "remote_python": "python3.9"
+}

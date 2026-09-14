@@ -335,7 +335,7 @@ def recover(run_id, root=ROOT, system=None):
 
 
 def dispatch(request, source):
-    if sys.platform != "linux" or os.geteuid() != 0:
+    if sys.version_info < (3, 11) or sys.platform != "linux" or os.geteuid() != 0:
         raise ValueError("target requires Linux, root and Python 3.11+")
     validate(request["fault"])
     action = request["action"]

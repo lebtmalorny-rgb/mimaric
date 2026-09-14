@@ -85,8 +85,7 @@ class Probe:
             page = self.get(service, path, **query)[collection]
             if not isinstance(page, list):
                 raise Incomplete('API collection is not a list')
-            if not page or len(page) < query['limit']:
-                result.extend(page)
+            if not page:
                 return result
             for item in page:
                 key = item[marker_key]

@@ -2,7 +2,6 @@
 .venv-stand/
 __pycache__/
 *.py[cod]
-artifacts/
 .coverage
 .pytest_cache/
 .DS_Store
