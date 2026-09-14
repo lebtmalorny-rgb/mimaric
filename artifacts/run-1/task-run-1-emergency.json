@@ -1,0 +1,24 @@
+{
+  "scenario": "emergency",
+  "region_name": "RegionOne",
+  "inventory": "<config-dir>/inventory.ini",
+  "host": "compute-03.local",
+  "inventory_host": "compute-03",
+  "duration": 300,
+  "node_uuid": "0000bbbb-bbbb-4bbb-8bbb-000000000001",
+  "segment_uuid": "0000dddd-dddd-4ddd-8ddd-000000000001",
+  "ha_host_uuid": "0000eeee-eeee-4eee-8eee-000000000001",
+  "server_ids": [
+    "0000aaaa-aaaa-4aaa-8aaa-000000000001"
+  ],
+  "destination_hosts": [
+    "compute-02.local"
+  ],
+  "libvirt": {
+    "backend": "docker",
+    "container": "nova_libvirt"
+  },
+  "timeout": 1800,
+  "poll_interval": 5,
+  "remote_python": "python3.9"
+}

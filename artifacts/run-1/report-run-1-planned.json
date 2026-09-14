@@ -1,0 +1,610 @@
+{
+  "binding": {
+    "identity": {
+      "endpoints": {
+        "baremetal": "https://baremetal.example.internal/v1",
+        "compute": "https://compute.example.internal/v2.1",
+        "instance-ha": "https://instance-ha.example.internal/v1",
+        "workflowv2": "https://workflow.example.internal/v2"
+      },
+      "project_id": "<project-id>",
+      "user_id": "<user-id>"
+    },
+    "run_id": "run-1-planned",
+    "task": {
+      "become": true,
+      "destination_hosts": [
+        "compute-02.local"
+      ],
+      "duration": 300,
+      "ha_host_uuid": "0000eeee-eeee-4eee-8eee-000000000001",
+      "host": "compute-03.local",
+      "input_sha256": {
+        "inventory": "a42303e68fd11791f07ce288050460698b3cb74928ccab77f845a31dd77def2b"
+      },
+      "interface": "enp3s0",
+      "inventory": "<config-dir>/inventory.ini",
+      "inventory_host": "compute-03",
+      "libvirt": {
+        "backend": "docker",
+        "container": "nova_libvirt"
+      },
+      "node_uuid": "0000bbbb-bbbb-4bbb-8bbb-000000000001",
+      "poll_interval": 5,
+      "region_name": "RegionOne",
+      "remote_python": "python3.9",
+      "scenario": "planned",
+      "segment_uuid": "0000dddd-dddd-4ddd-8ddd-000000000001",
+      "server_ids": [
+        "0000aaaa-aaaa-4aaa-8aaa-000000000001"
+      ],
+      "timeout": 1800
+    }
+  },
+  "deadlines": {
+    "inspection_gate": 1789392870.306248,
+    "off": 1789392733.388871,
+    "return_complete": 1789393034.3790543
+  },
+  "evidence": {
+    "baseline": {
+      "notification_ids": [
+        "33333333-3333-4333-8333-333333333333",
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222"
+      ],
+      "snapshot": {
+        "destinations": [
+          {
+            "binary": "nova-compute",
+            "host": "compute-02.local",
+            "id": "416c21b1-20f3-45f4-9e2c-e51ce0ab5fd6",
+            "state": "up",
+            "status": "enabled"
+          }
+        ],
+        "ha_host": {
+          "failover_segment_id": "0000dddd-dddd-4ddd-8ddd-000000000001",
+          "name": "compute-03.local",
+          "on_maintenance": false,
+          "uuid": "0000eeee-eeee-4eee-8eee-000000000001"
+        },
+        "migrations": [
+          {
+            "dest_compute": "compute-03.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "live-migration",
+            "source_compute": "compute-02.local",
+            "status": "completed",
+            "uuid": "99999999-9999-4999-8999-999999999999"
+          },
+          {
+            "dest_compute": "compute-02.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "evacuation",
+            "source_compute": "compute-03.local",
+            "status": "completed",
+            "uuid": "aaaaaaaa-0001-4aaa-8aaa-000000000001"
+          },
+          {
+            "dest_compute": "compute-03.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "live-migration",
+            "source_compute": "compute-02.local",
+            "status": "completed",
+            "uuid": "aaaaaaaa-0002-4aaa-8aaa-000000000001"
+          },
+          {
+            "dest_compute": "compute-02.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "evacuation",
+            "source_compute": "compute-03.local",
+            "status": "completed",
+            "uuid": "aaaaaaaa-0003-4aaa-8aaa-000000000001"
+          },
+          {
+            "dest_compute": "compute-03.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "live-migration",
+            "source_compute": "compute-02.local",
+            "status": "completed",
+            "uuid": "aaaaaaaa-0004-4aaa-8aaa-000000000001"
+          },
+          {
+            "dest_compute": "compute-02.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "live-migration",
+            "source_compute": "compute-03.local",
+            "status": "completed",
+            "uuid": "aaaaaaaa-0005-4aaa-8aaa-000000000001"
+          }
+        ],
+        "node": {
+          "last_error": null,
+          "maintenance": false,
+          "name": "compute-03.local",
+          "power_state": "power on",
+          "target_power_state": null,
+          "uuid": "0000bbbb-bbbb-4bbb-8bbb-000000000001"
+        },
+        "servers": [
+          {
+            "host": "compute-03.local",
+            "id": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "status": "ACTIVE",
+            "task_state": null
+          }
+        ],
+        "service": {
+          "binary": "nova-compute",
+          "host": "compute-03.local",
+          "id": "5830eeb8-e514-48a8-84fe-9ad242d08610",
+          "state": "up",
+          "status": "enabled"
+        },
+        "source_ids": [
+          "0000aaaa-aaaa-4aaa-8aaa-000000000001"
+        ]
+      },
+      "taken_at": 1789390920.0117054,
+      "target": {
+        "addresses": [
+          "10.0.0.147/24"
+        ],
+        "boot_id": "fb8d2da0-5b91-4922-98b5-32aa59b37bf7",
+        "domains": [
+          "0000aaaa-aaaa-4aaa-8aaa-000000000001"
+        ],
+        "interface": "enp3s0",
+        "mac": "b4:2e:99:4a:64:63",
+        "machine_id": "73003ce5f19d4b3b8a113e68f80d40c6",
+        "up": true
+      }
+    },
+    "final": {
+      "checked_at": 1789391291.3842945,
+      "snapshot": {
+        "destinations": [
+          {
+            "binary": "nova-compute",
+            "host": "compute-02.local",
+            "id": "416c21b1-20f3-45f4-9e2c-e51ce0ab5fd6",
+            "state": "up",
+            "status": "enabled"
+          }
+        ],
+        "ha_host": {
+          "failover_segment_id": "0000dddd-dddd-4ddd-8ddd-000000000001",
+          "name": "compute-03.local",
+          "on_maintenance": false,
+          "uuid": "0000eeee-eeee-4eee-8eee-000000000001"
+        },
+        "migrations": [
+          {
+            "dest_compute": "compute-02.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "live-migration",
+            "source_compute": "compute-03.local",
+            "status": "completed",
+            "uuid": "88888888-8888-4888-8888-888888888888"
+          },
+          {
+            "dest_compute": "compute-03.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "live-migration",
+            "source_compute": "compute-02.local",
+            "status": "completed",
+            "uuid": "99999999-9999-4999-8999-999999999999"
+          },
+          {
+            "dest_compute": "compute-02.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "evacuation",
+            "source_compute": "compute-03.local",
+            "status": "completed",
+            "uuid": "aaaaaaaa-0001-4aaa-8aaa-000000000001"
+          },
+          {
+            "dest_compute": "compute-03.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "live-migration",
+            "source_compute": "compute-02.local",
+            "status": "completed",
+            "uuid": "aaaaaaaa-0002-4aaa-8aaa-000000000001"
+          },
+          {
+            "dest_compute": "compute-02.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "evacuation",
+            "source_compute": "compute-03.local",
+            "status": "completed",
+            "uuid": "aaaaaaaa-0003-4aaa-8aaa-000000000001"
+          },
+          {
+            "dest_compute": "compute-03.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "live-migration",
+            "source_compute": "compute-02.local",
+            "status": "completed",
+            "uuid": "aaaaaaaa-0004-4aaa-8aaa-000000000001"
+          },
+          {
+            "dest_compute": "compute-02.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "live-migration",
+            "source_compute": "compute-03.local",
+            "status": "completed",
+            "uuid": "aaaaaaaa-0005-4aaa-8aaa-000000000001"
+          }
+        ],
+        "node": {
+          "last_error": null,
+          "maintenance": false,
+          "name": "compute-03.local",
+          "power_state": "power on",
+          "target_power_state": null,
+          "uuid": "0000bbbb-bbbb-4bbb-8bbb-000000000001"
+        },
+        "servers": [
+          {
+            "host": "compute-02.local",
+            "id": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "status": "ACTIVE",
+            "task_state": null
+          }
+        ],
+        "service": {
+          "binary": "nova-compute",
+          "host": "compute-03.local",
+          "id": "5830eeb8-e514-48a8-84fe-9ad242d08610",
+          "state": "up",
+          "status": "enabled"
+        },
+        "source_ids": []
+      },
+      "target": {
+        "addresses": [
+          "10.0.0.147/24"
+        ],
+        "boot_id": "ff2be79c-0666-408f-a309-fbdcf6bf379d",
+        "domains": [],
+        "interface": "enp3s0",
+        "mac": "b4:2e:99:4a:64:63",
+        "machine_id": "73003ce5f19d4b3b8a113e68f80d40c6",
+        "up": true
+      }
+    },
+    "inspection": {
+      "confirmed_at": 1789391233.803641,
+      "execution_id": "66666666-6666-4666-8666-666666666666",
+      "snapshot": {
+        "destinations": [
+          {
+            "binary": "nova-compute",
+            "host": "compute-02.local",
+            "id": "416c21b1-20f3-45f4-9e2c-e51ce0ab5fd6",
+            "state": "up",
+            "status": "enabled"
+          }
+        ],
+        "ha_host": {
+          "failover_segment_id": "0000dddd-dddd-4ddd-8ddd-000000000001",
+          "name": "compute-03.local",
+          "on_maintenance": true,
+          "uuid": "0000eeee-eeee-4eee-8eee-000000000001"
+        },
+        "migrations": [
+          {
+            "dest_compute": "compute-02.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "live-migration",
+            "source_compute": "compute-03.local",
+            "status": "completed",
+            "uuid": "88888888-8888-4888-8888-888888888888"
+          },
+          {
+            "dest_compute": "compute-03.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "live-migration",
+            "source_compute": "compute-02.local",
+            "status": "completed",
+            "uuid": "99999999-9999-4999-8999-999999999999"
+          },
+          {
+            "dest_compute": "compute-02.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "evacuation",
+            "source_compute": "compute-03.local",
+            "status": "completed",
+            "uuid": "aaaaaaaa-0001-4aaa-8aaa-000000000001"
+          },
+          {
+            "dest_compute": "compute-03.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "live-migration",
+            "source_compute": "compute-02.local",
+            "status": "completed",
+            "uuid": "aaaaaaaa-0002-4aaa-8aaa-000000000001"
+          },
+          {
+            "dest_compute": "compute-02.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "evacuation",
+            "source_compute": "compute-03.local",
+            "status": "completed",
+            "uuid": "aaaaaaaa-0003-4aaa-8aaa-000000000001"
+          },
+          {
+            "dest_compute": "compute-03.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "live-migration",
+            "source_compute": "compute-02.local",
+            "status": "completed",
+            "uuid": "aaaaaaaa-0004-4aaa-8aaa-000000000001"
+          },
+          {
+            "dest_compute": "compute-02.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "live-migration",
+            "source_compute": "compute-03.local",
+            "status": "completed",
+            "uuid": "aaaaaaaa-0005-4aaa-8aaa-000000000001"
+          }
+        ],
+        "node": {
+          "last_error": null,
+          "maintenance": false,
+          "name": "compute-03.local",
+          "power_state": "power on",
+          "target_power_state": null,
+          "uuid": "0000bbbb-bbbb-4bbb-8bbb-000000000001"
+        },
+        "servers": [
+          {
+            "host": "compute-02.local",
+            "id": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "status": "ACTIVE",
+            "task_state": null
+          }
+        ],
+        "service": {
+          "binary": "nova-compute",
+          "host": "compute-03.local",
+          "id": "5830eeb8-e514-48a8-84fe-9ad242d08610",
+          "state": "up",
+          "status": "disabled"
+        },
+        "source_ids": []
+      },
+      "target": {
+        "addresses": [
+          "10.0.0.147/24"
+        ],
+        "boot_id": "ff2be79c-0666-408f-a309-fbdcf6bf379d",
+        "domains": [],
+        "interface": "enp3s0",
+        "mac": "b4:2e:99:4a:64:63",
+        "machine_id": "73003ce5f19d4b3b8a113e68f80d40c6",
+        "up": true
+      },
+      "tasks": [
+        {
+          "id": "d7db9c61-b168-4924-8a14-745bd48a2da7",
+          "name": "power_on_for_inspection",
+          "state": "SUCCESS",
+          "workflow_execution_id": "66666666-6666-4666-8666-666666666666"
+        },
+        {
+          "id": "622ee905-340b-4b43-9e88-e189b90b5a47",
+          "name": "operator_inspection_gate",
+          "state": "IDLE",
+          "workflow_execution_id": "66666666-6666-4666-8666-666666666666"
+        }
+      ]
+    },
+    "movement": {
+      "execution": {
+        "description": "powerops-stand:run-1-planned:off",
+        "id": "77777777-7777-4777-8777-777777777777",
+        "input": {
+          "allow_hard_off": false,
+          "host": "compute-03.local",
+          "instance_policy": "live_migrate",
+          "segment_uuid": "0000dddd-dddd-4ddd-8ddd-000000000001"
+        },
+        "output": {
+          "result": {
+            "host": "compute-03.local",
+            "masakari_maintenance": true,
+            "nova_enabled": false,
+            "operation": "planned_power_off",
+            "power_state": "power off",
+            "stopped_instance_ids": []
+          },
+          "stopped_instance_ids": []
+        },
+        "params": {
+          "env": {}
+        },
+        "state": "SUCCESS",
+        "workflow_name": "power_ops.planned_power_off"
+      },
+      "migrations": [
+        {
+          "dest_compute": "compute-02.local",
+          "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+          "migration_type": "live-migration",
+          "source_compute": "compute-03.local",
+          "status": "completed",
+          "uuid": "88888888-8888-4888-8888-888888888888"
+        }
+      ],
+      "snapshot": {
+        "destinations": [
+          {
+            "binary": "nova-compute",
+            "host": "compute-02.local",
+            "id": "416c21b1-20f3-45f4-9e2c-e51ce0ab5fd6",
+            "state": "up",
+            "status": "enabled"
+          }
+        ],
+        "ha_host": {
+          "failover_segment_id": "0000dddd-dddd-4ddd-8ddd-000000000001",
+          "name": "compute-03.local",
+          "on_maintenance": true,
+          "uuid": "0000eeee-eeee-4eee-8eee-000000000001"
+        },
+        "migrations": [
+          {
+            "dest_compute": "compute-02.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "live-migration",
+            "source_compute": "compute-03.local",
+            "status": "completed",
+            "uuid": "88888888-8888-4888-8888-888888888888"
+          },
+          {
+            "dest_compute": "compute-03.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "live-migration",
+            "source_compute": "compute-02.local",
+            "status": "completed",
+            "uuid": "99999999-9999-4999-8999-999999999999"
+          },
+          {
+            "dest_compute": "compute-02.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "evacuation",
+            "source_compute": "compute-03.local",
+            "status": "completed",
+            "uuid": "aaaaaaaa-0001-4aaa-8aaa-000000000001"
+          },
+          {
+            "dest_compute": "compute-03.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "live-migration",
+            "source_compute": "compute-02.local",
+            "status": "completed",
+            "uuid": "aaaaaaaa-0002-4aaa-8aaa-000000000001"
+          },
+          {
+            "dest_compute": "compute-02.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "evacuation",
+            "source_compute": "compute-03.local",
+            "status": "completed",
+            "uuid": "aaaaaaaa-0003-4aaa-8aaa-000000000001"
+          },
+          {
+            "dest_compute": "compute-03.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "live-migration",
+            "source_compute": "compute-02.local",
+            "status": "completed",
+            "uuid": "aaaaaaaa-0004-4aaa-8aaa-000000000001"
+          },
+          {
+            "dest_compute": "compute-02.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "migration_type": "live-migration",
+            "source_compute": "compute-03.local",
+            "status": "completed",
+            "uuid": "aaaaaaaa-0005-4aaa-8aaa-000000000001"
+          }
+        ],
+        "node": {
+          "last_error": null,
+          "maintenance": false,
+          "name": "compute-03.local",
+          "power_state": "power off",
+          "target_power_state": null,
+          "uuid": "0000bbbb-bbbb-4bbb-8bbb-000000000001"
+        },
+        "servers": [
+          {
+            "host": "compute-02.local",
+            "id": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+            "status": "ACTIVE",
+            "task_state": null
+          }
+        ],
+        "service": {
+          "binary": "nova-compute",
+          "host": "compute-03.local",
+          "id": "5830eeb8-e514-48a8-84fe-9ad242d08610",
+          "state": "down",
+          "status": "disabled"
+        },
+        "source_ids": []
+      }
+    },
+    "power_off_hold": {
+      "completed_at": 1789391069.4825761,
+      "elapsed_seconds": 1.612817868590355e-06,
+      "requested_seconds": 0
+    },
+    "return_execution": {
+      "description": "powerops-stand:run-1-planned:return",
+      "id": "66666666-6666-4666-8666-666666666666",
+      "input": {
+        "host": "compute-03.local",
+        "segment_uuid": "0000dddd-dddd-4ddd-8ddd-000000000001",
+        "stopped_instance_ids": []
+      },
+      "output": {
+        "result": {
+          "host": "compute-03.local",
+          "masakari_maintenance": false,
+          "nova_enabled": true,
+          "operation": "return_to_service",
+          "power_state": "power on",
+          "stopped_instance_ids": []
+        }
+      },
+      "params": {
+        "env": {
+          "stale_domains_checked": true
+        }
+      },
+      "state": "SUCCESS",
+      "workflow_name": "power_ops.power_on_and_return"
+    }
+  },
+  "operations": {
+    "off": {
+      "description": "powerops-stand:run-1-planned:off",
+      "id": "77777777-7777-4777-8777-777777777777",
+      "input": {
+        "allow_hard_off": false,
+        "host": "compute-03.local",
+        "instance_policy": "live_migrate",
+        "segment_uuid": "0000dddd-dddd-4ddd-8ddd-000000000001"
+      },
+      "workflow_name": "power_ops.planned_power_off"
+    },
+    "resume": {
+      "body": {
+        "params": {
+          "env": {
+            "stale_domains_checked": true
+          }
+        },
+        "state": "RUNNING"
+      },
+      "execution_id": "66666666-6666-4666-8666-666666666666"
+    },
+    "return": {
+      "description": "powerops-stand:run-1-planned:return",
+      "id": "66666666-6666-4666-8666-666666666666",
+      "input": {
+        "host": "compute-03.local",
+        "segment_uuid": "0000dddd-dddd-4ddd-8ddd-000000000001",
+        "stopped_instance_ids": []
+      },
+      "workflow_name": "power_ops.power_on_and_return"
+    }
+  },
+  "schema": 1,
+  "status": "PASS"
+}

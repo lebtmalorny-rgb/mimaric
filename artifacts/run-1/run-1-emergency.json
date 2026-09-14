@@ -2,41 +2,41 @@
   "binding": {
     "identity": {
       "endpoints": {
-        "baremetal": "http://10.101.25.42:6385/v1",
-        "compute": "http://10.101.25.42:8774/v2.1",
-        "instance-ha": "http://10.101.25.42:15868/v1",
-        "workflowv2": "http://10.101.25.42:8989/v2"
+        "baremetal": "https://baremetal.example.internal/v1",
+        "compute": "https://compute.example.internal/v2.1",
+        "instance-ha": "https://instance-ha.example.internal/v1",
+        "workflowv2": "https://workflow.example.internal/v2"
       },
-      "project_id": "975e519cfa61426ab8e40c5db90c295c",
-      "user_id": "e1eae2c792834c21bbe8d39cfc193434"
+      "project_id": "<project-id>",
+      "user_id": "<user-id>"
     },
-    "run_id": "ha-emergency-001",
+    "run_id": "run-1-emergency",
     "task": {
       "become": true,
       "destination_hosts": [
-        "ultra1-2.ultra1.test.pvs.un.sbt"
+        "compute-02.local"
       ],
       "duration": 300,
-      "ha_host_uuid": "6fc141ab-a819-46ea-a122-110dc7af6df3",
-      "host": "ultra1-3.ultra1.test.pvs.un.sbt",
+      "ha_host_uuid": "0000eeee-eeee-4eee-8eee-000000000001",
+      "host": "compute-03.local",
       "input_sha256": {
         "inventory": "a42303e68fd11791f07ce288050460698b3cb74928ccab77f845a31dd77def2b"
       },
       "interface": "enp3s0",
-      "inventory": "/home/DVSokolov/.config/powerops-stand/inventory.ini",
-      "inventory_host": "ultra1-3",
+      "inventory": "<config-dir>/inventory.ini",
+      "inventory_host": "compute-03",
       "libvirt": {
         "backend": "docker",
         "container": "nova_libvirt"
       },
-      "node_uuid": "dc80b2db-c20f-4e6f-82d9-0f9d4a1b04ee",
+      "node_uuid": "0000bbbb-bbbb-4bbb-8bbb-000000000001",
       "poll_interval": 5,
       "region_name": "RegionOne",
       "remote_python": "python3.9",
       "scenario": "emergency",
-      "segment_uuid": "792c79ca-f5ea-4b75-bc71-36a26e6126a7",
+      "segment_uuid": "0000dddd-dddd-4ddd-8ddd-000000000001",
       "server_ids": [
-        "e09d747f-c114-4d1f-ab89-b3d2f5d43bda"
+        "0000aaaa-aaaa-4aaa-8aaa-000000000001"
       ],
       "timeout": 1800
     }
@@ -50,94 +50,94 @@
   "evidence": {
     "baseline": {
       "notification_ids": [
-        "7ec3f83a-0fd2-42ef-ac9f-7083862b93fa",
-        "1dfc26de-13e9-42f0-876d-dfec7bd49d39"
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222"
       ],
       "snapshot": {
         "destinations": [
           {
             "binary": "nova-compute",
-            "host": "ultra1-2.ultra1.test.pvs.un.sbt",
+            "host": "compute-02.local",
             "id": "416c21b1-20f3-45f4-9e2c-e51ce0ab5fd6",
             "state": "up",
             "status": "enabled"
           }
         ],
         "ha_host": {
-          "failover_segment_id": "792c79ca-f5ea-4b75-bc71-36a26e6126a7",
-          "name": "ultra1-3.ultra1.test.pvs.un.sbt",
+          "failover_segment_id": "0000dddd-dddd-4ddd-8ddd-000000000001",
+          "name": "compute-03.local",
           "on_maintenance": false,
-          "uuid": "6fc141ab-a819-46ea-a122-110dc7af6df3"
+          "uuid": "0000eeee-eeee-4eee-8eee-000000000001"
         },
         "migrations": [
           {
-            "dest_compute": "ultra1-3.ultra1.test.pvs.un.sbt",
-            "instance_uuid": "e09d747f-c114-4d1f-ab89-b3d2f5d43bda",
+            "dest_compute": "compute-03.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
             "migration_type": "live-migration",
-            "source_compute": "ultra1-2.ultra1.test.pvs.un.sbt",
+            "source_compute": "compute-02.local",
             "status": "completed",
-            "uuid": "9b7eb8fb-40ce-44d1-ba25-17f61ed8ad98"
+            "uuid": "aaaaaaaa-0002-4aaa-8aaa-000000000001"
           },
           {
-            "dest_compute": "ultra1-2.ultra1.test.pvs.un.sbt",
-            "instance_uuid": "e09d747f-c114-4d1f-ab89-b3d2f5d43bda",
+            "dest_compute": "compute-02.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
             "migration_type": "evacuation",
-            "source_compute": "ultra1-3.ultra1.test.pvs.un.sbt",
+            "source_compute": "compute-03.local",
             "status": "completed",
-            "uuid": "d2786f38-b9d9-4319-a74e-0e224bc36991"
+            "uuid": "aaaaaaaa-0003-4aaa-8aaa-000000000001"
           },
           {
-            "dest_compute": "ultra1-3.ultra1.test.pvs.un.sbt",
-            "instance_uuid": "e09d747f-c114-4d1f-ab89-b3d2f5d43bda",
+            "dest_compute": "compute-03.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
             "migration_type": "live-migration",
-            "source_compute": "ultra1-2.ultra1.test.pvs.un.sbt",
+            "source_compute": "compute-02.local",
             "status": "completed",
-            "uuid": "7e0cb22b-f8cb-4adf-a4d1-4be2d7c6b39d"
+            "uuid": "aaaaaaaa-0004-4aaa-8aaa-000000000001"
           },
           {
-            "dest_compute": "ultra1-2.ultra1.test.pvs.un.sbt",
-            "instance_uuid": "e09d747f-c114-4d1f-ab89-b3d2f5d43bda",
+            "dest_compute": "compute-02.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
             "migration_type": "live-migration",
-            "source_compute": "ultra1-3.ultra1.test.pvs.un.sbt",
+            "source_compute": "compute-03.local",
             "status": "completed",
-            "uuid": "7dcef255-35b6-4f96-8a1b-eae45b3abfeb"
+            "uuid": "aaaaaaaa-0005-4aaa-8aaa-000000000001"
           }
         ],
         "node": {
           "last_error": null,
           "maintenance": false,
-          "name": "ultra1-3.ultra1.test.pvs.un.sbt",
+          "name": "compute-03.local",
           "power_state": "power on",
           "target_power_state": null,
-          "uuid": "dc80b2db-c20f-4e6f-82d9-0f9d4a1b04ee"
+          "uuid": "0000bbbb-bbbb-4bbb-8bbb-000000000001"
         },
         "servers": [
           {
-            "host": "ultra1-3.ultra1.test.pvs.un.sbt",
-            "id": "e09d747f-c114-4d1f-ab89-b3d2f5d43bda",
+            "host": "compute-03.local",
+            "id": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
             "status": "ACTIVE",
             "task_state": null
           }
         ],
         "service": {
           "binary": "nova-compute",
-          "host": "ultra1-3.ultra1.test.pvs.un.sbt",
+          "host": "compute-03.local",
           "id": "5830eeb8-e514-48a8-84fe-9ad242d08610",
           "state": "up",
           "status": "enabled"
         },
         "source_ids": [
-          "e09d747f-c114-4d1f-ab89-b3d2f5d43bda"
+          "0000aaaa-aaaa-4aaa-8aaa-000000000001"
         ]
       },
       "taken_at": 1789389871.136888,
       "target": {
         "addresses": [
-          "10.101.25.147/24"
+          "10.0.0.147/24"
         ],
         "boot_id": "fca00ad2-9d06-46dd-876e-71c3a96ea8d9",
         "domains": [
-          "e09d747f-c114-4d1f-ab89-b3d2f5d43bda"
+          "0000aaaa-aaaa-4aaa-8aaa-000000000001"
         ],
         "interface": "enp3s0",
         "mac": "b4:2e:99:4a:64:63",
@@ -276,7 +276,7 @@
         "duration": 300,
         "interface": "enp3s0",
         "nonce": "c7f312541e724b80a1e9dd6cbbbd5cba",
-        "run_id": "ha-emergency-001"
+        "run_id": "run-1-emergency"
       },
       "restore_reason": "elapsed",
       "restored_at": 1789390184.531174,
@@ -368,7 +368,7 @@
         "duration": 300,
         "interface": "enp3s0",
         "nonce": "c7f312541e724b80a1e9dd6cbbbd5cba",
-        "run_id": "ha-emergency-001"
+        "run_id": "run-1-emergency"
       },
       "result": "INCOMPLETE",
       "schema": 1,
@@ -380,79 +380,79 @@
         "destinations": [
           {
             "binary": "nova-compute",
-            "host": "ultra1-2.ultra1.test.pvs.un.sbt",
+            "host": "compute-02.local",
             "id": "416c21b1-20f3-45f4-9e2c-e51ce0ab5fd6",
             "state": "up",
             "status": "enabled"
           }
         ],
         "ha_host": {
-          "failover_segment_id": "792c79ca-f5ea-4b75-bc71-36a26e6126a7",
-          "name": "ultra1-3.ultra1.test.pvs.un.sbt",
+          "failover_segment_id": "0000dddd-dddd-4ddd-8ddd-000000000001",
+          "name": "compute-03.local",
           "on_maintenance": false,
-          "uuid": "6fc141ab-a819-46ea-a122-110dc7af6df3"
+          "uuid": "0000eeee-eeee-4eee-8eee-000000000001"
         },
         "migrations": [
           {
-            "dest_compute": "ultra1-2.ultra1.test.pvs.un.sbt",
-            "instance_uuid": "e09d747f-c114-4d1f-ab89-b3d2f5d43bda",
+            "dest_compute": "compute-02.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
             "migration_type": "evacuation",
-            "source_compute": "ultra1-3.ultra1.test.pvs.un.sbt",
+            "source_compute": "compute-03.local",
             "status": "completed",
-            "uuid": "dd98d87f-a3e8-474f-8f1d-81e10de44c99"
+            "uuid": "aaaaaaaa-0001-4aaa-8aaa-000000000001"
           },
           {
-            "dest_compute": "ultra1-3.ultra1.test.pvs.un.sbt",
-            "instance_uuid": "e09d747f-c114-4d1f-ab89-b3d2f5d43bda",
+            "dest_compute": "compute-03.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
             "migration_type": "live-migration",
-            "source_compute": "ultra1-2.ultra1.test.pvs.un.sbt",
+            "source_compute": "compute-02.local",
             "status": "completed",
-            "uuid": "9b7eb8fb-40ce-44d1-ba25-17f61ed8ad98"
+            "uuid": "aaaaaaaa-0002-4aaa-8aaa-000000000001"
           },
           {
-            "dest_compute": "ultra1-2.ultra1.test.pvs.un.sbt",
-            "instance_uuid": "e09d747f-c114-4d1f-ab89-b3d2f5d43bda",
+            "dest_compute": "compute-02.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
             "migration_type": "evacuation",
-            "source_compute": "ultra1-3.ultra1.test.pvs.un.sbt",
+            "source_compute": "compute-03.local",
             "status": "completed",
-            "uuid": "d2786f38-b9d9-4319-a74e-0e224bc36991"
+            "uuid": "aaaaaaaa-0003-4aaa-8aaa-000000000001"
           },
           {
-            "dest_compute": "ultra1-3.ultra1.test.pvs.un.sbt",
-            "instance_uuid": "e09d747f-c114-4d1f-ab89-b3d2f5d43bda",
+            "dest_compute": "compute-03.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
             "migration_type": "live-migration",
-            "source_compute": "ultra1-2.ultra1.test.pvs.un.sbt",
+            "source_compute": "compute-02.local",
             "status": "completed",
-            "uuid": "7e0cb22b-f8cb-4adf-a4d1-4be2d7c6b39d"
+            "uuid": "aaaaaaaa-0004-4aaa-8aaa-000000000001"
           },
           {
-            "dest_compute": "ultra1-2.ultra1.test.pvs.un.sbt",
-            "instance_uuid": "e09d747f-c114-4d1f-ab89-b3d2f5d43bda",
+            "dest_compute": "compute-02.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
             "migration_type": "live-migration",
-            "source_compute": "ultra1-3.ultra1.test.pvs.un.sbt",
+            "source_compute": "compute-03.local",
             "status": "completed",
-            "uuid": "7dcef255-35b6-4f96-8a1b-eae45b3abfeb"
+            "uuid": "aaaaaaaa-0005-4aaa-8aaa-000000000001"
           }
         ],
         "node": {
           "last_error": null,
           "maintenance": false,
-          "name": "ultra1-3.ultra1.test.pvs.un.sbt",
+          "name": "compute-03.local",
           "power_state": "power on",
           "target_power_state": null,
-          "uuid": "dc80b2db-c20f-4e6f-82d9-0f9d4a1b04ee"
+          "uuid": "0000bbbb-bbbb-4bbb-8bbb-000000000001"
         },
         "servers": [
           {
-            "host": "ultra1-2.ultra1.test.pvs.un.sbt",
-            "id": "e09d747f-c114-4d1f-ab89-b3d2f5d43bda",
+            "host": "compute-02.local",
+            "id": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
             "status": "ACTIVE",
             "task_state": null
           }
         ],
         "service": {
           "binary": "nova-compute",
-          "host": "ultra1-3.ultra1.test.pvs.un.sbt",
+          "host": "compute-03.local",
           "id": "5830eeb8-e514-48a8-84fe-9ad242d08610",
           "state": "up",
           "status": "enabled"
@@ -461,7 +461,7 @@
       },
       "target": {
         "addresses": [
-          "10.101.25.147/24"
+          "10.0.0.147/24"
         ],
         "boot_id": "fb8d2da0-5b91-4922-98b5-32aa59b37bf7",
         "domains": [],
@@ -473,84 +473,84 @@
     },
     "inspection": {
       "confirmed_at": 1789390732.3920197,
-      "execution_id": "8896434f-44ff-48f0-baf4-2c4f937864e5",
+      "execution_id": "55555555-5555-4555-8555-555555555555",
       "snapshot": {
         "destinations": [
           {
             "binary": "nova-compute",
-            "host": "ultra1-2.ultra1.test.pvs.un.sbt",
+            "host": "compute-02.local",
             "id": "416c21b1-20f3-45f4-9e2c-e51ce0ab5fd6",
             "state": "up",
             "status": "enabled"
           }
         ],
         "ha_host": {
-          "failover_segment_id": "792c79ca-f5ea-4b75-bc71-36a26e6126a7",
-          "name": "ultra1-3.ultra1.test.pvs.un.sbt",
+          "failover_segment_id": "0000dddd-dddd-4ddd-8ddd-000000000001",
+          "name": "compute-03.local",
           "on_maintenance": true,
-          "uuid": "6fc141ab-a819-46ea-a122-110dc7af6df3"
+          "uuid": "0000eeee-eeee-4eee-8eee-000000000001"
         },
         "migrations": [
           {
-            "dest_compute": "ultra1-2.ultra1.test.pvs.un.sbt",
-            "instance_uuid": "e09d747f-c114-4d1f-ab89-b3d2f5d43bda",
+            "dest_compute": "compute-02.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
             "migration_type": "evacuation",
-            "source_compute": "ultra1-3.ultra1.test.pvs.un.sbt",
+            "source_compute": "compute-03.local",
             "status": "completed",
-            "uuid": "dd98d87f-a3e8-474f-8f1d-81e10de44c99"
+            "uuid": "aaaaaaaa-0001-4aaa-8aaa-000000000001"
           },
           {
-            "dest_compute": "ultra1-3.ultra1.test.pvs.un.sbt",
-            "instance_uuid": "e09d747f-c114-4d1f-ab89-b3d2f5d43bda",
+            "dest_compute": "compute-03.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
             "migration_type": "live-migration",
-            "source_compute": "ultra1-2.ultra1.test.pvs.un.sbt",
+            "source_compute": "compute-02.local",
             "status": "completed",
-            "uuid": "9b7eb8fb-40ce-44d1-ba25-17f61ed8ad98"
+            "uuid": "aaaaaaaa-0002-4aaa-8aaa-000000000001"
           },
           {
-            "dest_compute": "ultra1-2.ultra1.test.pvs.un.sbt",
-            "instance_uuid": "e09d747f-c114-4d1f-ab89-b3d2f5d43bda",
+            "dest_compute": "compute-02.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
             "migration_type": "evacuation",
-            "source_compute": "ultra1-3.ultra1.test.pvs.un.sbt",
+            "source_compute": "compute-03.local",
             "status": "completed",
-            "uuid": "d2786f38-b9d9-4319-a74e-0e224bc36991"
+            "uuid": "aaaaaaaa-0003-4aaa-8aaa-000000000001"
           },
           {
-            "dest_compute": "ultra1-3.ultra1.test.pvs.un.sbt",
-            "instance_uuid": "e09d747f-c114-4d1f-ab89-b3d2f5d43bda",
+            "dest_compute": "compute-03.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
             "migration_type": "live-migration",
-            "source_compute": "ultra1-2.ultra1.test.pvs.un.sbt",
+            "source_compute": "compute-02.local",
             "status": "completed",
-            "uuid": "7e0cb22b-f8cb-4adf-a4d1-4be2d7c6b39d"
+            "uuid": "aaaaaaaa-0004-4aaa-8aaa-000000000001"
           },
           {
-            "dest_compute": "ultra1-2.ultra1.test.pvs.un.sbt",
-            "instance_uuid": "e09d747f-c114-4d1f-ab89-b3d2f5d43bda",
+            "dest_compute": "compute-02.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
             "migration_type": "live-migration",
-            "source_compute": "ultra1-3.ultra1.test.pvs.un.sbt",
+            "source_compute": "compute-03.local",
             "status": "completed",
-            "uuid": "7dcef255-35b6-4f96-8a1b-eae45b3abfeb"
+            "uuid": "aaaaaaaa-0005-4aaa-8aaa-000000000001"
           }
         ],
         "node": {
           "last_error": null,
           "maintenance": false,
-          "name": "ultra1-3.ultra1.test.pvs.un.sbt",
+          "name": "compute-03.local",
           "power_state": "power on",
           "target_power_state": null,
-          "uuid": "dc80b2db-c20f-4e6f-82d9-0f9d4a1b04ee"
+          "uuid": "0000bbbb-bbbb-4bbb-8bbb-000000000001"
         },
         "servers": [
           {
-            "host": "ultra1-2.ultra1.test.pvs.un.sbt",
-            "id": "e09d747f-c114-4d1f-ab89-b3d2f5d43bda",
+            "host": "compute-02.local",
+            "id": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
             "status": "ACTIVE",
             "task_state": null
           }
         ],
         "service": {
           "binary": "nova-compute",
-          "host": "ultra1-3.ultra1.test.pvs.un.sbt",
+          "host": "compute-03.local",
           "id": "5830eeb8-e514-48a8-84fe-9ad242d08610",
           "state": "up",
           "status": "disabled"
@@ -559,7 +559,7 @@
       },
       "target": {
         "addresses": [
-          "10.101.25.147/24"
+          "10.0.0.147/24"
         ],
         "boot_id": "fb8d2da0-5b91-4922-98b5-32aa59b37bf7",
         "domains": [],
@@ -573,20 +573,20 @@
           "id": "559e50f9-946c-4ac8-a069-8254a071a9e8",
           "name": "power_on_for_inspection",
           "state": "SUCCESS",
-          "workflow_execution_id": "8896434f-44ff-48f0-baf4-2c4f937864e5"
+          "workflow_execution_id": "55555555-5555-4555-8555-555555555555"
         },
         {
           "id": "219cab34-6d21-4d62-baed-2633944c0e64",
           "name": "operator_inspection_gate",
           "state": "IDLE",
-          "workflow_execution_id": "8896434f-44ff-48f0-baf4-2c4f937864e5"
+          "workflow_execution_id": "55555555-5555-4555-8555-555555555555"
         }
       ]
     },
     "movement": {
       "hold_duration": 300,
       "notification": {
-        "notification_uuid": "0cdcf779-7a6b-4587-8d2d-d7ac43b78df2",
+        "notification_uuid": "33333333-3333-4333-8333-333333333333",
         "payload": {
           "cluster_status": "OFFLINE",
           "event": "STOPPED",
@@ -598,7 +598,7 @@
             "progress": 1.0,
             "progress_details": [
               {
-                "message": "Disabling compute service on host: 'ultra1-3.ultra1.test.pvs.un.sbt'",
+                "message": "Disabling compute service on host: 'compute-03.local'",
                 "progress": "0.0",
                 "timestamp": "2026-09-14 12:45:36.382367"
               }
@@ -610,12 +610,12 @@
             "progress": 1.0,
             "progress_details": [
               {
-                "message": "Disabling compute service on host: 'ultra1-3.ultra1.test.pvs.un.sbt'",
+                "message": "Disabling compute service on host: 'compute-03.local'",
                 "progress": "0.0",
                 "timestamp": "2026-09-14 12:47:09.909022"
               },
               {
-                "message": "Disabled compute service on host: 'ultra1-3.ultra1.test.pvs.un.sbt'",
+                "message": "Disabled compute service on host: 'compute-03.local'",
                 "progress": "1.0",
                 "timestamp": "2026-09-14 12:50:10.356728"
               }
@@ -627,12 +627,12 @@
             "progress": 1.0,
             "progress_details": [
               {
-                "message": "Ironic confirmed power off for host 'ultra1-3.ultra1.test.pvs.un.sbt'; waiting up to 180s for Nova disabled/down",
+                "message": "Ironic confirmed power off for host 'compute-03.local'; waiting up to 180s for Nova disabled/down",
                 "progress": "0.0",
                 "timestamp": "2026-09-14 12:50:31.483249"
               },
               {
-                "message": "Nova confirmed disabled/down for fenced host 'ultra1-3.ultra1.test.pvs.un.sbt'; host recovery may proceed",
+                "message": "Nova confirmed disabled/down for fenced host 'compute-03.local'; host recovery may proceed",
                 "progress": "1.0",
                 "timestamp": "2026-09-14 12:50:31.854172"
               }
@@ -649,7 +649,7 @@
                 "timestamp": "2026-09-14 12:50:31.906994"
               },
               {
-                "message": "Total instances running on failed host 'ultra1-3.ultra1.test.pvs.un.sbt' is 1",
+                "message": "Total instances running on failed host 'compute-03.local' is 1",
                 "progress": "0.3",
                 "timestamp": "2026-09-14 12:50:32.456763"
               },
@@ -669,7 +669,7 @@
                 "timestamp": "2026-09-14 12:50:32.485901"
               },
               {
-                "message": "Instances to be evacuated are: 'e09d747f-c114-4d1f-ab89-b3d2f5d43bda'",
+                "message": "Instances to be evacuated are: '0000aaaa-aaaa-4aaa-8aaa-000000000001'",
                 "progress": "1.0",
                 "timestamp": "2026-09-14 12:50:32.505684"
               }
@@ -681,17 +681,17 @@
             "progress": 1.0,
             "progress_details": [
               {
-                "message": "Start evacuation of instances from failed host 'ultra1-3.ultra1.test.pvs.un.sbt', instance uuids are: 'e09d747f-c114-4d1f-ab89-b3d2f5d43bda'",
+                "message": "Start evacuation of instances from failed host 'compute-03.local', instance uuids are: '0000aaaa-aaaa-4aaa-8aaa-000000000001'",
                 "progress": "0.0",
                 "timestamp": "2026-09-14 12:50:32.551604"
               },
               {
-                "message": "Evacuation of instance started: 'e09d747f-c114-4d1f-ab89-b3d2f5d43bda'",
+                "message": "Evacuation of instance started: '0000aaaa-aaaa-4aaa-8aaa-000000000001'",
                 "progress": "0.5",
                 "timestamp": "2026-09-14 12:50:32.559540"
               },
               {
-                "message": "Successfully evacuate instances 'e09d747f-c114-4d1f-ab89-b3d2f5d43bda' from host 'ultra1-3.ultra1.test.pvs.un.sbt'",
+                "message": "Successfully evacuate instances '0000aaaa-aaaa-4aaa-8aaa-000000000001' from host 'compute-03.local'",
                 "progress": "0.7",
                 "timestamp": "2026-09-14 12:50:55.861840"
               },
@@ -704,7 +704,7 @@
             "state": "SUCCESS"
           }
         ],
-        "source_host_uuid": "6fc141ab-a819-46ea-a122-110dc7af6df3",
+        "source_host_uuid": "0000eeee-eeee-4eee-8eee-000000000001",
         "status": "finished",
         "type": "COMPUTE_HOST"
       },
@@ -712,79 +712,79 @@
         "destinations": [
           {
             "binary": "nova-compute",
-            "host": "ultra1-2.ultra1.test.pvs.un.sbt",
+            "host": "compute-02.local",
             "id": "416c21b1-20f3-45f4-9e2c-e51ce0ab5fd6",
             "state": "up",
             "status": "enabled"
           }
         ],
         "ha_host": {
-          "failover_segment_id": "792c79ca-f5ea-4b75-bc71-36a26e6126a7",
-          "name": "ultra1-3.ultra1.test.pvs.un.sbt",
+          "failover_segment_id": "0000dddd-dddd-4ddd-8ddd-000000000001",
+          "name": "compute-03.local",
           "on_maintenance": true,
-          "uuid": "6fc141ab-a819-46ea-a122-110dc7af6df3"
+          "uuid": "0000eeee-eeee-4eee-8eee-000000000001"
         },
         "migrations": [
           {
-            "dest_compute": "ultra1-2.ultra1.test.pvs.un.sbt",
-            "instance_uuid": "e09d747f-c114-4d1f-ab89-b3d2f5d43bda",
+            "dest_compute": "compute-02.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
             "migration_type": "evacuation",
-            "source_compute": "ultra1-3.ultra1.test.pvs.un.sbt",
+            "source_compute": "compute-03.local",
             "status": "done",
-            "uuid": "dd98d87f-a3e8-474f-8f1d-81e10de44c99"
+            "uuid": "aaaaaaaa-0001-4aaa-8aaa-000000000001"
           },
           {
-            "dest_compute": "ultra1-3.ultra1.test.pvs.un.sbt",
-            "instance_uuid": "e09d747f-c114-4d1f-ab89-b3d2f5d43bda",
+            "dest_compute": "compute-03.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
             "migration_type": "live-migration",
-            "source_compute": "ultra1-2.ultra1.test.pvs.un.sbt",
+            "source_compute": "compute-02.local",
             "status": "completed",
-            "uuid": "9b7eb8fb-40ce-44d1-ba25-17f61ed8ad98"
+            "uuid": "aaaaaaaa-0002-4aaa-8aaa-000000000001"
           },
           {
-            "dest_compute": "ultra1-2.ultra1.test.pvs.un.sbt",
-            "instance_uuid": "e09d747f-c114-4d1f-ab89-b3d2f5d43bda",
+            "dest_compute": "compute-02.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
             "migration_type": "evacuation",
-            "source_compute": "ultra1-3.ultra1.test.pvs.un.sbt",
+            "source_compute": "compute-03.local",
             "status": "completed",
-            "uuid": "d2786f38-b9d9-4319-a74e-0e224bc36991"
+            "uuid": "aaaaaaaa-0003-4aaa-8aaa-000000000001"
           },
           {
-            "dest_compute": "ultra1-3.ultra1.test.pvs.un.sbt",
-            "instance_uuid": "e09d747f-c114-4d1f-ab89-b3d2f5d43bda",
+            "dest_compute": "compute-03.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
             "migration_type": "live-migration",
-            "source_compute": "ultra1-2.ultra1.test.pvs.un.sbt",
+            "source_compute": "compute-02.local",
             "status": "completed",
-            "uuid": "7e0cb22b-f8cb-4adf-a4d1-4be2d7c6b39d"
+            "uuid": "aaaaaaaa-0004-4aaa-8aaa-000000000001"
           },
           {
-            "dest_compute": "ultra1-2.ultra1.test.pvs.un.sbt",
-            "instance_uuid": "e09d747f-c114-4d1f-ab89-b3d2f5d43bda",
+            "dest_compute": "compute-02.local",
+            "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
             "migration_type": "live-migration",
-            "source_compute": "ultra1-3.ultra1.test.pvs.un.sbt",
+            "source_compute": "compute-03.local",
             "status": "completed",
-            "uuid": "7dcef255-35b6-4f96-8a1b-eae45b3abfeb"
+            "uuid": "aaaaaaaa-0005-4aaa-8aaa-000000000001"
           }
         ],
         "node": {
           "last_error": null,
           "maintenance": false,
-          "name": "ultra1-3.ultra1.test.pvs.un.sbt",
+          "name": "compute-03.local",
           "power_state": "power off",
           "target_power_state": null,
-          "uuid": "dc80b2db-c20f-4e6f-82d9-0f9d4a1b04ee"
+          "uuid": "0000bbbb-bbbb-4bbb-8bbb-000000000001"
         },
         "servers": [
           {
-            "host": "ultra1-2.ultra1.test.pvs.un.sbt",
-            "id": "e09d747f-c114-4d1f-ab89-b3d2f5d43bda",
+            "host": "compute-02.local",
+            "id": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
             "status": "ACTIVE",
             "task_state": null
           }
         ],
         "service": {
           "binary": "nova-compute",
-          "host": "ultra1-3.ultra1.test.pvs.un.sbt",
+          "host": "compute-03.local",
           "id": "5830eeb8-e514-48a8-84fe-9ad242d08610",
           "state": "down",
           "status": "disabled"
@@ -793,35 +793,35 @@
       },
       "vmoves": [
         {
-          "dest_host": "ultra1-2.ultra1.test.pvs.un.sbt",
+          "dest_host": "compute-02.local",
           "end_time": "2026-09-14T12:50:50.000000",
-          "instance_uuid": "e09d747f-c114-4d1f-ab89-b3d2f5d43bda",
-          "notification_uuid": "0cdcf779-7a6b-4587-8d2d-d7ac43b78df2",
-          "source_host": "ultra1-3.ultra1.test.pvs.un.sbt",
+          "instance_uuid": "0000aaaa-aaaa-4aaa-8aaa-000000000001",
+          "notification_uuid": "33333333-3333-4333-8333-333333333333",
+          "source_host": "compute-03.local",
           "start_time": "2026-09-14T12:50:33.000000",
           "status": "succeeded",
           "type": "evacuation",
-          "uuid": "c1beb2ad-7a7a-4259-96be-8a30ad3e4ef5"
+          "uuid": "44444444-4444-4444-8444-444444444444"
         }
       ]
     },
-    "notification_id": "0cdcf779-7a6b-4587-8d2d-d7ac43b78df2",
+    "notification_id": "33333333-3333-4333-8333-333333333333",
     "power_off_hold": {
       "completed_at": 1789390561.8515136,
       "elapsed_seconds": 300.00021441979334,
       "requested_seconds": 300
     },
     "return_execution": {
-      "description": "powerops-stand:ha-emergency-001:return",
-      "id": "8896434f-44ff-48f0-baf4-2c4f937864e5",
+      "description": "powerops-stand:run-1-emergency:return",
+      "id": "55555555-5555-4555-8555-555555555555",
       "input": {
-        "host": "ultra1-3.ultra1.test.pvs.un.sbt",
-        "segment_uuid": "792c79ca-f5ea-4b75-bc71-36a26e6126a7",
+        "host": "compute-03.local",
+        "segment_uuid": "0000dddd-dddd-4ddd-8ddd-000000000001",
         "stopped_instance_ids": []
       },
       "output": {
         "result": {
-          "host": "ultra1-3.ultra1.test.pvs.un.sbt",
+          "host": "compute-03.local",
           "masakari_maintenance": false,
           "nova_enabled": true,
           "operation": "return_to_service",
@@ -841,7 +841,7 @@
   "operations": {
     "fault": {
       "nonce": "c7f312541e724b80a1e9dd6cbbbd5cba",
-      "run_id": "ha-emergency-001",
+      "run_id": "run-1-emergency",
       "submitted_at": 1789389883.372164
     },
     "resume": {
@@ -853,14 +853,14 @@
         },
         "state": "RUNNING"
       },
-      "execution_id": "8896434f-44ff-48f0-baf4-2c4f937864e5"
+      "execution_id": "55555555-5555-4555-8555-555555555555"
     },
     "return": {
-      "description": "powerops-stand:ha-emergency-001:return",
-      "id": "8896434f-44ff-48f0-baf4-2c4f937864e5",
+      "description": "powerops-stand:run-1-emergency:return",
+      "id": "55555555-5555-4555-8555-555555555555",
       "input": {
-        "host": "ultra1-3.ultra1.test.pvs.un.sbt",
-        "segment_uuid": "792c79ca-f5ea-4b75-bc71-36a26e6126a7",
+        "host": "compute-03.local",
+        "segment_uuid": "0000dddd-dddd-4ddd-8ddd-000000000001",
         "stopped_instance_ids": []
       },
       "workflow_name": "power_ops.power_on_and_return"
