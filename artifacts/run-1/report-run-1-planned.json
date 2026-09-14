@@ -149,7 +149,7 @@
       "taken_at": 1789390920.0117054,
       "target": {
         "addresses": [
-          "10.0.0.147/24"
+          "host-compute-03.local/24"
         ],
         "boot_id": "fb8d2da0-5b91-4922-98b5-32aa59b37bf7",
         "domains": [
@@ -264,7 +264,7 @@
       },
       "target": {
         "addresses": [
-          "10.0.0.147/24"
+          "host-compute-03.local/24"
         ],
         "boot_id": "ff2be79c-0666-408f-a309-fbdcf6bf379d",
         "domains": [],
@@ -378,7 +378,7 @@
       },
       "target": {
         "addresses": [
-          "10.0.0.147/24"
+          "host-compute-03.local/24"
         ],
         "boot_id": "ff2be79c-0666-408f-a309-fbdcf6bf379d",
         "domains": [],

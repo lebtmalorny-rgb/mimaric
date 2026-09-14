@@ -6,11 +6,12 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 
-# Sanitization key (artifacts/run-1) — NEVER commit.
+# Sanitization secrets (key bundle + Fernet key for desanitize).
 # Lets a recipient restore the real identifiers behind the placeholders
-# in artifacts/run-1/.  Keep this file outside any git repo.  When a
-# partner needs it, hand it over through an encrypted channel (password-
+# in artifacts/run-1/.  Keep this directory outside any git repo.  When
+# a partner needs it, hand it over through an encrypted channel (password-
 # protected archive via out-of-band transport, or a secrets manager).
 # Rotation: regenerate via desanitize-key.json builder; old key then
 # stops working for new artifacts.
+.secrets/
 desanitize.key.json

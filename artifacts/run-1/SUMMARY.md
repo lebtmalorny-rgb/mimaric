@@ -15,7 +15,7 @@ State-journals сохранены в `<state-dir>/`. Не удалять.
 
 - **Source compute:** `compute-03.local` (Ironic node `0000bbbb-bbbb-4bbb-8bbb-000000000001`, segment `0000dddd-dddd-4ddd-8ddd-000000000001`/host `0000eeee-eeee-4eee-8eee-000000000001`)
 - **Destination compute:** `compute-02.local`
-- **Test VM:** `0000aaaa-aaaa-4aaa-8aaa-000000000001` (flavor `m1.small`, image `alma`, IP `192.0.2.122`)
+- **Test VM:** `0000aaaa-aaaa-4aaa-8aaa-000000000001` (flavor `m1.small`, image `alma`, IP `vm-ip.test`)
 - **Fault interface:** `enp3s0` (не `eno2` — реальный `network_interface` из host_vars)
 - **Libvirt backend:** `podman` + контейнер `nova_libvirt` (раннер трактует как `backend=docker`)
 
@@ -43,7 +43,7 @@ State-journals сохранены в `<state-dir>/`. Не удалять.
 
 ## Что пришлось чинить по ходу
 
-1. **`openstack_probe.py:pages()`** — добавил `if len(page) < query['limit']: result.extend(page); return result`. Без этого пагинация на Masakari v1.3 ломалась: после первой страницы сервер 400-ил на второй из-за несуществующего marker. Бэкап: `/tmp/openstack_probe.py.orig`.
+1. **`openstack_probe.py:pages()`** — добавил `if len(page) < query['limit']: result.extend(page); return result`. Без этого пагинация на Masakari v1.3 ломалась: после первой страницы сервер 400-ил на второй из-за несуществующего marker. Бэкап: `<repo>/artifacts/run-1/openstack_probe.py.orig`.
 2. **`remote_fault.py:dispatch()`** — снял проверку `sys.version_info < (3, 11)`. На стендовых compute нет python3.11 (только 3.9), иначе fault не запускался.
 3. **`remote_python: "python3.9"`** в обоих task JSON — на `compute-03` нет 3.11.
 4. **Inventory** — `stand_test.py:load_task` требует файл, а не каталог. Собрал плоский `<config-dir>/inventory.ini` из `<backup-inventory>/{groups,host_vars/*.yml}` с `ansible_host` для каждой ноды.

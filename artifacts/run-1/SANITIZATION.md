@@ -9,17 +9,17 @@ desanitize when the recipient is authorized to see the real values.
 
 | Category | Example placeholder | Real value (in key bundle) |
 |----------|---------------------|----------------------------|
-| Hostnames | `compute-02`, `control-06` | `ultra1-2`, `ultra1-6` |
-| Host FQDN | `compute-02.local` | `ultra1-2.ultra1.test.pvs.un.sbt` |
-| IP addresses | `10.0.0.146` | `10.101.25.146` |
-| Test VM IP | `192.0.2.122` | `192.168.100.122` |
+| Hostnames | `compute-02`, `control-06` | `<host-short-name-1>`, `<host-short-name-2>` |
+| Host FQDN | `compute-02.local` | `<host-fqdn-1>` |
+| IP addresses | `host-deployment.local`, `host-compute-02.local`, `host-compute-03.local`, `host-control-06.local`, `host-control-07.local`, `host-control-08.local` | per-host internal IPs (kept in key bundle) |
+| Test VM IP | `vm-ip.test` | `<vm-internal-ip>` |
 | UUIDs (test VM, ironic nodes, segment hosts) | `0000aaaa-aaaa-4aaa-8aaa-000000000001` | real v4 UUID |
 | UUIDs (notifications, executions, migrations) | `11111111-1111-4111-8111-111111111111` (and similar) | real v4 UUID |
 | Project identity | `<project-id>` | `975e519cfa61426ab8e40c5db90c295c` |
 | User identity | `<user-id>` | `e1eae2c792834c21bbe8d39cfc193434` |
-| Endpoint URLs | `https://compute.example.internal/v2.1` | `http://10.101.25.42:8774/v2.1` |
+| Endpoint URLs | `https://compute.example.internal/v2.1`, `https://baremetal.example.internal/v1`, `https://workflow.example.internal/v2`, `https://instance-ha.example.internal/v1`, `https://keystone.example.internal/v3` | real internal endpoints (kept in key bundle) |
 | Run IDs | `run-1-emergency`, `run-1-planned` | `ha-emergency-001`, `ha-planned-001` |
-| RC paths | `/etc/<your-rc>.sh` | `/etc/kolla/admin-openrc.sh` |
+| RC paths | `/etc/<your-rc>.sh` | `<rc-path>` |
 | Operator | `<operator>` | `DVSokolov` |
 | Segment name | `ha_segment` | `ha_cd` |
 
@@ -34,7 +34,7 @@ desanitize when the recipient is authorized to see the real values.
 ## Key bundle
 
 The desanitize key bundle is **never** stored in this repo.  Its location is
-`~/.local/share/powerops-stand/desanitize-key.json` on the operator host that
+`$REPO/.secrets/desanitize-key.json` on the operator host that
 ran the sanitization.  Format:
 
 ```json
@@ -66,7 +66,7 @@ when stored on shared storage); the current reversal only needs `mapping`.
 - **NEVER** commit the bundle to git, push it to any remote, paste it into
   issue trackers, or email it in cleartext.
 - The bundle is **git-ignored** by name (`desanitize.key.json`) and the
-  matching `~/.local/share/powerops-stand/` path is outside any repo.
+  matching `$REPO/.secrets/` path is outside any repo.
 - For partner handoff, hand the bundle over via an encrypted channel —
   options that fit a typical ops workflow:
   - GPG-encrypted file emailed or shared through a corporate file share.
@@ -83,13 +83,13 @@ To recover real values from sanitized artifacts, run:
 ```bash
 # Dry-run first: shows which files would change.
 python3.11 artifacts/run-1/desanitize.py \
-    --key ~/.local/share/powerops-stand/desanitize-key.json \
+    --key $REPO/.secrets/desanitize-key.json \
     --root artifacts/run-1 \
     --dry-run
 
 # Apply.
 python3.11 artifacts/run-1/desanitize.py \
-    --key ~/.local/share/powerops-stand/desanitize-key.json \
+    --key $REPO/.secrets/desanitize-key.json \
     --root artifacts/run-1 \
     --in-place
 ```
@@ -118,14 +118,14 @@ bundle = {
     "version": 2,
     "note": "Rotated key for run-N. Old key invalid.",
 }
-out = pathlib.Path.home() / ".local/share/powerops-stand/desanitize-key.json"
+out = "$REPO/.secrets/desanitize-key.json"
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(json.dumps(bundle, indent=2, sort_keys=True) + "\n")
 out.chmod(0o600)
 PY
 
 # 3. Destroy the old bundle (`shred -u` if available, then remove).
-shred -u ~/.local/share/powerops-stand/desanitize-key.json.bak
+shred -u $REPO/.secrets/desanitize-key.json.bak
 ```
 
 ## Verification
@@ -141,10 +141,10 @@ print('inventory_host:', d['inventory_host'])
 print('server_ids:', d['server_ids'])
 print('destination_hosts:', d['destination_hosts'])
 "
-host: ultra1-3.ultra1.test.pvs.un.sbt
-inventory_host: ultra1-3
-server_ids: ['e09d747f-c114-4d1f-ab89-b3d2f5d43bda']
-destination_hosts: ['ultra1-2.ultra1.test.pvs.un.sbt']
+host: <host-fqdn>
+inventory_host: <host-short-name>
+server_ids: ['<vm-uuid>']
+destination_hosts: ['<host-fqdn>']
 ```
 
 If you see placeholders there, the key bundle is wrong (or out-of-date).

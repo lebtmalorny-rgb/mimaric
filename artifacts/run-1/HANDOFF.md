@@ -30,7 +30,7 @@
                  key = item[marker_key]
 ```
 
-**Файл-бэкап:** `/tmp/openstack_probe.py.orig` (полная копия до правки).
+**Файл-бэкап:** `<repo>/artifacts/run-1/openstack_probe.py.orig` (полная копия до правки).
 
 ### 2. `remote_fault.py:338` — снять проверку Python 3.11+
 
@@ -47,7 +47,7 @@
          raise ValueError("target requires Linux, root and Python 3.11+")
 ```
 
-**Файл-бэкап:** `/tmp/remote_fault.py.orig` (восстановлен из git blob `9fd972953c8b624a47c08997eedfe967b5cf003f` через `git cat-file -p`: первоначальный `/bin/cp -f` ломался из-за `cp` aliased на `cp -i`).
+**Файл-бэкап:** `<repo>/artifacts/run-1/remote_fault.py.orig` (восстановлен из git blob `9fd972953c8b624a47c08997eedfe967b5cf003f` через `git cat-file -p`: первоначальный `/bin/cp -f` ломался из-за `cp` aliased на `cp -i`).
 
 ## Правки вне репозитория
 
@@ -57,17 +57,17 @@
 
 ```ini
 [deployment]
-deployment-0 ansible_host=10.0.0.1
+deployment-0 ansible_host=host-deployment.local
 [control]
-control-06 ansible_host=10.0.0.150
-control-07 ansible_host=10.0.0.151
-control-08 ansible_host=10.0.0.152
+control-06 ansible_host=host-control-06.local
+control-07 ansible_host=host-control-07.local
+control-08 ansible_host=host-control-08.local
 [network]
-control-06 ansible_host=10.0.0.150
+control-06 ansible_host=host-control-06.local
 ...
 [compute]
-compute-02 ansible_host=10.0.0.146
-compute-03 ansible_host=10.0.0.147
+compute-02 ansible_host=host-compute-02.local
+compute-03 ansible_host=host-compute-03.local
 ```
 
 Собран скриптом из `<backup-inventory>/groups` + `host_vars/<host>.yml` (`ansible_host`). Режим 0600.
@@ -161,8 +161,8 @@ openstack server migrate --live 0000aaaa-aaaa-4aaa-8aaa-000000000001 --host comp
 | `<config-dir>/run-1-summary.md` | выжимка результатов |
 | `<config-dir>/run-1-handoff.md` | этот документ |
 | `<tmp-archive>reports-2026-09-14.tar.gz` | полные report-ы |
-| `/tmp/openstack_probe.py.orig` | бэкап openstack_probe.py до патча |
-| `/tmp/remote_fault.py.orig` | бэкап remote_fault.py до патча |
+| `<repo>/artifacts/run-1/openstack_probe.py.orig` | бэкап openstack_probe.py до патча |
+| `<repo>/artifacts/run-1/remote_fault.py.orig` | бэкап remote_fault.py до патча |
 
 ## Команды для воспроизведения
 
