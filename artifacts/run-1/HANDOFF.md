@@ -193,6 +193,6 @@ python3.11 <repo>/stand_test.py status \
 - `host_status=MAINTENANCE` на `compute-03` выставляется автоматически при `compute service set --disable` либо при падении ноды. Снимается только через Masakari API PUT.
 - `python3.11` на compute отсутствует — только `python3.9`.
 - `nova-compute` agent на control-нодах (`control-06/7/8-ironic`) регистрируется в `compute service list` как enabled/up, но реальных ВМ на них нет.
-- Маскарадинг сегмента: `ha_segment` (`792c79ca-…`), `recovery_method=auto`. Внутри два хоста: `compute-03` (UUID `6fc141ab-…`) и `compute-02` (UUID `a7e39cc2-…`).
+- Маскарадинг сегмента: `ha_segment` (`0000dddd-dddd-4ddd-8ddd-000000000001`), `recovery_method=auto`. Внутри два хоста: `compute-03` (UUID `0000eeee-eeee-4eee-8eee-000000000001`) и `compute-02` (UUID `0000ffff-ffff-4fff-8fff-000000000001`).
 - На compute стоит `podman`, не `docker`. Раннер называет это `backend=docker` в task JSON (имя условное).
 - Fault-interface `enp3s0` (не `eno2` из README-примера).

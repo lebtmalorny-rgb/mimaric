@@ -13,7 +13,7 @@ State-journals сохранены в `<state-dir>/`. Не удалять.
 
 ## Что гоняли
 
-- **Source compute:** `compute-03.local` (Ironic node `0000bbbb-bbbb-4bbb-8bbb-000000000001`, segment `792c79ca-…`/host `6fc141ab-…`)
+- **Source compute:** `compute-03.local` (Ironic node `0000bbbb-bbbb-4bbb-8bbb-000000000001`, segment `0000dddd-dddd-4ddd-8ddd-000000000001`/host `0000eeee-eeee-4eee-8eee-000000000001`)
 - **Destination compute:** `compute-02.local`
 - **Test VM:** `0000aaaa-aaaa-4aaa-8aaa-000000000001` (flavor `m1.small`, image `alma`, IP `192.0.2.122`)
 - **Fault interface:** `enp3s0` (не `eno2` — реальный `network_interface` из host_vars)
@@ -25,7 +25,7 @@ State-journals сохранены в `<state-dir>/`. Не удалять.
 
 - fault `enp3s0` поднят через `systemd-run` (`powerops-link-run-1-emergency.service`).
 - Masakari создал notification `33333333-3333-4333-8333-333333333333` (COMPUTE_HOST).
-- Evacuation: `vmove c1beb2ad-…` (`compute-03 → compute-02`, type `evacuation`, status `succeeded`).
+- Evacuation: `vmove 44444444-4444-4444-8444-444444444444` (`compute-03 → compute-02`, type `evacuation`, status `succeeded`).
 - `power_off_hold`: 300.32s — выполнен полностью.
 - Return execution `55555555-5555-4555-8555-555555555555` (`power_ops.power_on_and_return`, state SUCCESS).
 - Все три task return-workflow SUCCESS: `power_on_for_inspection`, `operator_inspection_gate`, `return_to_service`.
@@ -37,7 +37,7 @@ State-journals сохранены в `<state-dir>/`. Не удалять.
 
 - ВМ заранее перевешена на `compute-03` через `openstack server migrate --live` (после emergency).
 - `planned_power_off` execution `77777777-7777-4777-8777-777777777777` (SUCCESS, `stopped_instance_ids=[]`).
-- Migration `201d5597-…` (`compute-03 → compute-02`, type `live-migration`, status `completed`).
+- Migration `88888888-8888-4888-8888-888888888888` (`compute-03 → compute-02`, type `live-migration`, status `completed`).
 - Return execution `66666666-6666-4666-8666-666666666666` (SUCCESS).
 - Финальное состояние: `compute-03` enabled/up, ВМ на `compute-02`.
 
@@ -54,7 +54,7 @@ State-journals сохранены в `<state-dir>/`. Не удалять.
 
 ## Артефакты
 
-- State-journals: `<state-dir>/ha-{emergency,planned}-001.json`
+- State-journals: `<state-dir>/run-1-{emergency,planned}.json`
 - Task JSON: `<config-dir>/{emergency,planned}.json`
 - Inventory: `<config-dir>/inventory.ini`
 - Полный архив отчётов: `<tmp-archive>reports-2026-09-14.tar.gz`
