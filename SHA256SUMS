@@ -1,3 +1,0 @@
-f7aa10ee6482595396b56e827bece9114d726877ed42128b9b374e4f9f7f4752  tools/diagnostics/collect-v2.yml
-100be2e5921a11859f6b6f4dd37ddc98aaf6b387adff1d7f3a36c9c8764024cc  tools/diagnostics/collect-mistral.yml
-319e1814cd4ab42be9df0bb7007e9c3cc36d9f7cbbc396a1a0b7558dc50ee43c  hotfixes/masakari-post-fence-nova-down/0001-fix-wait-for-Nova-down-after-confirmed-fencing.patch
