@@ -5,3 +5,12 @@ __pycache__/
 .coverage
 .pytest_cache/
 .DS_Store
+
+# Sanitization key (artifacts/run-1) — NEVER commit.
+# Lets a recipient restore the real identifiers behind the placeholders
+# in artifacts/run-1/.  Keep this file outside any git repo.  When a
+# partner needs it, hand it over through an encrypted channel (password-
+# protected archive via out-of-band transport, or a secrets manager).
+# Rotation: regenerate via desanitize-key.json builder; old key then
+# stops working for new artifacts.
+desanitize.key.json

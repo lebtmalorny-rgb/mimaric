@@ -9,7 +9,7 @@
 | `run-1-emergency` | emergency | **PASS** |
 | `run-1-planned` | planned | **PASS** |
 
-См. `SUMMARY.md` для краткой выжимки и `HANDOFF.md` для полного описания правок, операций и замечаний.
+См. `SUMMARY.md` для краткой выжимки, `HANDOFF.md` для полного описания правок, и `SANITIZATION.md` для инструкции по восстановлению реальных идентификаторов.
 
 ## Содержимое
 
@@ -17,6 +17,8 @@
 |------|-----------|
 | `SUMMARY.md` | краткий отчёт по результатам |
 | `HANDOFF.md` | handoff: все правки сессии, операции, замечания |
+| `SANITIZATION.md` | формат sanitization, инструкция по десанитизации, требования к передаче ключа |
+| `desanitize.py` | утилита для восстановления реальных значений через key-bundle |
 | `run-1-emergency.json` | state-journal emergency (raw) |
 | `run-1-planned.json` | state-journal planned (raw) |
 | `report-run-1-emergency.json` | структурированный report emergency |
