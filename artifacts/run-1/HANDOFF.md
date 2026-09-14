@@ -167,7 +167,7 @@ openstack server migrate --live 0000aaaa-aaaa-4aaa-8aaa-000000000001 --host comp
 ## Команды для воспроизведения
 
 ```bash
-set -a; . /etc/kolla/<your-rc>.sh; set +a
+set -a; . /etc/<your-rc>.sh; set +a
 unset OS_CLOUD
 
 # Emergency — PASS

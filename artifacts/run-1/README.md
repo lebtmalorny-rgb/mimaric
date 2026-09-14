@@ -30,7 +30,7 @@
 ## Воспроизведение
 
 ```bash
-set -a; . /etc/kolla/<your-rc>.sh; set +a
+set -a; . /etc/<your-rc>.sh; set +a
 unset OS_CLOUD
 
 # Структурированный report (читает state-journal + опционально API)
