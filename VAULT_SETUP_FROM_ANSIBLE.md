@@ -21,7 +21,106 @@
 
 Ниже приведён пример для `prod-cloud / RegionOne`. Адреса, имена узлов и сроки жизни — **параметры примера**, а не обнаруженная конфигурация стенда. Установка, HA, storage, seal/unseal и резервное копирование самого Vault требуют отдельного регламента: восстановить его из этого архива нельзя.
 
-### Порядок настройки
+### 1.1. Общий поток движения секретов
+
+**Администратор загружает значения в Vault → Ansible размещает ссылки → контейнер получает значения по runtime AppRole → сервис использует готовую конфигурацию.** Для ограниченного набора bootstrap-паролей есть дополнительный путь через память процесса Ansible. Ниже показано движение данных при включённой интеграции; установка самого Vault выполняется заранее.
+
+```mermaid
+flowchart TD
+    operator["Администратор: подготовить пароли, ключи и сертификаты"]
+    kv["Vault KV v2: прикладные значения"]
+    refs["Deploy-хост: passwords.yml со ссылками"]
+    pointers["Ansible: конфиги и pointer-файлы на узлах"]
+    runtime["Контейнер: доработанный Kolla runtime"]
+    auth["Runtime RoleID и SecretID: tmpfs узла"]
+    ram["Приватный tmpfs контейнера: разрешённые значения"]
+    service["OpenStack и инфраструктурные сервисы"]
+    fetch["Управляемый узел: kolla_vault_get"]
+    facts["Deploy-хост: bootstrap-пароли в памяти Ansible"]
+    setup["Подготовка и регистрация сервисов"]
+    adminfiles["При post-deploy: клиентские файлы 0600 на deploy-хосте"]
+    pki["Vault PKI: выпуск сертификатов в режиме pki"]
+    operator -->|"заполнить KV"| kv
+    refs --> pointers
+    pointers -->|"передать ссылки"| runtime
+    auth -->|"аутентификация"| runtime
+    kv -->|"получить по ссылке"| runtime
+    pki -.->|"сертификат, ключ, цепочка"| runtime
+    runtime --> ram
+    ram --> service
+    auth -->|"аутентификация"| fetch
+    kv -->|"только запрошенный bootstrap-набор"| fetch
+    fetch -->|"no_log facts по SSH"| facts
+    facts --> setup
+    facts -.-> adminfiles
+```
+
+1. **Подготовка значений.** Для нового облака значения генерируют или выпускают заранее; для существующего переносят действующие. Скалярные пароли и SSH-ключи размещаются в KV по каталогу раздела 4. В режиме `kv` туда же загружают готовые сертификаты и private keys; в режиме `pki` настраивают выпуск в отдельном PKI engine.
+2. **Подготовка ссылок.** `kolla-readpwd --pull-only` заменяет значения `passwords.yml` на ссылки и проверяет только свой bootstrap-манифест. Ansible использует эти ссылки при подготовке конфигов. Для сертификатов `kv`/`pki` роли создают отдельные pointer-файлы.
+3. **Получение в контейнере.** Runtime читает RoleID/SecretID из read-only mount, выполняет AppRole login, получает Vault token и читает KV или вызывает PKI issue. Приложение получает уже разрешённые значения через свой конфиг/файл. Поддержка этой обработки должна быть в поставляемых образах.
+4. **Bootstrap-путь Ansible.** Выбранный узел читает только список ключей конкретной CLI-команды. Значения возвращаются в `no_log` facts текущего процесса Ansible для действий, которым пароль нужен до обычного запуска сервиса. Файлы RoleID/SecretID узла при этом не переносятся на deploy-хост.
+5. **Эксплуатация.** Изменение значения в KV не меняет автоматически пароль в БД/сервисе и не доказывает reload приложения. Хостовый агент обновляет credentials доступа к Vault; применение новых прикладных значений требует согласованной процедуры обновления.
+
+Локальные сертификаты при `kolla_secret_certificates_source=local` проходят штатный файловый workflow и не проходят через KV/PKI. CA для первого HTTPS-соединения с Vault заранее доверен узлу и образу. Итоговая проверка приложения и реального хранения в tmpfs остаётся стендовой проверкой, поскольку исходники контейнерного resolver не входят в ZIP.
+
+### 1.2. Отдельный поток wrapped bootstrap token
+
+**Wrapped token — одноразовый ключ к ответу Vault, внутри которого находится bootstrap SecretID.** Это не прикладной пароль и не runtime Vault token. На каждом узле хранится собственный wrapper; после успешного запуска агент заменяет его новым wrapper для следующего восстановления.
+
+```mermaid
+sequenceDiagram
+    participant O as Администратор
+    participant V as Vault
+    participant D as Диск узла: bootstrap.wrap
+    participant A as kolla-vault-agent
+    participant R as RAM узла: AppRole-файлы
+    O->>V: Выпустить bootstrap SecretID с response wrapping
+    V-->>O: W0 — wrapping token
+    O->>D: Доставить отдельный W0 на узел, root:root 0400
+    A->>D: Прочитать W0 при старте
+    A->>V: Lookup W0 — проверить origin и TTL
+    A->>V: Unwrap W0 — одноразовое использование
+    V-->>A: B0 — bootstrap SecretID в память процесса
+    A->>V: Bootstrap login с RoleID и B0
+    V-->>A: Tboot — bootstrap Vault token в память
+    A->>V: Создать новый recovery SecretID и выполнить wrap
+    V-->>A: W1 — новый recovery wrapper
+    A->>D: Атомарно заменить W0 на W1
+    A->>V: Создать Bnext для следующего bootstrap login
+    V-->>A: Bnext — только в память процесса
+    A->>V: Создать runtime SecretID
+    V-->>A: R1 — runtime SecretID
+    A->>R: Записать runtime RoleID и R1, tmpfs 0400
+    Note over A,R: Контейнеры читают runtime-файлы и выполняют собственный login
+    loop По отдельным срокам обновления
+        Note over A,V: Bootstrap login, runtime SecretID и recovery wrapper обновляются независимо
+        A->>V: Выполнить наступившее обновление
+        V-->>A: Новый credential или wrapper
+        A->>D: При обновлении wrapper заменить текущий файл
+        A->>R: При обновлении runtime SecretID заменить secret_id
+    end
+    Note over D,A: При следующем старте расходуется последний сохранённый wrapper
+```
+
+Обозначения `W0/W1`, `B0/Bnext`, `Tboot`, `R1` используются только для объяснения последовательности; таких имён файлов и KV-путей в реализации нет.
+
+| Этап | Каким credential выполняется | Что остаётся после этапа |
+|---|---|---|
+| Первоначальный выпуск wrapper | Административная identity с правом выдачи bootstrap SecretID | Wrapper отдельно для каждого узла |
+| `sys/wrapping/lookup`, затем `unwrap` | Сам wrapping token | После успешного unwrap он израсходован; bootstrap SecretID доступен агенту в памяти |
+| `auth/kolla-role/login` bootstrap-роли | Bootstrap RoleID + полученный SecretID | Bootstrap Vault token в памяти агента |
+| Подготовить credential для следующего старта | Bootstrap token: создать **новый** bootstrap SecretID, затем `sys/wrapping/wrap` | Новый wrapper в `bootstrap.wrap`; это происходит до выдачи runtime credentials |
+| Подготовить следующий bootstrap login | Bootstrap token: ещё один собственный SecretID | Отдельный `Bnext` в памяти; recovery wrapper остаётся неиспользованным |
+| Подготовить runtime-доступ | Bootstrap token: SecretID runtime-роли | Runtime RoleID/SecretID в `/run/kolla-vault/approle`, доступные контейнерам через read-only mount |
+| Обновление и повторный старт | Текущий token/следующий bootstrap SecretID либо последний wrapper | Раздельное обновление credentials; wrapper нужен для восстановления процесса |
+
+Три разных срока: TTL wrapping token, TTL вложенного bootstrap SecretID и TTL Vault token. У runtime SecretID есть свой TTL. Для автоматического расписания агент использует примерно 2/3 соответствующего эффективного TTL; для recovery — минимум TTL wrapper и вложенного SecretID. Обновление recovery создаёт новый SecretID и новый wrapper; `sys/wrapping/rewrap` в этом алгоритме не используется.
+
+Между unwrap и сохранением нового wrapper есть обозначенное в коде окно аварии. Если после такой аварии или длительного простоя при следующем старте wrapper уже использован, просрочен либо истёк вложенный SecretID, для восстановления нужен новый wrapper от администратора. При обычном цикле контейнеры не читают `bootstrap.wrap` и не получают bootstrap token.
+
+Основание для обоих потоков: `ansible/roles/vault-agent/templates/kolla-vault-agent.py.j2` (методы `generate_wrapped_secret_id`, `run`), `ansible/vault-bootstrap-fetch.yml`, `kolla_ansible/cmd/readpwd.py`, `kolla_ansible/secret_backends.py`, `ansible/post-deploy.yml`.
+
+### 1.3. Порядок настройки
 
 1. Проверить пакет Kolla, образы, inventory и доверие к HTTPS Vault.
 2. Создать или проверить KV v2 и AppRole auth mount.
@@ -33,25 +132,7 @@
 8. Подготовить `passwords.yml` со ссылками через `kolla-readpwd --pull-only`.
 9. Выполнить `prechecks`; после проверки результата — штатное развёртывание.
 
-## 2. Как работает интеграция
-
-```mermaid
-flowchart TD
-    O[Администратор Vault] -->|KV, policies, две AppRole| V[Vault]
-    O -->|Отдельный wrapper на каждый узел| W[bootstrap.wrap на диске узла]
-    W --> A[kolla-vault-agent: Python + systemd]
-    A -->|unwrap и bootstrap login| V
-    A -->|Создать runtime SecretID| V
-    A -->|Обновить recovery wrapper| W
-    A --> R[role_id и secret_id в /run, tmpfs]
-    R -->|Read-only bind mount| C[Контейнеры Kolla]
-    C -->|Runtime AppRole: читать KV / выпускать PKI| V
-    C --> S[Разрешённые секреты в приватном tmpfs контейнера]
-    D[Ansible deploy-хост] -->|Делегировать kolla_vault_get| H[Выбранный управляемый узел]
-    R --> H
-    H -->|Runtime AppRole: читать bootstrap-пароли| V
-    H -->|Значения в no_log facts текущего процесса| D
-```
+## 2. Компоненты интеграции
 
 | Компонент | Что получает и делает |
 |---|---|
@@ -170,6 +251,349 @@ P/passwords/hosts/<inventory_hostname>/<имя_секрета>
 Используется **имя из inventory**, не обязательно DNS-имя или IP. Автоматического fallback из `hosts` в `shared` нет. Bootstrap-пароли нельзя переводить в host-scoped: CLI `kolla-readpwd` и prechecks это ограничивают.
 
 Разные пути по узлам сами по себе не дают изоляцию доступа: с одной общей runtime AppRole и политикой `hosts/*` узлы получают доступ ко всему разрешённому набору. Если требуется изоляция каждого узла, нужны согласованные индивидуальные роли, ACL и host vars; это отдельный вариант от показанного здесь общего профиля.
+
+### 4.3. Полный контракт данных и граница каталога
+
+Ниже перечислены **все 128 ключей** из `etc/kolla/passwords.yml` этого ZIP: **121 скалярный объект и 7 объектов SSH-ключей, всего 135 полей**. Включены не только пароли, но также UUID, salts, shared secrets и идентификаторы, которые этот форк преобразует в Vault references тем же способом.
+
+Каталог построен по шаблону, а форматы генерации — по `kolla_ansible/cmd/genpwd.py`. Это полный перечень штатной структуры `passwords.yml`, не утверждение, что каждый ключ читается в любой конфигурации. Runtime-only ключи требуются при использовании соответствующего сервиса; bootstrap-требования определяются конкретной командой и разделом 9. Пользовательские дополнительные ключи/словарные поля reader также может преобразовать, но их невозможно перечислить без пользовательской конфигурации.
+
+Для таблиц:
+
+- `P = kolla/prod-cloud/RegionOne` — логический префикс примера, без mount и без `/data/`.
+- Все перечисленные пути расположены **внутри mount `kv`**, который должен быть KV v2.
+- Для любой строки `P/passwords/shared/K` полный API-путь равен `/v1/kv/data/kolla/prod-cloud/RegionOne/passwords/shared/K`.
+- Поле `password` сохраняется даже для UUID, Fernet key, salt или идентификатора. Имя KV-документа — имя ключа `K`, имя поля не повторяет `K`.
+- Все строки имеют scope `shared` по умолчанию. Правило замены на `hosts/<inventory_hostname>` приведено после каталога.
+- Заголовки групп ниже служат для чтения и **не создают дополнительных каталогов в KV**.
+
+#### Форматы значений
+
+| Профиль в каталоге | Поля KV-документа и формат | Основание |
+|---|---|---|
+| `G40` | `password`: строка; default генератор использует 40 символов `[A-Za-z0-9]` | Обычная ветка `generate_password(length=40)` |
+| `UUID` | `password`: строка UUID; не число | Список `uuid_keys` в `genpwd.py` |
+| `HMAC32` | `password`: 32-символьная hex-строка результата HMAC-MD5 в генераторе архива | `hmac_md5_keys`; это описание именно этого генератора |
+| `FERNET` | `password`: строка ключа формата Fernet | `fernet.Fernet.generate_key()` |
+| `SALT22` | `password`: 22-символьная строка bcrypt salt; не готовый bcrypt password hash | `random_salt(22)` |
+| `SSH` | `private_key`: PEM PKCS#8 private key без шифрования; `public_key`: OpenSSH public key; по умолчанию RSA 4096 | `generate_RSA()` |
+| `EXTERNAL` | `password`: действующий пароль внешнего registry | `docker_registry_password` входит в `blank_keys`, генератор оставляет `null` незаполненным |
+
+`G40` показывает поведение генератора нового YAML. Он не требует заменять уже действующие внешние credentials случайной строкой. Ограничения конкретного потребителя сохраняются. Не загружать `null`, шаблонную заглушку или `$(vault://...)` вместо реального значения; необязательный неиспользуемый объект можно не создавать.
+
+#### Обозначения bootstrap
+
+| Метка | Значение |
+|---|---|
+| `C + R` | Ключ разрешён CLI-fetch, присутствует в reader-манифесте и обязателен для стандартного `kolla-readpwd` |
+| `C + M` | Ключ разрешён CLI-fetch и проверяется reader; reader только предупреждает при отсутствии, но нуждающаяся CLI-команда требует значение |
+| `M` | Ключ есть только в reader-манифесте из этих двух механизмов, но отсутствует в allow-list CLI-fetch |
+| `—` | Не входит ни в reader-манифест, ни в allow-list CLI-fetch; может требоваться своему runtime-потребителю |
+
+`C` не означает, что все команды читают ключ: точный набор задаёт CLI. `R` не отменяет остальных требований deploy. Проверка множеств по архиву: 7 строк `C + R`, 13 строк `C + M`, 2 строки `M`, 106 строк `—`.
+
+### 4.4. Каталог всех password/SSH KV-объектов
+
+#### Ceph, MariaDB, registry и внешние интеграции
+
+| № | Логический путь в mount `kv` | Поля документа | Профиль | Bootstrap |
+|---|---|---|---|---|
+| 001 | `P/passwords/shared/rbd_secret_uuid` | `password` | `UUID` | C + M |
+| 002 | `P/passwords/shared/cinder_rbd_secret_uuid` | `password` | `UUID` | C + M |
+| 003 | `P/passwords/shared/database_password` | `password` | `G40` | C + R |
+| 004 | `P/passwords/shared/mariadb_backup_database_password` | `password` | `G40` | — |
+| 005 | `P/passwords/shared/mariadb_monitor_password` | `password` | `G40` | C + R |
+| 006 | `P/passwords/shared/docker_registry_password` | `password` | `EXTERNAL` | C + M |
+| 007 | `P/passwords/shared/vmware_dvs_host_password` | `password` | `G40` | — |
+| 008 | `P/passwords/shared/vmware_nsxv_password` | `password` | `G40` | — |
+| 009 | `P/passwords/shared/vmware_vcenter_host_password` | `password` | `G40` | — |
+| 010 | `P/passwords/shared/nsxv3_api_password` | `password` | `G40` | — |
+| 011 | `P/passwords/shared/vmware_nsxp_api_password` | `password` | `G40` | — |
+| 012 | `P/passwords/shared/vmware_nsxp_metadata_proxy_shared_secret` | `password` | `G40` | — |
+| 013 | `P/passwords/shared/hnas_nfs_password` | `password` | `G40` | — |
+| 014 | `P/passwords/shared/infoblox_admin_password` | `password` | `G40` | — |
+
+#### OpenStack: сервисные пароли, ключи и идентификаторы
+
+| № | Логический путь в mount `kv` | Поля документа | Профиль | Bootstrap |
+|---|---|---|---|---|
+| 015 | `P/passwords/shared/aodh_database_password` | `password` | `G40` | — |
+| 016 | `P/passwords/shared/aodh_keystone_password` | `password` | `G40` | — |
+| 017 | `P/passwords/shared/barbican_database_password` | `password` | `G40` | — |
+| 018 | `P/passwords/shared/barbican_keystone_password` | `password` | `G40` | — |
+| 019 | `P/passwords/shared/barbican_p11_password` | `password` | `G40` | — |
+| 020 | `P/passwords/shared/barbican_crypto_key` | `password` | `FERNET` | — |
+| 021 | `P/passwords/shared/blazar_database_password` | `password` | `G40` | — |
+| 022 | `P/passwords/shared/blazar_keystone_password` | `password` | `G40` | — |
+| 023 | `P/passwords/shared/keystone_admin_password` | `password` | `G40` | C + R |
+| 024 | `P/passwords/shared/keystone_database_password` | `password` | `G40` | — |
+| 025 | `P/passwords/shared/grafana_database_password` | `password` | `G40` | — |
+| 026 | `P/passwords/shared/grafana_admin_password` | `password` | `G40` | — |
+| 027 | `P/passwords/shared/glance_database_password` | `password` | `G40` | — |
+| 028 | `P/passwords/shared/glance_keystone_password` | `password` | `G40` | — |
+| 029 | `P/passwords/shared/gnocchi_database_password` | `password` | `G40` | — |
+| 030 | `P/passwords/shared/gnocchi_keystone_password` | `password` | `G40` | — |
+| 031 | `P/passwords/shared/kuryr_keystone_password` | `password` | `G40` | — |
+| 032 | `P/passwords/shared/nova_database_password` | `password` | `G40` | C + R |
+| 033 | `P/passwords/shared/nova_api_database_password` | `password` | `G40` | — |
+| 034 | `P/passwords/shared/nova_keystone_password` | `password` | `G40` | — |
+| 035 | `P/passwords/shared/placement_keystone_password` | `password` | `G40` | — |
+| 036 | `P/passwords/shared/placement_database_password` | `password` | `G40` | — |
+| 037 | `P/passwords/shared/neutron_database_password` | `password` | `G40` | — |
+| 038 | `P/passwords/shared/neutron_keystone_password` | `password` | `G40` | — |
+| 039 | `P/passwords/shared/metadata_secret` | `password` | `G40` | — |
+| 040 | `P/passwords/shared/cinder_database_password` | `password` | `G40` | — |
+| 041 | `P/passwords/shared/cinder_keystone_password` | `password` | `G40` | — |
+| 042 | `P/passwords/shared/cloudkitty_database_password` | `password` | `G40` | — |
+| 043 | `P/passwords/shared/cloudkitty_keystone_password` | `password` | `G40` | — |
+| 044 | `P/passwords/shared/cyborg_database_password` | `password` | `G40` | — |
+| 045 | `P/passwords/shared/cyborg_keystone_password` | `password` | `G40` | — |
+| 046 | `P/passwords/shared/designate_database_password` | `password` | `G40` | — |
+| 047 | `P/passwords/shared/designate_keystone_password` | `password` | `G40` | — |
+| 048 | `P/passwords/shared/designate_pool_id` | `password` | `UUID` | — |
+| 049 | `P/passwords/shared/designate_rndc_key` | `password` | `HMAC32` | — |
+| 050 | `P/passwords/shared/heat_database_password` | `password` | `G40` | — |
+| 051 | `P/passwords/shared/heat_keystone_password` | `password` | `G40` | — |
+| 052 | `P/passwords/shared/heat_domain_admin_password` | `password` | `G40` | C + R |
+| 053 | `P/passwords/shared/ironic_database_password` | `password` | `G40` | — |
+| 054 | `P/passwords/shared/ironic_keystone_password` | `password` | `G40` | — |
+| 055 | `P/passwords/shared/ironic_inspector_database_password` | `password` | `G40` | — |
+| 056 | `P/passwords/shared/ironic_inspector_keystone_password` | `password` | `G40` | — |
+| 057 | `P/passwords/shared/magnum_database_password` | `password` | `G40` | — |
+| 058 | `P/passwords/shared/magnum_keystone_password` | `password` | `G40` | — |
+| 059 | `P/passwords/shared/mistral_database_password` | `password` | `G40` | — |
+| 060 | `P/passwords/shared/mistral_keystone_password` | `password` | `G40` | — |
+| 061 | `P/passwords/shared/trove_database_password` | `password` | `G40` | — |
+| 062 | `P/passwords/shared/trove_keystone_password` | `password` | `G40` | — |
+| 063 | `P/passwords/shared/ceilometer_database_password` | `password` | `G40` | — |
+| 064 | `P/passwords/shared/ceilometer_keystone_password` | `password` | `G40` | — |
+| 065 | `P/passwords/shared/watcher_database_password` | `password` | `G40` | — |
+| 066 | `P/passwords/shared/watcher_keystone_password` | `password` | `G40` | — |
+| 067 | `P/passwords/shared/horizon_secret_key` | `password` | `G40` | — |
+| 068 | `P/passwords/shared/horizon_database_password` | `password` | `G40` | — |
+| 069 | `P/passwords/shared/telemetry_secret_key` | `password` | `G40` | — |
+| 070 | `P/passwords/shared/manila_database_password` | `password` | `G40` | — |
+| 071 | `P/passwords/shared/manila_keystone_password` | `password` | `G40` | — |
+| 072 | `P/passwords/shared/octavia_database_password` | `password` | `G40` | — |
+| 073 | `P/passwords/shared/octavia_persistence_database_password` | `password` | `G40` | — |
+| 074 | `P/passwords/shared/octavia_keystone_password` | `password` | `G40` | C + M |
+| 075 | `P/passwords/shared/octavia_ca_password` | `password` | `G40` | C + M |
+| 076 | `P/passwords/shared/octavia_client_ca_password` | `password` | `G40` | C + M |
+| 077 | `P/passwords/shared/tacker_database_password` | `password` | `G40` | — |
+| 078 | `P/passwords/shared/tacker_keystone_password` | `password` | `G40` | — |
+| 079 | `P/passwords/shared/zun_database_password` | `password` | `G40` | — |
+| 080 | `P/passwords/shared/zun_keystone_password` | `password` | `G40` | — |
+| 081 | `P/passwords/shared/venus_database_password` | `password` | `G40` | — |
+| 082 | `P/passwords/shared/venus_keystone_password` | `password` | `G40` | — |
+| 083 | `P/passwords/shared/masakari_database_password` | `password` | `G40` | — |
+| 084 | `P/passwords/shared/masakari_keystone_password` | `password` | `G40` | — |
+| 085 | `P/passwords/shared/memcache_secret_key` | `password` | `G40` | — |
+| 086 | `P/passwords/shared/skyline_secret_key` | `password` | `G40` | — |
+| 087 | `P/passwords/shared/skyline_database_password` | `password` | `G40` | — |
+| 088 | `P/passwords/shared/skyline_keystone_password` | `password` | `G40` | — |
+| 089 | `P/passwords/shared/osprofiler_secret` | `password` | `HMAC32` | — |
+
+#### SSH-ключи: семь документов по два поля
+
+| № | Логический путь в mount `kv` | Поля документа | Профиль | Bootstrap |
+|---|---|---|---|---|
+| 090 | `P/passwords/shared/nova_ssh_key` | `private_key`, `public_key` | `SSH` | — |
+| 091 | `P/passwords/shared/kolla_ssh_key` | `private_key`, `public_key` | `SSH` | — |
+| 092 | `P/passwords/shared/keystone_ssh_key` | `private_key`, `public_key` | `SSH` | — |
+| 093 | `P/passwords/shared/bifrost_ssh_key` | `private_key`, `public_key` | `SSH` | — |
+| 094 | `P/passwords/shared/octavia_amp_ssh_key` | `private_key`, `public_key` | `SSH` | — |
+| 095 | `P/passwords/shared/neutron_ssh_key` | `private_key`, `public_key` | `SSH` | — |
+| 096 | `P/passwords/shared/haproxy_ssh_key` | `private_key`, `public_key` | `SSH` | — |
+
+#### Gnocchi: идентификаторы
+
+| № | Логический путь в mount `kv` | Поля документа | Профиль | Bootstrap |
+|---|---|---|---|---|
+| 097 | `P/passwords/shared/gnocchi_project_id` | `password` | `UUID` | — |
+| 098 | `P/passwords/shared/gnocchi_resource_id` | `password` | `UUID` | — |
+| 099 | `P/passwords/shared/gnocchi_user_id` | `password` | `UUID` | — |
+
+#### RabbitMQ, HAProxy, Keepalived и FRR
+
+| № | Логический путь в mount `kv` | Поля документа | Профиль | Bootstrap |
+|---|---|---|---|---|
+| 100 | `P/passwords/shared/rabbitmq_password` | `password` | `G40` | — |
+| 101 | `P/passwords/shared/rabbitmq_monitoring_password` | `password` | `G40` | — |
+| 102 | `P/passwords/shared/rabbitmq_cluster_cookie` | `password` | `G40` | C + R |
+| 103 | `P/passwords/shared/haproxy_password` | `password` | `G40` | C + M |
+| 104 | `P/passwords/shared/keepalived_password` | `password` | `G40` | — |
+| 105 | `P/passwords/shared/frr_bgp_md5_mesh_password` | `password` | `G40` | — |
+| 106 | `P/passwords/shared/frr_bgp_md5_uplink_password` | `password` | `G40` | — |
+
+#### etcd и Redis
+
+| № | Логический путь в mount `kv` | Поля документа | Профиль | Bootstrap |
+|---|---|---|---|---|
+| 107 | `P/passwords/shared/etcd_cluster_token` | `password` | `G40` | M |
+| 108 | `P/passwords/shared/redis_master_password` | `password` | `G40` | C + M |
+
+#### Prometheus
+
+| № | Логический путь в mount `kv` | Поля документа | Профиль | Bootstrap |
+|---|---|---|---|---|
+| 109 | `P/passwords/shared/prometheus_mysql_exporter_database_password` | `password` | `G40` | — |
+| 110 | `P/passwords/shared/prometheus_alertmanager_password` | `password` | `G40` | — |
+| 111 | `P/passwords/shared/prometheus_password` | `password` | `G40` | C + M |
+| 112 | `P/passwords/shared/prometheus_grafana_password` | `password` | `G40` | C + M |
+| 113 | `P/passwords/shared/prometheus_haproxy_password` | `password` | `G40` | C + M |
+| 114 | `P/passwords/shared/prometheus_skyline_password` | `password` | `G40` | C + M |
+| 115 | `P/passwords/shared/prometheus_bcrypt_salt` | `password` | `SALT22` | C + M |
+
+#### Федерация Keystone, RadosGW, libvirt и ProxySQL
+
+| № | Логический путь в mount `kv` | Поля документа | Профиль | Bootstrap |
+|---|---|---|---|---|
+| 116 | `P/passwords/shared/keystone_federation_openid_crypto_password` | `password` | `G40` | — |
+| 117 | `P/passwords/shared/ceph_rgw_keystone_password` | `password` | `G40` | — |
+| 118 | `P/passwords/shared/libvirt_sasl_password` | `password` | `G40` | C + R |
+| 119 | `P/passwords/shared/proxysql_admin_password` | `password` | `G40` | — |
+| 120 | `P/passwords/shared/proxysql_stats_password` | `password` | `G40` | — |
+
+#### OpenSearch и аудит безопасности
+
+| № | Логический путь в mount `kv` | Поля документа | Профиль | Bootstrap |
+|---|---|---|---|---|
+| 121 | `P/passwords/shared/opensearch_dashboards_password` | `password` | `G40` | M |
+| 122 | `P/passwords/shared/opensearch_dashboards_backend_password` | `password` | `G40` | — |
+| 123 | `P/passwords/shared/prometheus_elasticsearch_exporter_password` | `password` | `G40` | — |
+| 124 | `P/passwords/shared/security_audit_ingest_password` | `password` | `G40` | — |
+| 125 | `P/passwords/shared/security_audit_readonly_password` | `password` | `G40` | — |
+| 126 | `P/passwords/shared/security_audit_flog_ingest_password` | `password` | `G40` | — |
+| 127 | `P/passwords/shared/security_audit_admin_password` | `password` | `G40` | — |
+| 128 | `P/passwords/shared/security_audit_bcrypt_salt` | `password` | `SALT22` | — |
+
+Контроль полноты: 128 строк соответствуют 128 уникальным ключам исходного YAML; семь SSH-документов содержат по два поля, остальные — по одному. Поля каждого документа проверены через функцию `_runtime_placeholder` reader. Источники: `etc/kolla/passwords.yml`, `kolla_ansible/cmd/readpwd.py`, `kolla_ansible/cmd/genpwd.py`, `etc/kolla/vault-bootstrap-secrets.yml`, `ansible/group_vars/all.yml`.
+
+### 4.5. Как выглядит содержимое KV-документа
+
+**Скаляр** — например, `P/passwords/shared/database_password`. Для `vault kv put ... @payload.json` JSON содержит только пользовательские поля:
+
+```json
+{
+  "password": "REPLACE_WITH_ACTUAL_VALUE"
+}
+```
+
+Точно такое же имя поля `password` используется для `rbd_secret_uuid`, `prometheus_bcrypt_salt`, `barbican_crypto_key` и других скалярных строк каталога; меняется формат значения и имя документа.
+
+**SSH-пара** — например, `P/passwords/shared/nova_ssh_key`:
+
+```json
+{
+  "private_key": "REPLACE_WITH_PEM_PRIVATE_KEY",
+  "public_key": "REPLACE_WITH_OPENSSH_PUBLIC_KEY"
+}
+```
+
+Это один документ с двумя полями. Не создавать два объекта `.../nova_ssh_key/private_key` и `.../nova_ssh_key/public_key`. Reader формирует две ссылки к одному документу с разными фрагментами `#private_key` и `#public_key`.
+
+**Различие CLI и HTTP API:** при прямой записи KV v2 через `POST /v1/kv/data/<logical-path>` пользовательские поля помещаются внутрь `data`. Пример тела первого создания:
+
+```json
+{
+  "options": {"cas": 0},
+  "data": {
+    "password": "REPLACE_WITH_ACTUAL_VALUE"
+  }
+}
+```
+
+При чтении KV v2 пользовательские поля находятся в `response.data.data`. В файл для `vault kv put` внешние поля `data/options` из HTTP-примера переносить не нужно: это разные уровни API. `version`, `created_time`, `deletion_time` — служебные метаданные KV v2, не поля пароля.
+
+### 4.6. Развёртывание каталога по узлам
+
+Если выбранный ключ `K` включён в `vault_host_scoped_passwords`, его строка каталога заменяется для **каждого нужного узла**:
+
+```text
+По умолчанию: P/passwords/shared/K
+Host-scoped:  P/passwords/hosts/<inventory_hostname>/K
+```
+
+Поля и формат документа остаются прежними. Для SSH-пары в каждом таком документе по-прежнему два поля. При переименовании `inventory_hostname` меняется ожидаемый Vault-путь; значения сами не перемещаются. Для ключей с метками `C + R`, `C + M` и `M` host-scoped режим стандартный reader запрещает: все 22 имени входят в его bootstrap-манифест. Для остальных ключей допустимость отдельного значения на каждом узле определяется устройством сервиса — общий пароль к общей БД нельзя произвольно разнести по узлам.
+
+Пример структуры для выбранного runtime-ключа `K` на двух узлах:
+
+```text
+P/passwords/hosts/controller01/K   -> те же поля, значение для controller01
+P/passwords/hosts/controller02/K   -> те же поля, значение для controller02
+```
+
+В режиме host-scoped reader создаёт путь с `{{ inventory_hostname }}`. Он не проверяет наличие всех этих документов; полноту по inventory требуется проверять отдельно. Приведённая в разделе 5 общая региональная ACL не изолирует один узел от другого.
+
+### 4.7. Полная схема сертификатов и CA в режиме kv
+
+Эти документы существуют **дополнительно** к 128 password/SSH-объектам. Число фактических документов зависит от inventory и включённых TLS-сервисов. В архиве определены семь стандартных шаблонов путей и расширяемая карта дополнительных CA:
+
+```text
+kv                                      # engine KV v2
+└── kolla/prod-cloud/RegionOne
+    └── certificates
+        ├── hosts
+        │   └── <inventory_hostname>
+        │       ├── backend             -> cert, key, pem
+        │       ├── libvirt-client      -> cert, key
+        │       └── libvirt-server      -> cert, key
+        ├── shared
+        │   ├── haproxy-external        -> pem
+        │   ├── haproxy-internal        -> pem
+        │   └── database                -> cert, key
+        └── trust
+            ├── internal-ca             -> ca
+            └── <additional-ca-name>    -> ca или поле из vault_extra_ca_files
+```
+
+Последняя строка — соглашение для дополнительных CA, не жёстко заданный путь: `vault_extra_ca_files[*].path` может указывать на другой KV-путь. Нельзя добавить поле/путь в эту карту и считать, что оно уже создано в Vault.
+
+| Шаблон логического пути | Поля и значения | Когда/как читается |
+|---|---|---|
+| `P/certificates/hosts/<inventory_hostname>/backend` | `cert`: PEM сертификат и нужная цепочка; `key`: соответствующий PEM private key; `pem`: объединённый комплект для HAProxy | Backend TLS/mTLS; `pem` нужен узлам, где используется HAProxy backend client identity |
+| `P/certificates/hosts/<inventory_hostname>/libvirt-client` | `cert`, `key`: клиентский TLS-комплект в PEM | libvirt TLS client на соответствующем узле |
+| `P/certificates/hosts/<inventory_hostname>/libvirt-server` | `cert`, `key`: серверный TLS-комплект в PEM | libvirt TLS server на соответствующем узле |
+| `P/certificates/shared/haproxy-external` | `pem`: private key + сертификат/цепочка, пригодные для HAProxy | Включён внешний TLS frontend |
+| `P/certificates/shared/haproxy-internal` | `pem`: private key + сертификат/цепочка, пригодные для HAProxy | Включён внутренний TLS frontend |
+| `P/certificates/shared/database` | `cert`, `key`: общий PEM TLS-комплект БД | ProxySQL; MariaDB без ProxySQL использует этот путь, с ProxySQL — host `backend` |
+| `P/certificates/trust/internal-ca` | `ca`: PEM доверенного CA/bundle | Внутреннее доверие и libvirt CA; разные целевые файлы могут ссылаться на один объект |
+| Путь из `vault_extra_ca_files[<filename>].path` | Поле из `.field`, default `ca`: дополнительный PEM CA/bundle | Дополнительные trust anchors при включённом копировании CA; карта пуста по умолчанию |
+
+В default-схеме нет отдельного KV-документа `proxysql` и нет отдельного CA-документа на каждый сервис: `vault_proxysql_tls_path` ссылается на общий `database`, `vault_libvirt_ca_path` — на `trust/internal-ca`. `ca-certificates/internal-ca.crt` и `ca-certificates/root.crt` могут быть двумя pointer-файлами к одному `internal-ca#ca`.
+
+Пример payload для host `backend`:
+
+```json
+{
+  "cert": "REPLACE_WITH_PEM_CERTIFICATE_CHAIN",
+  "key": "REPLACE_WITH_MATCHING_PEM_PRIVATE_KEY",
+  "pem": "REPLACE_WITH_HAPROXY_PEM_BUNDLE"
+}
+```
+
+Reader `kolla-readpwd` не формирует эти объекты и не переносит их из `passwords.yml`. Certificate pointers создают соответствующие Ansible-роли. В режиме `pki` стандартные leaf certificates и внутренний trust chain приходят из PKI issue response вместо перечисленных KV-документов; произвольные дополнительные CA из `vault_extra_ca_files` остаются KV-backed. В `local` стандартные сертификаты остаются в файловом workflow.
+
+Все 12 полей семи стандартных шаблонов выше — имена полей, которые используются ролями; не каждый узел читает все 12. При замене путей через `vault_*_tls_path`/`vault_libvirt_ca_path` учесть соответствующие ссылки и ACL. Подробности выбора сертификатов и PKI-role приведены в разделе 10.
+
+Источники: `ansible/group_vars/all.yml:1754`, `ansible/roles/service-cert-copy/tasks/main.yml`, `ansible/roles/loadbalancer/tasks/copy-certs.yml`, `ansible/roles/nova-cell/tasks/config-libvirt-tls.yml`.
+
+### 4.8. Что не является объектом этого KV-каталога
+
+| Материал | Где он находится/какой механизм используется | Причина отдельного описания |
+|---|---|---|
+| Wrapping token | `bootstrap.wrap` на диске узла; `sys/wrapping/*` в Vault | Одноразовый доступ к обёрнутому ответу, не `kv/data/...` |
+| Bootstrap SecretID и Vault token | AppRole auth API и память `kolla-vault-agent` | Выдают credentials и обновляют recovery; не загружаются как password KV-объекты |
+| Runtime RoleID/SecretID | AppRole auth API; файлы в `/run/kolla-vault/approle` | Используются для login; runtime token клиент получает отдельно |
+| Временный token для `kolla-readpwd` | Token auth API; защищённый файл оператора | Отдельный доступ reader, описанный в разделе 5.6 |
+| Выпущенные PKI private keys и сертификаты | PKI issue response → runtime материализация | Не становятся автоматически документами `certificates/...` в KV |
+| Внутренний CA/private key issuer | Настроенный Vault PKI engine/регламент PKI | CA private key не должен подменяться полем `trust/internal-ca#ca`, где ожидается публичный trust bundle |
+| CA для HTTPS самого Vault | Предварительно установленное доверие хоста и образов | Нужен до первого чтения KV/PKI |
+| Keystone Fernet keys | Штатный `keystone_fernet` bootstrap/volume/rotation workflow | В каталоге нет автоматического KV-мэппинга этих ключей; `keystone_ssh_key` — другой объект |
+| Материалы Octavia Amphora CA | Локальные задачи `octavia-certificates` и копирование файлов | `vault_octavia_kv_path` объявлен, но потребитель этого KV-пути не найден; имена его предполагаемых KV-полей не определены |
+| Произвольные BMC/SSH credentials inventory и внешних плагинов | Определяется конкретной конфигурацией/плагином | Этот шаблон и reader не задают для них полный автоматический Vault-каталог |
+
+Источники для границ: `ansible/roles/keystone/tasks/bootstrap_service.yml`, `ansible/roles/keystone/tasks/distribute_fernet.yml`, `ansible/roles/octavia/tasks/config.yml`, `ansible/roles/octavia-certificates/tasks/main.yml`, `ansible/roles/vault-agent/templates/kolla-vault-agent.py.j2`.
 
 ## 5. Настроить Vault: действия администратора
 
