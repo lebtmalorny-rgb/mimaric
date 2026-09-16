@@ -2,9 +2,11 @@
 
 Инструкция восстановлена по исходникам архива `kolla-ansible-pvs_1.0.0_14.09.zip`.
 
+В этой ветке опубликована только инструкция. Архив, распакованные исходники и локальные протоколы проверок в репозиторий не включены. Ссылки на исходники ниже указаны как пути относительно корня распакованного архива `kolla-ansible-pvs_1.0.0/`.
+
 - Дата анализа: **15 сентября 2026 года**.
 - SHA-256 архива: `bbb7bfb1398cbe07a12e374cae56f03e9e5c192798cf3ff7842aa75d8c2d7e44`.
-- Распакованные исходники: kolla-ansible-pvs_1.0.0 (`kolla-ansible-pvs_1.0.0/`).
+- Распакованные исходники: `kolla-ansible-pvs_1.0.0/`.
 - Проверка выполнена по коду и локальным тестам. Подключений к действующему Vault и запусков Ansible на узлах не было.
 
 ## 1. Краткий вывод
@@ -144,7 +146,7 @@ sequenceDiagram
 
 Термин **bootstrap** используется в двух разных смыслах: bootstrap **AppRole** запускает хостовый агент; bootstrap **пароли** нужны Ansible для подготовки сервисов. Эти пароли читает runtime AppRole, а не bootstrap AppRole.
 
-Основание: роль vault-agent (`kolla-ansible-pvs_1.0.0/ansible/roles/vault-agent/tasks/init.yml`), реализация агента (`kolla-ansible-pvs_1.0.0/ansible/roles/vault-agent/templates/kolla-vault-agent.py.j2`), делегированное чтение (`kolla-ansible-pvs_1.0.0/ansible/vault-bootstrap-fetch.yml`), readpwd (`kolla-ansible-pvs_1.0.0/kolla_ansible/cmd/readpwd.py`).
+Основание: `ansible/roles/vault-agent/tasks/init.yml`, `ansible/roles/vault-agent/templates/kolla-vault-agent.py.j2`, `ansible/vault-bootstrap-fetch.yml`, `kolla_ansible/cmd/readpwd.py`.
 
 ## 3. Предварительные условия
 
@@ -176,7 +178,7 @@ ansible-galaxy collection list
 
 Точная версия сервера Vault не закреплена. Нужны API KV v2, AppRole и response wrapping; для `pki` также PKI issue API. Версии и совместимость runtime следует подтвердить на целевой поставке.
 
-Основание: requirements (`kolla-ansible-pvs_1.0.0/requirements.txt`), коллекция Kolla (`kolla-ansible-pvs_1.0.0/requirements.yml`), core-коллекции (`kolla-ansible-pvs_1.0.0/requirements-core.yml`), setup.cfg (`kolla-ansible-pvs_1.0.0/setup.cfg`), group_vars (`kolla-ansible-pvs_1.0.0/ansible/group_vars/all.yml`), граница runtime (`kolla-ansible-pvs_1.0.0/kolla_ansible/secret_backends.py`).
+Основание: `requirements.txt`, `requirements.yml`, `requirements-core.yml`, `setup.cfg`, `ansible/group_vars/all.yml`, `kolla_ansible/secret_backends.py`.
 
 ### 3.2. Узлы и сеть
 
@@ -236,7 +238,7 @@ kv/                                       # mount KV v2
 
 `/data/` присутствует в API, ACL и ссылке; при `vault kv ... -mount=kv` его вручную не добавляют. Это соответствует [схеме KV v2 HashiCorp](https://developer.hashicorp.com/vault/docs/secrets/kv).
 
-Скаляр хранить как строковое поле `password`. Словари SSH-ключей сохранять с полями `private_key` и `public_key`. Типы и ограничения конкретных значений сохраняются: например, `rbd_secret_uuid` и `cinder_rbd_secret_uuid` должны оставаться UUID, а bcrypt salts — корректными salts. Полный перечень входных ключей находится в эталонном passwords.yml (`kolla-ansible-pvs_1.0.0/etc/kolla/passwords.yml`); это перечень возможностей поставки, а не доказательство необходимости всех сервисов в конкретном inventory.
+Скаляр хранить как строковое поле `password`. Словари SSH-ключей сохранять с полями `private_key` и `public_key`. Типы и ограничения конкретных значений сохраняются: например, `rbd_secret_uuid` и `cinder_rbd_secret_uuid` должны оставаться UUID, а bcrypt salts — корректными salts. Полный перечень входных ключей находится в `etc/kolla/passwords.yml`; это перечень возможностей поставки, а не доказательство необходимости всех сервисов в конкретном inventory.
 
 ### 4.2. Host-scoped secrets
 
@@ -640,7 +642,7 @@ vault kv put -cas=0 -mount=kv \
 
 `-cas=0` подходит для первоначального создания: запись существующего ключа завершится ошибкой. Обновления выполнять отдельной операцией с проверкой текущей версии. Передавать данные через файл/стандартный ввод, не подставлять реальные пароли в аргументы команды. Возможность JSON-файла и семантика CAS описаны в [Vault kv put](https://developer.hashicorp.com/vault/docs/commands/kv/put).
 
-**Особенность архива:** `kolla-writepwd` есть, но запись требует `--allow-vault-write`, явно обозначенного как break-glass. Утилита пишет только `passwords/shared`, пропускает пустые значения и может обновлять существующие. В штатный deploy её включать не следует. Нельзя подавать ей уже преобразованный файл со ссылками: в коде нет запрета на сохранение этих строк как паролей. Основание: writepwd.py (`kolla-ansible-pvs_1.0.0/kolla_ansible/cmd/writepwd.py`).
+**Особенность архива:** `kolla-writepwd` есть, но запись требует `--allow-vault-write`, явно обозначенного как break-glass. Утилита пишет только `passwords/shared`, пропускает пустые значения и может обновлять существующие. В штатный deploy её включать не следует. Нельзя подавать ей уже преобразованный файл со ссылками: в коде нет запрета на сохранение этих строк как паролей. Основание: `kolla_ansible/cmd/writepwd.py`.
 
 Какие bootstrap-ключи обязательно подготовить, см. раздел 9. Одного `database_password` достаточно лишь для штатного probe `approle status`, не для deploy.
 
@@ -696,7 +698,7 @@ vault policy write kolla-bootstrap-prod-cloud-RegionOne kolla-bootstrap.hcl
 
 Bootstrap token не имеет прямого права читать KV, но может выдать runtime SecretID и тем самым получить runtime-доступ. Это привилегированный credential хостового сервиса. Не монтировать bootstrap wrapper и bootstrap token в контейнеры.
 
-Основание: агент, методы generate_secret_id/generate_wrapped_secret_id (`kolla-ansible-pvs_1.0.0/ansible/roles/vault-agent/templates/kolla-vault-agent.py.j2`), [wrapping API](https://developer.hashicorp.com/vault/api-docs/system/wrapping-wrap).
+Основание: `ansible/roles/vault-agent/templates/kolla-vault-agent.py.j2`, [wrapping API](https://developer.hashicorp.com/vault/api-docs/system/wrapping-wrap).
 
 ### 5.5. Создать две AppRole
 
@@ -800,7 +802,7 @@ config_strategy: "COPY_ALWAYS"
 
 `vault_ott_file` существует только как совместимый псевдоним пути. **Содержимое этого файла всё равно должно быть wrapping token**, а не старый долгоживущий token.
 
-Основание: пример globals (`kolla-ansible-pvs_1.0.0/etc/kolla/globals.yml`), значения по умолчанию (`kolla-ansible-pvs_1.0.0/ansible/group_vars/all.yml`), prechecks (`kolla-ansible-pvs_1.0.0/ansible/roles/prechecks/tasks/service_checks.yml`), разбор параметров readpwd (`kolla-ansible-pvs_1.0.0/kolla_ansible/cmd/readpwd.py`).
+Основание: `etc/kolla/globals.yml`, `ansible/group_vars/all.yml`, `ansible/roles/prechecks/tasks/service_checks.yml`, `kolla_ansible/cmd/readpwd.py`.
 
 ## 7. Доставить wrapper на каждый узел
 
@@ -856,7 +858,7 @@ kolla-ansible approle status -i /etc/kolla/multinode
 
 ### 8.2. Подготовить passwords.yml со ссылками
 
-На deploy-хосте должен существовать YAML с полной структурой ключей текущей поставки. Для нового окружения взять etc/kolla/passwords.yml (`kolla-ansible-pvs_1.0.0/etc/kolla/passwords.yml`). Для действующего облака сначала сохранить предусмотренную регламентом резервную копию: `kolla-readpwd` **перезаписывает входной файл**.
+На deploy-хосте должен существовать YAML с полной структурой ключей текущей поставки. Для нового окружения взять `etc/kolla/passwords.yml`. Для действующего облака сначала сохранить предусмотренную регламентом резервную копию: `kolla-readpwd` **перезаписывает входной файл**.
 
 У `kolla-readpwd` отдельная аутентификация. Для удалённого deploy-хоста используйте временный read-only token в защищённом файле, которому разрешено чтение bootstrap-путей из манифеста. Если CLI выполняется прямо на узле агента, можно передать локальные runtime RoleID/SecretID-файлы; копировать их между узлами не требуется.
 
@@ -874,7 +876,7 @@ env -u VAULT_TOKEN -u VAULT_ROLE_ID_FILE -u VAULT_SECRET_ID_FILE \
   --vault-token-file /run/kolla-readpwd/token
 ```
 
-Файл `/etc/kolla/vault-bootstrap-secrets.yml` предварительно взять из архива (`kolla-ansible-pvs_1.0.0/etc/kolla/vault-bootstrap-secrets.yml`). Не путать token-файл reader с `bootstrap.wrap`: wrapper не является token для чтения KV.
+Файл `/etc/kolla/vault-bootstrap-secrets.yml` предварительно взять из `etc/kolla/vault-bootstrap-secrets.yml`. Не путать token-файл reader с `bootstrap.wrap`: wrapper не является token для чтения KV.
 
 Для запуска на узле агента заменить token-file аутентификацию следующими параметрами и обеспечить право чтения root-файлов:
 
@@ -918,7 +920,7 @@ CLI добавляет `vault-bootstrap-fetch.yml` перед основной �
 kolla-ansible post-deploy -i /etc/kolla/multinode
 ```
 
-Он создаёт на deploy-хосте `clouds.yaml` и `*-openrc*.sh` с реальными credentials, `0600`; при включённой Octavia также её openrc. Это явно реализованное исключение из схемы хранения только ссылок, а не RAM-only результат. Основание: CLI (`kolla-ansible-pvs_1.0.0/kolla_ansible/cli/commands.py`), post-deploy.yml (`kolla-ansible-pvs_1.0.0/ansible/post-deploy.yml`).
+Он создаёт на deploy-хосте `clouds.yaml` и `*-openrc*.sh` с реальными credentials, `0600`; при включённой Octavia также её openrc. Это явно реализованное исключение из схемы хранения только ссылок, а не RAM-only результат. Основание: `kolla_ansible/cli/commands.py`, `ansible/post-deploy.yml`.
 
 ## 9. Bootstrap-секреты: что проверяется фактически
 
@@ -985,7 +987,7 @@ Fetch исключает `docker_registry_password`, если не задан `d
 
 Манифест reader содержит `opensearch_dashboards_password` и `etcd_cluster_token`, которых нет в глобальном allow-list CLI-fetch. Соответствующие plaintext aliases в group vars присутствуют, но одних aliases недостаточно для получения значений. Нельзя просто добавить эти имена в запрос fetch, не согласовав allow-list и потребителей.
 
-Источники: манифест (`kolla-ansible-pvs_1.0.0/etc/kolla/vault-bootstrap-secrets.yml`), CLI, строки 25–83 (`kolla-ansible-pvs_1.0.0/kolla_ansible/cli/commands.py`), фильтры и проверки fetch (`kolla-ansible-pvs_1.0.0/ansible/vault-bootstrap-fetch.yml`).
+Источники: `etc/kolla/vault-bootstrap-secrets.yml`, `kolla_ansible/cli/commands.py`, `ansible/vault-bootstrap-fetch.yml`.
 
 ## 10. Сертификаты: три режима
 
@@ -1041,7 +1043,7 @@ path "kv/data/kolla/prod-cloud/RegionOne/certificates/*" {
 
 В `kv`/`pki` команда `kolla-ansible certificates` намеренно завершается ошибкой: host-side генерация отключена. `vault_extra_ca_files` позволяет описать дополнительные CA из KV; это не механизм первого доверия к HTTPS Vault.
 
-Основание: service-cert-copy (`kolla-ansible-pvs_1.0.0/ansible/roles/service-cert-copy/tasks/main.yml`), HAProxy/ProxySQL (`kolla-ansible-pvs_1.0.0/ansible/roles/loadbalancer/tasks/copy-certs.yml`), libvirt (`kolla-ansible-pvs_1.0.0/ansible/roles/nova-cell/tasks/config-libvirt-tls.yml`), certificates (`kolla-ansible-pvs_1.0.0/ansible/roles/certificates/tasks/main.yml`).
+Основание: `ansible/roles/service-cert-copy/tasks/main.yml`, `ansible/roles/loadbalancer/tasks/copy-certs.yml`, `ansible/roles/nova-cell/tasks/config-libvirt-tls.yml`, `ansible/roles/certificates/tasks/main.yml`.
 
 ### 10.2. Выпуск через Vault PKI
 
@@ -1114,7 +1116,7 @@ path "pki/issue/kolla-libvirt-server" { capabilities = ["update"] }
 - Prechecks запрещают внутренний frontend mTLS вместе с `enable_glance_image_cache`, а RabbitMQ mTLS — вместе с `enable_trove`.
 - Для backend mTLS требуется `kolla_verify_tls_backend=yes`; mTLS-флаги требуют соответствующих TLS-флагов.
 
-Основание: Octavia config (`kolla-ansible-pvs_1.0.0/ansible/roles/octavia/tasks/config.yml`), Octavia certificates (`kolla-ansible-pvs_1.0.0/ansible/roles/octavia-certificates/tasks/main.yml`), prechecks (`kolla-ansible-pvs_1.0.0/ansible/roles/prechecks/tasks/service_checks.yml`).
+Основание: `ansible/roles/octavia/tasks/config.yml`, `ansible/roles/octavia-certificates/tasks/main.yml`, `ansible/roles/prechecks/tasks/service_checks.yml`.
 
 ## 11. Проверка и эксплуатация
 
@@ -1210,7 +1212,7 @@ kolla-ansible approle status -i /etc/kolla/multinode --limit controller01
 - Отсутствие всех persistent secrets: `post-deploy` прямо создаёт plaintext-клиентские файлы; локальные сертификаты и Octavia имеют собственный workflow.
 - Корректная работа всех вариантов mTLS и восстановление при reboot/outage без стендовых испытаний.
 
-**Дополнительное расхождение:** при `enable_security_audit` функция `security_audit.ensure_passwords()` добавляет отсутствующие audit-ключи в `passwords.yml` как сгенерированные значения, без проверки `enable_config_vault`. Поэтому старый неполный YAML может снова получить plaintext даже после перевода на ссылки. Использовать полный шаблон поставки, обеспечить наличие и Vault-ссылки всех audit-ключей; отдельная проверка нужна перед объявлением файла reference-only. Основание: security_audit.py, ensure_passwords (`kolla-ansible-pvs_1.0.0/kolla_ansible/security_audit.py`).
+**Дополнительное расхождение:** при `enable_security_audit` функция `security_audit.ensure_passwords()` добавляет отсутствующие audit-ключи в `passwords.yml` как сгенерированные значения, без проверки `enable_config_vault`. Поэтому старый неполный YAML может снова получить plaintext даже после перевода на ссылки. Использовать полный шаблон поставки, обеспечить наличие и Vault-ссылки всех audit-ключей; отдельная проверка нужна перед объявлением файла reference-only. Основание: `kolla_ansible/security_audit.py`.
 
 ### 13.3. Локальные тесты
 
@@ -1225,17 +1227,23 @@ kolla-ansible approle status -i /etc/kolla/multinode --limit controller01
 
 При предварительной попытке `test_vault_tmpfs` не импортировался из-за отсутствия Linux-зависимости `dbus`; этот модуль не входит в итоговые 83 теста. Его классы также рассчитаны на pytest, поэтому проверять его следует в штатном Linux test environment.
 
-Повторить ровно сохранённый набор можно из каталога рядом с ZIP:
+Повторить этот набор существующих тестов можно из корня распакованного архива:
 
 ```bash
 uv run --offline --no-project --python 3.11 \
   --with pyyaml --with cliff --with jinja2 \
-  python -B vault-analysis/run-source-checks.py
+  python -B -m unittest \
+  kolla_ansible.tests.unit.test_readpwd_vault \
+  kolla_ansible.tests.unit.test_secret_backends \
+  kolla_ansible.tests.unit.test_vault_file_sources \
+  kolla_ansible.tests.unit.test_vault_bootstrap_scoping \
+  kolla_ansible.tests.unit.test_vault_mtls_merge \
+  kolla_ansible.tests.unit.test_secret_architecture \
+  kolla_ansible.tests.unit.test_approle_bootstrap_order \
+  kolla_ansible.tests.unit.test_wrapped_secret_agent
 ```
 
-`--offline` предполагает уже доступные зависимости. Wrapper запускает существующие тесты, не подменяет их и возвращает ненулевой код при ошибках. Исходники архива не исправлялись.
-
-Артефакты: полный протокол (`vault-analysis/source-tests.log`), машиночитаемый результат (`vault-analysis/source-tests.json`), запускатель проверок (`vault-analysis/run-source-checks.py`).
+`--offline` предполагает уже доступные зависимости. Команда запускает существующие тесты и возвращает ненулевой код при ошибках. Исходники архива не исправлялись. Полный протокол и машиночитаемый результат сохранены локально при подготовке инструкции; в эту ветку они не включены.
 
 ## 14. Карта исходников для сопровождения инструкции
 

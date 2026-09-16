@@ -4,7 +4,7 @@
 
 **Что делать до deploy:** инженер заранее создаёт небольшой `cinder-volume.conf` override и XML с действующими реквизитами массива на машине запуска Ansible. Полный рабочий `cinder.conf` создаёт роль во время `deploy`. Пошаговый порядок — [разделы 3.4–3.6](#34-что-подготовить-до-первого-deploy).
 
-Количество Glance API, общее хранилище и поддержка active-active разобраны в [отдельном документе](GLANCE_CINDER_SHARED_STORAGE_AND_HA.md).
+Количество Glance API, общее хранилище и поддержка active-active разобраны в [отдельном документе](../../../GLANCE_CINDER_SHARED_STORAGE_AND_HA.md).
 
 Подключение хранилища состоит из трёх разных действий:
 
@@ -77,7 +77,7 @@ backend dorado-1
 
 Типичная идентичность сервиса выглядит как `storage01@nfs-1`, а имя пула может дополнительно содержать `#<pool>`. Это пример формата, а не фактическое состояние стенда.
 
-Основание: [multi-backend Cinder](https://docs.openstack.org/cinder/2025.1/admin/multi-backend.html), описание сервиса в роли (`kolla-ansible-pvs_1.0.0/ansible/roles/cinder/defaults/main.yml`).
+Основание: [multi-backend Cinder](https://docs.openstack.org/cinder/2025.1/admin/multi-backend.html), `ansible/roles/cinder/defaults/main.yml`.
 
 ## 2. Создание тома и движение данных
 
@@ -174,7 +174,7 @@ Dorado FC:
 
 **Изменения нужно хранить в исходных overrides на машине Ansible.** Ручные изменения итогового файла на целевом хосте или внутри контейнера будут потеряны при последующей генерации или запуске с управляемой конфигурацией.
 
-Основание: config.yml (`kolla-ansible-pvs_1.0.0/ansible/roles/cinder/tasks/config.yml`), merge_configs.py (`kolla-ansible-pvs_1.0.0/ansible/action_plugins/merge_configs.py`), cinder-volume.json.j2 (`kolla-ansible-pvs_1.0.0/ansible/roles/cinder/templates/cinder-volume.json.j2`).
+Основание: `ansible/roles/cinder/tasks/config.yml`, `ansible/action_plugins/merge_configs.py`, `ansible/roles/cinder/templates/cinder-volume.json.j2`.
 
 ### 3.3. Когда применяются изменения
 
@@ -420,7 +420,7 @@ nfs.example:/volumes
 
 **NFS-сервер, export и права доступа нужно подготовить отдельно.** Роль Cinder не создаёт export на NFS-сервере. Постоянный ручной mount каждого export через `/etc/fstab` не является механизмом этой интеграции: рабочими mount управляют Cinder и Nova.
 
-Основание: шаблон Cinder (`kolla-ansible-pvs_1.0.0/ansible/roles/cinder/templates/cinder.conf.j2`), доставка nfs_shares (`kolla-ansible-pvs_1.0.0/ansible/roles/cinder/tasks/config.yml`), [поведение NFS driver](https://docs.openstack.org/cinder/2025.1/configuration/block-storage/drivers/nfs-volume-driver.html).
+Основание: `ansible/roles/cinder/templates/cinder.conf.j2`, `ansible/roles/cinder/tasks/config.yml`, [поведение NFS driver](https://docs.openstack.org/cinder/2025.1/configuration/block-storage/drivers/nfs-volume-driver.html).
 
 ## 5. Что реализовано для Huawei Dorado
 
@@ -468,7 +468,7 @@ Storage-хост:
 
 XML содержит параметры продукта, протокола, REST API, учётной записи, пула и подключения. Нельзя определять его окончательную структуру только по слову «Dorado»: модель и версия ПО пока неизвестны. [Официальная конфигурация Huawei driver](https://docs.openstack.org/cinder/2025.1/configuration/block-storage/drivers/huawei-storage-driver.html).
 
-Основание для поведения роли: external_huawei.yml (`kolla-ansible-pvs_1.0.0/ansible/roles/cinder/tasks/external_huawei.yml`), список backend (`kolla-ansible-pvs_1.0.0/ansible/roles/cinder/defaults/main.yml`).
+Основание для поведения роли: `ansible/roles/cinder/tasks/external_huawei.yml`, `ansible/roles/cinder/defaults/main.yml`.
 
 ## 6. Пример совместного подключения NFS и Dorado
 
@@ -579,7 +579,7 @@ openstack volume create --size 10 --type dorado test-dorado
 
 Правила export и права нужно согласовать с режимом работы драйвера. В архиве шаблон явно задаёт `nas_secure_file_permissions = false` и `nas_secure_file_operations = false`; наличие этих строк не доказывает корректность прав на конкретном NFS-сервере.
 
-Основание: [настройка NFS backend](https://docs.openstack.org/cinder/2025.1/admin/nfs-backend.html), шаблон Cinder (`kolla-ansible-pvs_1.0.0/ansible/roles/cinder/templates/cinder.conf.j2`).
+Основание: [настройка NFS backend](https://docs.openstack.org/cinder/2025.1/admin/nfs-backend.html), `ansible/roles/cinder/templates/cinder.conf.j2`.
 
 ### 7.3. Dorado
 
@@ -629,7 +629,7 @@ volume_use_multipath = true
 
 **Первое включение NFS, iSCSI или multipath может потребовать изменений на compute.** Запуск только роли Cinder не применит эти изменения к Nova и транспортным сервисам.
 
-Основание: inventory (`kolla-ansible-pvs_1.0.0/ansible/inventory/multinode`), общие переменные (`kolla-ansible-pvs_1.0.0/ansible/group_vars/all.yml`), параметры Nova (`kolla-ansible-pvs_1.0.0/ansible/roles/nova-cell/defaults/main.yml`), шаблон libvirt (`kolla-ansible-pvs_1.0.0/ansible/roles/nova-cell/templates/nova.conf.d/libvirt.conf.j2`), доставка multipath.conf (`kolla-ansible-pvs_1.0.0/ansible/roles/multipathd/tasks/config.yml`).
+Основание: `ansible/inventory/multinode`, `ansible/group_vars/all.yml`, `ansible/roles/nova-cell/defaults/main.yml`, `ansible/roles/nova-cell/templates/nova.conf.d/libvirt.conf.j2`, `ansible/roles/multipathd/tasks/config.yml`.
 
 ### 7.5. Граница bootstrap-servers
 
@@ -738,7 +738,7 @@ Precheck архива проверяет `cinder_cluster_name`, когда в г
 
 Кроме того, `cinder_backend_huawei` не включён в проверку «есть хотя бы один backend». В схеме NFS + Huawei её удовлетворяет включённый NFS. При переходе на один пользовательский FC-backend нужно отдельно учитывать `skip_cinder_backend_check`; обход этой проверки не проверяет работоспособность драйвера.
 
-**Уточнение по проверенной версии OpenStack 2025.1:** generic `NfsDriver` и встроенные Huawei iSCSI/FC-классы не разрешают active-active. Для другой версии/vendor-драйвера нужна отдельная проверка. Таблица поддержки, источники и пример globals для Ceph AA приведены в [разделе 7 отдельного документа](GLANCE_CINDER_SHARED_STORAGE_AND_HA.md#7-active-active-cinder-смысл-и-поддержка-драйверов).
+**Уточнение по проверенной версии OpenStack 2025.1:** generic `NfsDriver` и встроенные Huawei iSCSI/FC-классы не разрешают active-active. Для другой версии/vendor-драйвера нужна отдельная проверка. Таблица поддержки, источники и пример globals для Ceph AA приведены в [разделе 7 отдельного документа](../../../GLANCE_CINDER_SHARED_STORAGE_AND_HA.md#7-active-active-cinder-смысл-и-поддержка-драйверов).
 
 ### 10.4. Связь с Vault
 
@@ -750,24 +750,24 @@ Precheck архива проверяет `cinder_cluster_name`, когда в г
 
 ## 11. Карта исходников
 
-Ссылки ниже относительны каталогу документа. Они работают при наличии рядом распакованного каталога `kolla-ansible-pvs_1.0.0`.
+Пути исходников в тексте и таблице указаны относительно корня распакованного архива `kolla-ansible-pvs_1.0.0`. Для проверки этих ссылок на код нужен исходный архив `kolla-ansible-pvs_1.0.0_14.09.zip`.
 
 | Что проверять | Файл |
 |---|---|
-| Defaults Cinder, Huawei, iSCSI, multipath и пути конфигов | ansible/group_vars/all.yml (`kolla-ansible-pvs_1.0.0/ansible/group_vars/all.yml`) |
-| Группы размещения сервисов | ansible/inventory/multinode (`kolla-ansible-pvs_1.0.0/ansible/inventory/multinode`) |
-| Контейнеры Cinder, mount и список backend | cinder/defaults/main.yml (`kolla-ansible-pvs_1.0.0/ansible/roles/cinder/defaults/main.yml`) |
-| Генерация cinder.conf и дополнительных файлов | cinder/tasks/config.yml (`kolla-ansible-pvs_1.0.0/ansible/roles/cinder/tasks/config.yml`) |
-| Шаблон конфигурации и NFS | cinder/templates/cinder.conf.j2 (`kolla-ansible-pvs_1.0.0/ansible/roles/cinder/templates/cinder.conf.j2`) |
-| Копирование Huawei XML и уведомление рестарта | cinder/tasks/external_huawei.yml (`kolla-ansible-pvs_1.0.0/ansible/roles/cinder/tasks/external_huawei.yml`) |
-| Конечные пути файлов внутри контейнера | cinder/templates/cinder-volume.json.j2 (`kolla-ansible-pvs_1.0.0/ansible/roles/cinder/templates/cinder-volume.json.j2`) |
-| Порядок deploy и reconfigure | deploy.yml (`kolla-ansible-pvs_1.0.0/ansible/roles/cinder/tasks/deploy.yml`), reconfigure.yml (`kolla-ansible-pvs_1.0.0/ansible/roles/cinder/tasks/reconfigure.yml`) |
-| Проверки backend и кластерной конфигурации | cinder/tasks/precheck.yml (`kolla-ansible-pvs_1.0.0/ansible/roles/cinder/tasks/precheck.yml`) |
-| Приоритет конфигурационных overrides | action_plugins/merge_configs.py (`kolla-ansible-pvs_1.0.0/ansible/action_plugins/merge_configs.py`) |
-| Команда genconfig и выбор действия | kolla_ansible/cli/commands.py (`kolla-ansible-pvs_1.0.0/kolla_ansible/cli/commands.py`) |
-| Контейнеры Nova и shared mount | nova-cell/defaults/main.yml (`kolla-ansible-pvs_1.0.0/ansible/roles/nova-cell/defaults/main.yml`) |
-| Включение multipath в Nova | nova.conf.d/libvirt.conf.j2 (`kolla-ansible-pvs_1.0.0/ansible/roles/nova-cell/templates/nova.conf.d/libvirt.conf.j2`) |
-| Пользовательский multipath.conf | multipathd/tasks/config.yml (`kolla-ansible-pvs_1.0.0/ansible/roles/multipathd/tasks/config.yml`) |
-| Внешняя коллекция подготовки хостов | requirements.yml (`kolla-ansible-pvs_1.0.0/requirements.yml`), kolla-host.yml (`kolla-ansible-pvs_1.0.0/ansible/kolla-host.yml`) |
+| Defaults Cinder, Huawei, iSCSI, multipath и пути конфигов | `ansible/group_vars/all.yml` |
+| Группы размещения сервисов | `ansible/inventory/multinode` |
+| Контейнеры Cinder, mount и список backend | `ansible/roles/cinder/defaults/main.yml` |
+| Генерация cinder.conf и дополнительных файлов | `ansible/roles/cinder/tasks/config.yml` |
+| Шаблон конфигурации и NFS | `ansible/roles/cinder/templates/cinder.conf.j2` |
+| Копирование Huawei XML и уведомление рестарта | `ansible/roles/cinder/tasks/external_huawei.yml` |
+| Конечные пути файлов внутри контейнера | `ansible/roles/cinder/templates/cinder-volume.json.j2` |
+| Порядок deploy и reconfigure | `ansible/roles/cinder/tasks/deploy.yml`, `ansible/roles/cinder/tasks/reconfigure.yml` |
+| Проверки backend и кластерной конфигурации | `ansible/roles/cinder/tasks/precheck.yml` |
+| Приоритет конфигурационных overrides | `ansible/action_plugins/merge_configs.py` |
+| Команда genconfig и выбор действия | `kolla_ansible/cli/commands.py` |
+| Контейнеры Nova и shared mount | `ansible/roles/nova-cell/defaults/main.yml` |
+| Включение multipath в Nova | `ansible/roles/nova-cell/templates/nova.conf.d/libvirt.conf.j2` |
+| Пользовательский multipath.conf | `ansible/roles/multipathd/tasks/config.yml` |
+| Внешняя коллекция подготовки хостов | `requirements.yml`, `ansible/kolla-host.yml` |
 
 **Итоговая модель:** Ansible определяет доступные backend, scheduler выбирает место создания тома, compute обеспечивает доступ ВМ к его данным. Каждая часть требует своей конфигурации и проверки.
