@@ -1,0 +1,50 @@
+{
+  "python-mistralclient": {
+    "tag": "5.4.0",
+    "commit": "c055eb159f7738fcac5831425f6ddc3fb2bfa320",
+    "source_dir": "sources/python-mistralclient-5.4.0",
+    "tag_url": "https://opendev.org/openstack/python-mistralclient/src/tag/5.4.0/"
+  },
+  "mistral-dashboard": {
+    "tag": "20.0.0",
+    "commit": "5e3e024ecb912ac9bb7b875ff62e73596e2d6175",
+    "source_dir": "sources/mistral-dashboard-20.0.0",
+    "tag_url": "https://opendev.org/openstack/mistral-dashboard/src/tag/20.0.0/"
+  },
+  "python-heatclient": {
+    "tag": "4.1.0",
+    "commit": "dd976ac9136fe9e85f67c2073152706d74b6badc",
+    "source_dir": "sources/python-heatclient-4.1.0",
+    "tag_url": "https://opendev.org/openstack/python-heatclient/src/tag/4.1.0/"
+  },
+  "heat-dashboard": {
+    "tag": "13.0.0",
+    "commit": "21a79fea267cfa205fa60b4aef84d148cf8e376e",
+    "source_dir": "sources/heat-dashboard-13.0.0",
+    "tag_url": "https://opendev.org/openstack/heat-dashboard/src/tag/13.0.0/"
+  },
+  "horizon-25.3.0.tar.gz": {
+    "sha256": "8ce6814c7ed97832279f9a80a13f206d3de61863637d00e1d0236591542d2b1b"
+  },
+  "watcher_dashboard-13.0.0.tar.gz": {
+    "sha256": "77bdbfdf46b234f7270ab63c8549dab202f2b2a2063165652d1c5b8f7934b413"
+  },
+  "python_masakariclient-8.6.0.tar.gz": {
+    "sha256": "d319ea8f8eb620ba29d99c2c29e53d3a258216f1ccd581996050d65c24a26db0"
+  },
+  "python-openstackclient-7.4.0.tar.gz": {
+    "sha256": "e817e11a01cb2b516fbd99dce45c099c8e41c43d11bb11e6672703a838449d9f"
+  },
+  "ironic-ui-6.5.0.tar.gz": {
+    "sha256": "47a2f652c7fb3cf2adb568eac74bfe9239c16938426daec27dc57e87e89de91d"
+  },
+  "python-ironicclient-5.10.0.tar.gz": {
+    "sha256": "120d9e6a4ae2e7ed613ee2b2abdf9fe1d2f7de297a1b82d82d9be85987d4e0b6"
+  },
+  "python_watcherclient-4.8.0.tar.gz": {
+    "sha256": "4948046a7ae242d51066c03a505be5f8e66c9f7c77a6ee8e8327065357fae9e3"
+  },
+  "masakari_dashboard-12.0.0.tar.gz": {
+    "sha256": "d6d19d5402fb539f5162a376374c00f4a0ff1ea8673ede41bee97832388ed8c7"
+  }
+}

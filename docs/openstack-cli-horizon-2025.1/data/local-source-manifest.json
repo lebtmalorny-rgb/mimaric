@@ -1,0 +1,58 @@
+{
+  "date": "2026-09-16",
+  "scope": "static source analysis; no cloud requests",
+  "archives": {
+    "kolla-ansible": {
+      "file": "kolla-ansible-enroll-ironic-patch-3_0809.zip",
+      "sha256": "b5958f14a09b1bdad4edc9c6b3dd092f4376b55dee9d5814fd2ad78fdffb1be9",
+      "zip_comment": "599b2121fda67f22ab6e5536129176be954e54bc"
+    },
+    "mistral": {
+      "file": "mistral-integration-powerops-mistral-2025.1 _0809.zip",
+      "sha256": "3df7cd4afa9052251107335b0ec5771c2704ccf03894c7e6c1f34880a43daf0c",
+      "zip_comment": "89f0688d2b0165b7d574217570b391ff685a2c9f"
+    },
+    "masakari": {
+      "file": "masakari-integration-powerops-masakari-2025.1_0809.zip",
+      "sha256": "0bbda50f9553b65a5757d7cc43ed47b4d2a8cf99641c4b9ce88a01d09f1bcde9",
+      "zip_comment": "d997243eb3f91a262f07d2bebedc6481b22ecf0b"
+    }
+  },
+  "git": {
+    "powerops-patches": {
+      "head": "3b665acfae723c33bd01bc7ef22181cfe707bbc1",
+      "branch": "main",
+      "status": "M README.md\n M docs/POWEROPS-FRR-VIP-ANYCAST.md\n?? docs/plans/\n?? tools/stand-tests/"
+    },
+    "powerops-patches/worktrees/watcher-automation-hold-publish": {
+      "head": "c866d56fbf382afa4612c07039c34fbb5032aef5",
+      "branch": "feature/watcher-automation-hold-2025.1",
+      "status": ""
+    },
+    "powerops-patches/worktrees/masakari-per-target-evacuation": {
+      "head": "71b0123f390bfeaab4dc4ca2dffaa6fab32a6cdf",
+      "branch": "feature/masakari-per-target-evacuation",
+      "status": ""
+    },
+    "analysis/watcher-automation-hold-work/watcher": {
+      "head": "a063d5759520ca19525c18c3ec5d5b57e4c98655",
+      "branch": "feature/powerops-automation-hold",
+      "status": ""
+    },
+    "analysis/masakari-per-target-evacuation-work/masakari": {
+      "head": "4e93865141f6113570ce80ac3e33f5bae836e3a6",
+      "branch": "feature/powerops-per-target-evacuation",
+      "status": ""
+    },
+    "analysis/masakari-per-target-evacuation-work/nova": {
+      "head": "69730e9fc77f1e57ac1ba884bc2dd0c567e01a3a",
+      "branch": "feature/powerops-per-target-evacuation",
+      "status": ""
+    },
+    "analysis/masakari-per-target-evacuation-work/kolla": {
+      "head": "b6b66dfe883b98b9dc6b5dc702caa66eea9a7cdb",
+      "branch": "feature/powerops-per-target-evacuation",
+      "status": ""
+    }
+  }
+}

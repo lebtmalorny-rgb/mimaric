@@ -1,0 +1,347 @@
+---
+- name: Compose driver_info for the current BMC host
+  ansible.builtin.set_fact:
+    _driver_info: >-
+      {% set di = {} %}
+      {% set host_cfg = ironic_bmc_resolved[item] %}
+      {% set password = ironic_enroll_bmc_passwords.get(
+           host_cfg.ironic_bmc_resolved_type | default(''), '') %}
+      {% if 'redfish' in (host_cfg.ironic_bmc_resolved_type | default(''))
+            or 'redfish' in (host_cfg.type | default('')) %}
+        {% set redfish_address = host_cfg.redfish_address
+             | default('https://' ~ host_cfg.address, true) %}
+        {% set redfish_verify_ca = host_cfg.redfish_verify_ca
+             if host_cfg.redfish_verify_ca is defined
+             else ironic_enroll_bmc_ca_container_path %}
+        {% set _ = di.update({
+          'redfish_address': redfish_address,
+          'redfish_username': host_cfg.ironic_bmc_username_global | default('admin'),
+          'redfish_password': password if host_cfg.ironic_bmc_resolved_type == 'redfish' else
+                              ironic_enroll_bmc_passwords.get('redfish', ''),
+          'redfish_verify_ca': redfish_verify_ca
+        }) %}
+        {% set sid = host_cfg.redfish_system_id
+             if host_cfg.redfish_system_id is defined
+             else ironic_bmc_default_redfish_system_id
+                  | default(ironic_enroll_default_system_id) %}
+        {% if sid | length > 0 %}
+          {% set _ = di.update({'redfish_system_id': sid}) %}
+        {% endif %}
+      {% endif %}
+      {% if 'ipmi' in (host_cfg.type | default('')) %}
+        {% set _ = di.update({
+          'ipmi_address': host_cfg.address,
+          'ipmi_username': host_cfg.ironic_bmc_username_global | default('admin'),
+          'ipmi_password': ironic_enroll_bmc_passwords.get('ipmi', ''),
+          'ipmi_priv_level': 'ADMINISTRATOR'
+        }) %}
+      {% endif %}
+      {% if 'ilo5' in (host_cfg.type | default('')) %}
+        {% set _ = di.update({
+          'ilo_address': host_cfg.address,
+          'ilo_username': host_cfg.ironic_bmc_username_global | default('admin'),
+          'ilo_password': ironic_enroll_bmc_passwords.get('ilo5', ''),
+          'ilo_verify_ca': True
+        }) %}
+      {% endif %}
+      {% if 'drac5' in (host_cfg.type | default('')) %}
+        {% set _ = di.update({
+          'drac_address': host_cfg.address,
+          'drac_username': host_cfg.ironic_bmc_username_global | default('admin'),
+          'drac_password': ironic_enroll_bmc_passwords.get('drac5', ''),
+          'drac_verify_ca': True
+        }) %}
+      {% endif %}
+      {% if 'xclarity' in (host_cfg.type | default('')) %}
+        {% set _ = di.update({
+          'xclarity_address': host_cfg.address,
+          'xclarity_username': host_cfg.ironic_bmc_username_global | default('admin'),
+          'xclarity_password': ironic_enroll_bmc_passwords.get('xclarity', ''),
+          'xclarity_verify_ca': True
+        }) %}
+      {% endif %}
+      {% if 'irmc' in (host_cfg.type | default('')) %}
+        {% set _ = di.update({
+          'irmc_address': host_cfg.address,
+          'irmc_username': host_cfg.ironic_bmc_username_global | default('admin'),
+          'irmc_password': ironic_enroll_bmc_passwords.get('irmc', ''),
+          'irmc_verify_ca': True
+        }) %}
+      {% endif %}
+      {{ di }}
+  vars:
+    item: "{{ inventory_hostname }}"
+  no_log: true
+
+- name: Normalize driver_info as a native mapping
+  ansible.builtin.set_fact:
+    _driver_info: >-
+      {{ _driver_info if _driver_info is mapping
+         else (_driver_info | from_yaml) }}
+  no_log: true
+
+- name: Validate driver_info is a native mapping
+  ansible.builtin.assert:
+    that:
+      - _driver_info is mapping
+    fail_msg: >-
+      Internal enrollment error: driver_info must be an Ansible mapping.
+  no_log: true
+
+- name: Read an existing Ironic node before reconciliation
+  openstack.cloud.baremetal_node_info:
+    cloud: "{{ ironic_enroll_cloud }}"
+    interface: "{{ ironic_enroll_api_interface }}"
+    name: >-
+      {{ ironic_bmc_resolved[item].ironic_bmc_resolved_attached_host }}
+  vars:
+    item: "{{ inventory_hostname }}"
+  register: ironic_enroll_existing_result
+  changed_when: false
+
+- name: Select the existing Ironic node record
+  ansible.builtin.set_fact:
+    ironic_enroll_existing_node: >-
+      {{ ironic_enroll_existing_result.nodes | default([]) | first
+         | default({}) }}
+  no_log: true
+
+- name: Reject existing Ironic nodes outside the enrollment boundary
+  ansible.builtin.assert:
+    that:
+      - >-
+        ironic_enroll_existing_node.provision_state | default('')
+        in ['enroll', 'enroll failed', 'verifying', 'manageable']
+    fail_msg: >-
+      Ironic Node
+      {{ ironic_bmc_resolved[item].ironic_bmc_resolved_attached_host }}
+      is in provision_state={{ ironic_enroll_existing_node.provision_state
+      | default('unknown') }}. Power-only enrollment will not change Nodes
+      outside enroll, enroll failed, verifying or manageable.
+  vars:
+    item: "{{ inventory_hostname }}"
+  when: ironic_enroll_existing_node | length > 0
+
+- name: Reject existing Ironic nodes not owned by enrollment
+  ansible.builtin.assert:
+    that:
+      - >-
+        ironic_enroll_existing_node.extra | default({}, true)
+        | dict2items
+        | selectattr('key', 'equalto', 'managed_by')
+        | map(attribute='value')
+        | first
+        | default('') == 'ansible'
+    fail_msg: >-
+      Ironic Node
+      {{ ironic_bmc_resolved[item].ironic_bmc_resolved_attached_host }}
+      already exists but is not marked managed_by=ansible; refusing to
+      reconcile its driver_info.
+  vars:
+    item: "{{ inventory_hostname }}"
+  when: ironic_enroll_existing_node | length > 0
+
+- name: Create or reconcile the Ironic node for the current BMC host
+  vars:
+    item: "{{ inventory_hostname }}"
+  block:
+    - name: Submit the Ironic node resource
+      openstack.cloud.resource:
+        cloud: "{{ ironic_enroll_cloud }}"
+        interface: "{{ ironic_enroll_api_interface }}"
+        service: baremetal
+        type: node
+        state: present
+        attributes:
+          name: >-
+            {{ ironic_bmc_resolved[item]
+               .ironic_bmc_resolved_attached_host }}
+          driver: >-
+            {{ ironic_bmc_resolved[item].ironic_bmc_resolved_driver }}
+          provision_state: enroll
+          driver_info: "{{ _driver_info }}"
+          power_interface: >-
+            {{ ironic_bmc_resolved[item]
+               .ironic_bmc_resolved_power_interface }}
+          management_interface: >-
+            {{ ironic_bmc_resolved[item]
+               .ironic_bmc_resolved_management_interface }}
+          inspect_interface: "no-inspect"
+          boot_interface: "pxe"
+          deploy_interface: "direct"
+          network_interface: "noop"
+          bios_interface: "no-bios"
+          raid_interface: "no-raid"
+          storage_interface: "noop"
+          extra:
+            managed_by: ansible
+            enrollment_profile: "{{ ironic_enroll_mode }}"
+            bmc_type: "{{ ironic_bmc_resolved[item].type }}"
+            bmc_address: "{{ ironic_bmc_resolved[item].address }}"
+        updateable_attributes:
+          - driver_info
+        wait: false
+      throttle: "{{ ironic_enroll_throttle }}"
+      register: enrollment_result
+      no_log: true
+
+  rescue:
+    - name: Redact BMC passwords from the resource error
+      ansible.builtin.set_fact:
+        ironic_enroll_resource_error: >-
+          {%- set safe = namespace(message=(
+            enrollment_result.msg
+            | default('No error message returned by openstack.cloud.resource.',
+                      true)
+            | string)) -%}
+          {%- for secret in ironic_enroll_bmc_passwords.values()
+            | select('string') | reject('equalto', '') | list -%}
+            {%- set safe.message = safe.message
+              | replace(secret | string, '[REDACTED]') -%}
+          {%- endfor -%}
+          {{ safe.message }}
+      no_log: true
+
+    - name: Report the sanitized Ironic resource error
+      ansible.builtin.fail:
+        msg: >-
+          Failed to create or reconcile Ironic Node
+          {{ ironic_bmc_resolved[item].ironic_bmc_resolved_attached_host }}
+          for BMC {{ item }}. OpenStack error:
+          {{ ironic_enroll_resource_error }}
+
+- name: Read the current Ironic provision state
+  ansible.builtin.command:
+    argv:
+      - openstack
+      - --os-cloud
+      - "{{ ironic_enroll_cloud }}"
+      - --os-interface
+      - "{{ ironic_enroll_api_interface }}"
+      - baremetal
+      - node
+      - show
+      - "{{ ironic_bmc_resolved[item].ironic_bmc_resolved_attached_host }}"
+      - -f
+      - value
+      - -c
+      - provision_state
+  vars:
+    item: "{{ inventory_hostname }}"
+  register: ironic_enroll_initial_state
+  changed_when: false
+  retries: "{{ ironic_enroll_state_read_retries }}"
+  delay: "{{ ironic_enroll_state_read_delay }}"
+  until: ironic_enroll_initial_state.rc == 0
+
+- name: Reject provision states outside the power-only enrollment boundary
+  ansible.builtin.assert:
+    that:
+      - >-
+        ironic_enroll_initial_state.stdout | trim
+        in ['enroll', 'enroll failed', 'verifying', 'manageable']
+    fail_msg: >-
+      Ironic Node {{ ironic_bmc_resolved[item].ironic_bmc_resolved_attached_host }}
+      is in provision_state={{ ironic_enroll_initial_state.stdout | trim }}.
+      Power-only enrollment will not change Nodes outside enroll, enroll failed,
+      verifying or manageable.
+  vars:
+    item: "{{ inventory_hostname }}"
+
+- name: Move the current Ironic node from enroll to manageable
+  ansible.builtin.command:
+    argv:
+      - openstack
+      - --os-cloud
+      - "{{ ironic_enroll_cloud }}"
+      - --os-interface
+      - "{{ ironic_enroll_api_interface }}"
+      - baremetal
+      - node
+      - manage
+      - "{{ ironic_bmc_resolved[item].ironic_bmc_resolved_attached_host }}"
+      - --wait
+      - "{{ ironic_enroll_manage_timeout | string }}"
+  vars:
+    item: "{{ inventory_hostname }}"
+  throttle: "{{ ironic_enroll_throttle }}"
+  register: manage_result
+  changed_when: true
+  no_log: true
+  failed_when: false
+  when: >-
+    ironic_enroll_initial_state.stdout | trim
+    in ['enroll', 'enroll failed']
+
+- name: Re-read provision state after a rejected manage request
+  ansible.builtin.command:
+    argv:
+      - openstack
+      - --os-cloud
+      - "{{ ironic_enroll_cloud }}"
+      - --os-interface
+      - "{{ ironic_enroll_api_interface }}"
+      - baremetal
+      - node
+      - show
+      - "{{ ironic_bmc_resolved[item].ironic_bmc_resolved_attached_host }}"
+      - -f
+      - value
+      - -c
+      - provision_state
+  vars:
+    item: "{{ inventory_hostname }}"
+  register: ironic_enroll_manage_race_state
+  changed_when: false
+  retries: "{{ ironic_enroll_state_read_retries }}"
+  delay: "{{ ironic_enroll_state_read_delay }}"
+  until: ironic_enroll_manage_race_state.rc == 0
+  when:
+    - not (manage_result.skipped | default(false))
+    - manage_result.rc | default(0) != 0
+
+- name: Read Ironic last_error after a rejected manage request
+  ansible.builtin.command:
+    argv:
+      - openstack
+      - --os-cloud
+      - "{{ ironic_enroll_cloud }}"
+      - --os-interface
+      - "{{ ironic_enroll_api_interface }}"
+      - baremetal
+      - node
+      - show
+      - "{{ ironic_bmc_resolved[item].ironic_bmc_resolved_attached_host }}"
+      - -f
+      - value
+      - -c
+      - last_error
+  vars:
+    item: "{{ inventory_hostname }}"
+  register: ironic_enroll_manage_last_error
+  changed_when: false
+  failed_when: false
+  when:
+    - not (manage_result.skipped | default(false))
+    - manage_result.rc | default(0) != 0
+
+- name: Accept only a concurrent transition after a rejected manage request
+  ansible.builtin.assert:
+    that:
+      - >-
+        ironic_enroll_manage_race_state.stdout | default('') | trim
+        in ['verifying', 'manageable']
+    fail_msg: >-
+      The manage request for Ironic Node
+      {{ ironic_bmc_resolved[item].ironic_bmc_resolved_attached_host }} failed,
+      and its current provision_state is
+      {{ ironic_enroll_manage_race_state.stdout | default('unknown') | trim }}.
+      Ironic last_error:
+      {{ ironic_enroll_manage_last_error.stdout | default('unavailable')
+         | trim }}.
+      Only a concurrent transition to verifying or manageable is accepted.
+  vars:
+    item: "{{ inventory_hostname }}"
+  when:
+    - not (manage_result.skipped | default(false))
+    - manage_result.rc | default(0) != 0

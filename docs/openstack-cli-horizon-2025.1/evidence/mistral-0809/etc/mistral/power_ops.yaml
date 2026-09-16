@@ -1,0 +1,88 @@
+---
+version: '2.0'
+name: power_ops
+
+workflows:
+  host_power_status:
+    input:
+      - host
+      - segment_uuid
+    tasks:
+      status:
+        action: powerops.host_power_status
+        input:
+          host: <% $.host %>
+          segment_uuid: <% $.segment_uuid %>
+        publish:
+          result: <% task().result %>
+    output:
+      result: <% $.result %>
+
+  planned_power_off:
+    input:
+      - host
+      - segment_uuid
+      - instance_policy: require_empty
+      - allow_hard_off: false
+    tasks:
+      power_off:
+        action: powerops.planned_power_off
+        input:
+          host: <% $.host %>
+          segment_uuid: <% $.segment_uuid %>
+          instance_policy: <% $.instance_policy %>
+          allow_hard_off: <% $.allow_hard_off %>
+        publish:
+          result: <% task().result %>
+    output:
+      result: <% $.result %>
+      stopped_instance_ids: <% $.result.stopped_instance_ids %>
+
+  planned_reboot:
+    input:
+      - host
+      - segment_uuid
+      - instance_policy: require_empty
+      - allow_hard_off: false
+    tasks:
+      reboot:
+        action: powerops.planned_reboot
+        input:
+          host: <% $.host %>
+          segment_uuid: <% $.segment_uuid %>
+          instance_policy: <% $.instance_policy %>
+          allow_hard_off: <% $.allow_hard_off %>
+        publish:
+          result: <% task().result %>
+    output:
+      result: <% $.result %>
+
+  power_on_and_return:
+    input:
+      - host
+      - segment_uuid
+      - stopped_instance_ids: []
+    tasks:
+      power_on_for_inspection:
+        action: powerops.power_on_for_inspection
+        input:
+          host: <% $.host %>
+          segment_uuid: <% $.segment_uuid %>
+        on-success: operator_inspection_gate
+
+      operator_inspection_gate:
+        action: std.noop
+        pause-before: true
+        on-success: return_to_service
+
+      return_to_service:
+        action: powerops.return_to_service
+        input:
+          host: <% $.host %>
+          segment_uuid: <% $.segment_uuid %>
+          stopped_instance_ids: <% $.stopped_instance_ids %>
+          stale_domains_checked: <% env().get('stale_domains_checked', false) %>
+        publish:
+          result: <% task().result %>
+    output:
+      result: <% $.result %>

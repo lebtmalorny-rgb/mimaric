@@ -1,0 +1,62 @@
+[
+  {
+    "file": "evidence/mistral-0809/etc/mistral/power_ops.yaml",
+    "research_source": "analysis/openstack-cli-horizon-2025.1/local-sources/mistral-0809/etc/mistral/power_ops.yaml",
+    "provenance": "Mistral 0809 archive; SHA256 in data/local-source-manifest.json",
+    "sha256": "26c9f2a072827b5c342dcc1d51aacf5995110054a400efe3d68df0563f3e7921"
+  },
+  {
+    "file": "evidence/mistral-0809/setup.cfg",
+    "research_source": "analysis/openstack-cli-horizon-2025.1/local-sources/mistral-0809/setup.cfg",
+    "provenance": "Mistral 0809 archive; SHA256 in data/local-source-manifest.json",
+    "sha256": "8aa4adceff142e14037e5b828542ad8d5cf3e66797ea7760619b0600eba15eb6"
+  },
+  {
+    "file": "evidence/mistral-0809/mistral/actions/powerops/planned.py",
+    "research_source": "analysis/openstack-cli-horizon-2025.1/local-sources/mistral-0809/mistral/actions/powerops/planned.py",
+    "provenance": "Mistral 0809 archive; SHA256 in data/local-source-manifest.json",
+    "sha256": "febaa221c4a69a517d9b5131e7c5bd5f314c0cdfb3f08b69dbd6c987ac25ea6a"
+  },
+  {
+    "file": "evidence/mistral-0809/mistral/actions/powerops/clients.py",
+    "research_source": "analysis/openstack-cli-horizon-2025.1/local-sources/mistral-0809/mistral/actions/powerops/clients.py",
+    "provenance": "Mistral 0809 archive; SHA256 in data/local-source-manifest.json",
+    "sha256": "47c281242f85f39cce1d37adff675beae78a8bf7fa6823af57562a01a52ff043"
+  },
+  {
+    "file": "evidence/mistral-0809/mistral/actions/powerops/return_host.py",
+    "research_source": "analysis/openstack-cli-horizon-2025.1/local-sources/mistral-0809/mistral/actions/powerops/return_host.py",
+    "provenance": "Mistral 0809 archive; SHA256 in data/local-source-manifest.json",
+    "sha256": "63adb23f949dbea11320af233bee308a4f43789af79c2b519ff846e5278bf1f1"
+  },
+  {
+    "file": "evidence/watcher/watcher/common/automation_guard.py",
+    "research_source": "analysis/watcher-automation-hold-work/watcher/watcher/common/automation_guard.py",
+    "provenance": "a063d5759520ca19525c18c3ec5d5b57e4c98655",
+    "sha256": "58138d70b6b2e64143c56332044c4fc3689f04ecdd2a3a8690f7277438364e50"
+  },
+  {
+    "file": "evidence/masakari/masakari/engine/drivers/taskflow/host_failure.py",
+    "research_source": "analysis/masakari-per-target-evacuation-work/masakari/masakari/engine/drivers/taskflow/host_failure.py",
+    "provenance": "4e93865141f6113570ce80ac3e33f5bae836e3a6",
+    "sha256": "b62408ad6bfe8a60bec492ce7a8a74c15404f89cea17679cb07c3bebd14b92d9"
+  },
+  {
+    "file": "evidence/kolla/setup.cfg",
+    "research_source": "analysis/masakari-per-target-evacuation-work/kolla/setup.cfg",
+    "provenance": "b6b66dfe883b98b9dc6b5dc702caa66eea9a7cdb",
+    "sha256": "72bf33cd02d8b95416b76ff47da515254301ef37a719079fb7fc18e62c4c589b"
+  },
+  {
+    "file": "evidence/kolla/ansible/roles/ironic_enroll/tasks/enroll.yml",
+    "research_source": "analysis/masakari-per-target-evacuation-work/kolla/ansible/roles/ironic_enroll/tasks/enroll.yml",
+    "provenance": "b6b66dfe883b98b9dc6b5dc702caa66eea9a7cdb",
+    "sha256": "51e9ee74477194754b73567807a86b2a3a3a242defcfafa13578f056e8d40910"
+  },
+  {
+    "file": "evidence/kolla/ansible/roles/horizon/defaults/main.yml",
+    "research_source": "analysis/masakari-per-target-evacuation-work/kolla/ansible/roles/horizon/defaults/main.yml",
+    "provenance": "b6b66dfe883b98b9dc6b5dc702caa66eea9a7cdb",
+    "sha256": "4f29dcc6e560851da01a21638f338ae65d9b70641f7e9c890622f92b4a175c6d"
+  }
+]
