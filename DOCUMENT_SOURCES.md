@@ -98,3 +98,14 @@
 | [tools/diagnostics/README.md](tools/diagnostics/README.md) | `tools/diagnostics/README.md` | `feature/masakari-per-target-evacuation`, `feature/host-firewall-apply`, `feature/host-firewall-report`, `feature/watcher-automation-hold-2025.1` | `a7a6de3bac18d6b036f7e34bb5ca81d425309fee3fb16738b07943accedd57b5` |
 
 Локальные оригиналы и материалы проверки остаются вне публикационной ветки. Содержимое документов не проходило повторную техническую приёмку на стенде.
+
+## Дополнение от 17 сентября 2026 года: парольная политика
+
+Добавлены два локальных руководства. Ссылки на пакет зафиксированы на опубликованной версии; пути к исходному архиву Kolla оформлены текстом. Таблица содержит SHA256 оригиналов до адаптации ссылок. Остальные документы снимка от 16 сентября сохранены.
+
+Пакет: [`feature/keystone-password-policy-2025.1`, `60bbc29354ee`](https://github.com/lebtmalorny-rgb/mimaric/tree/60bbc29354ee852cf70bed835235344a205f3468). Патчи, архив и журналы проверок хранятся в этой отдельной ветке.
+
+| Документ | Источник | SHA256 исходника |
+|---|---|---|
+| [OPENSTACK_PASSWORD_POLICY_LOCAL_SQL.md](OPENSTACK_PASSWORD_POLICY_LOCAL_SQL.md) | `local/OPENSTACK_PASSWORD_POLICY_LOCAL_SQL.md` | `25f0dd5050e122b771c09491fb1a848dda00a2fcc11066ae1743c9a6342d6e98` |
+| [OPENSTACK_PASSWORD_POLICY_LDAP_AD_FREEIPA.md](OPENSTACK_PASSWORD_POLICY_LDAP_AD_FREEIPA.md) | `local/OPENSTACK_PASSWORD_POLICY_LDAP_AD_FREEIPA.md` | `c38fc772ce93223f4de3c029e610867e855c6d72143bd1768dfb978519804305` |

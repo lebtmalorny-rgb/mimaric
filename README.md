@@ -7,6 +7,8 @@
 | Тема | Документ |
 |---|---|
 | Требования к окружению, hostname, DNS, VIP и Horizon | [Требования перед деплоем](PREDEPLOY_ENVIRONMENT_REQUIREMENTS.md) |
+| Парольная политика: LDAP / MS AD / FreeIPA | [LDAP и внешние каталоги](OPENSTACK_PASSWORD_POLICY_LDAP_AD_FREEIPA.md) |
+| Парольная политика: локальные пользователи Keystone | [Без LDAP, SQL](OPENSTACK_PASSWORD_POLICY_LOCAL_SQL.md) |
 | Vault и управление секретами | [Vault](VAULT_SETUP_FROM_ANSIBLE.md) |
 | TLS и mTLS | [TLS/mTLS](TLS_MTLS_WORKFLOWS_FROM_ANSIBLE.md) |
 | Cinder: NFS, Huawei и подготовка backend | [Cinder](CINDER_BACKENDS_FROM_ANSIBLE.md) |
@@ -18,6 +20,8 @@
 | Watcher automation hold | [Инструкция](docs/WATCHER-AUTOMATION-HOLD.md) |
 | Masakari per-target evacuation | [Инструкция](docs/MASAKARI-PER-TARGET-EVACUATION.md) |
 | Тестирование стенда | [PowerOps stand tests](stand-tests/README.md) |
+
+Патчи Keystone/Kolla, примеры настроек и инструкция установки: [отдельная ветка `feature/keystone-password-policy-2025.1`](https://github.com/lebtmalorny-rgb/mimaric/blob/60bbc29354ee852cf70bed835235344a205f3468/README.md), версия `60bbc29354ee`.
 
 ## Остальные материалы
 
