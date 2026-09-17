@@ -1,0 +1,1220 @@
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/keystone/tests/unit/test_backend_ldap.py:24: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  import pkg_resources  # type: ignore
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/keystone/tests/unit/test_backend_ldap.py:24: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  import pkg_resources  # type: ignore
+{0} keystone.tests.unit.common.test_database_conflicts.DuplicateTestCase.test_policy_duplicate_conflict_gives_name [0.130304s] ... ok
+{0} keystone.tests.unit.common.test_notifications.AuditNotificationsTestCase.test_resource_created_notification [0.001348s] ... ok
+{0} keystone.tests.unit.common.test_notifications.AuditNotificationsTestCase.test_resource_deleted_notification [0.000750s] ... ok
+{0} keystone.tests.unit.common.test_notifications.AuditNotificationsTestCase.test_resource_disabled_notification [0.000881s] ... ok
+{0} keystone.tests.unit.common.test_notifications.AuditNotificationsTestCase.test_resource_updated_notification [0.000697s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsDataTestCase.test_receive_identityId_from_audit_notification [0.047166s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_add_user_to_group [0.052782s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_config_option_no_events [0.047474s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_create_domain [0.047227s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_create_endpoint [0.094481s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_create_group [0.047071s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_create_policy [0.047334s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_create_project [0.047582s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_create_region [0.046719s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_create_role [0.046777s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_create_service [0.097786s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_create_trust [0.050514s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_create_user [0.047776s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_delete_domain [0.055953s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_delete_endpoint [0.048931s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_delete_group [0.052591s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_delete_policy [0.103550s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_delete_project [0.052194s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_delete_region [0.048252s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_delete_role [0.049662s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_delete_service [0.048165s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_delete_trust [0.052095s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_delete_user [0.114030s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_disable_domain [0.048980s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_disable_of_disabled_domain_does_not_notify [0.049718s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_disable_of_disabled_project_does_not_notify [0.049272s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_disable_project [0.050249s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_initiator_data_is_set [0.136802s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_initiator_global_request_id [0.069109s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_initiator_global_request_id_not_set [0.068641s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_initiator_request_id [0.075416s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_remove_user_from_group [0.054651s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_update_domain [0.110697s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_update_endpoint [0.048544s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_update_group [0.047189s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_update_policy [0.046938s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_update_project [0.050304s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_update_project_does_not_send_disable [0.049094s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_update_region [0.111516s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_update_role [0.048730s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_update_service [0.047045s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForEntities.test_update_user [0.054724s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForPCIDSSEvents.test_changing_password_too_early_sends_notification [0.060187s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForPCIDSSEvents.test_invalid_password_sends_notification [0.055243s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForPCIDSSEvents.test_locked_out_user_sends_notification [0.127032s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForPCIDSSEvents.test_password_expired_sends_notification [0.080521s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CADFNotificationsForPCIDSSEvents.test_repeated_password_sends_notification [0.062562s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CadfNotificationsWrapperTestCase.test_add_role_to_user_and_project [0.047812s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CadfNotificationsWrapperTestCase.test_group_domain_grant [0.086605s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CadfNotificationsWrapperTestCase.test_initiator_always_contains_username [0.130747s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CadfNotificationsWrapperTestCase.test_initiator_id_always_matches_user_id [0.063506s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CadfNotificationsWrapperTestCase.test_remove_role_from_user_and_project [0.048467s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CadfNotificationsWrapperTestCase.test_user_project_grant [0.079948s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CadfNotificationsWrapperTestCase.test_v3_authenticate_user_id [0.068664s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CadfNotificationsWrapperTestCase.test_v3_authenticate_user_name_and_domain_id [0.138805s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CadfNotificationsWrapperTestCase.test_v3_authenticate_user_name_and_domain_name [0.070526s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CadfNotificationsWrapperTestCase.test_v3_authenticate_with_invalid_user_id_sends_notification [0.067760s] ... ok
+{0} keystone.tests.unit.common.test_notifications.CadfNotificationsWrapperTestCase.test_v3_authenticate_with_invalid_user_name_sends_notification [0.066070s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_add_user_to_group [0.053532s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_config_option_no_events [0.118840s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_create_domain [0.047506s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_create_endpoint [0.046774s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_create_group [0.047322s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_create_policy [0.046994s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_create_project [0.048301s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_create_region [0.046520s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_create_role [0.047390s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_create_service [0.121605s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_create_trust [0.050518s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_create_user [0.048586s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_delete_domain [0.055335s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_delete_endpoint [0.049015s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_delete_group [0.051863s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_delete_policy [0.047530s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_delete_project [0.128305s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_delete_region [0.047508s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_delete_role [0.050854s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_delete_service [0.048073s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_delete_trust [0.052191s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_delete_user [0.055628s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_disable_domain [0.049436s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_disable_of_disabled_domain_does_not_notify [0.128252s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_disable_of_disabled_project_does_not_notify [0.049653s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_disable_project [0.049691s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_initiator_global_request_id [0.073829s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_initiator_global_request_id_not_set [0.072648s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_initiator_request_id [0.151146s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_remove_user_from_group [0.051758s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_update_domain [0.049634s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_update_endpoint [0.047099s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_update_group [0.047138s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_update_policy [0.047853s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_update_project [0.048996s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_update_project_does_not_send_disable [0.049222s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_update_region [0.131357s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_update_role [0.048874s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_update_service [0.047714s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsForEntities.test_update_user [0.053931s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsTestCase.test_opt_out_authenticate_event [0.000850s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsTestCase.test_send_audit_notification_with_opt_out [0.000506s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsTestCase.test_send_notification [0.000605s] ... ok
+{0} keystone.tests.unit.common.test_notifications.NotificationsTestCase.test_send_notification_with_opt_out [0.000485s] ... ok
+{0} keystone.tests.unit.common.test_notifications.TestCallbackRegistration.test_a_function_callback [0.000514s] ... ok
+{0} keystone.tests.unit.common.test_notifications.TestCallbackRegistration.test_a_list_of_callbacks [0.000513s] ... ok
+{0} keystone.tests.unit.common.test_notifications.TestCallbackRegistration.test_a_method_callback [0.000982s] ... ok
+{0} keystone.tests.unit.common.test_notifications.TestCallbackRegistration.test_an_invalid_callback [0.000411s] ... ok
+{0} keystone.tests.unit.common.test_notifications.TestCallbackRegistration.test_an_invalid_event [0.000457s] ... ok
+{0} keystone.tests.unit.common.test_notifications.TestEventCallbacks.test_event_registration_for_unknown_resource_type [0.046397s] ... ok
+{0} keystone.tests.unit.common.test_notifications.TestEventCallbacks.test_invalid_event_callbacks [0.046192s] ... ok
+{0} keystone.tests.unit.common.test_notifications.TestEventCallbacks.test_invalid_event_callbacks_event [0.046309s] ... ok
+{0} keystone.tests.unit.common.test_notifications.TestEventCallbacks.test_notification_event_not_valid [0.046668s] ... ok
+{0} keystone.tests.unit.common.test_notifications.TestEventCallbacks.test_notification_method_not_callable [0.131815s] ... ok
+{0} keystone.tests.unit.common.test_notifications.TestEventCallbacks.test_notification_received [0.048525s] ... ok
+{0} keystone.tests.unit.common.test_notifications.TestEventCallbacks.test_provider_event_callback_subscription [0.048491s] ... ok
+{0} keystone.tests.unit.common.test_notifications.TestEventCallbacks.test_provider_event_callbacks_subscription [0.048351s] ... ok
+{0} keystone.tests.unit.common.test_notifications.TestEventCallbacks.test_using_an_unbound_method_as_a_callback_fails [0.048313s] ... ok
+{0} keystone.tests.unit.common.test_rbac_enforcer.TestRBACEnforcerRest.test_policy_enforcer_action_decorator [0.050307s] ... ok
+{0} keystone.tests.unit.common.test_rbac_enforcer.TestRBACEnforcerRest.test_policy_enforcer_action_invalid_action_decorator [0.050829s] ... ok
+{0} keystone.tests.unit.common.test_resource_options_common.TestResourceOptionObjects.test_duplicate_option_cases [0.000583s] ... ok
+{0} keystone.tests.unit.common.test_resource_options_common.TestResourceOptionObjects.test_option_init_validation [0.000410s] ... ok
+{0} keystone.tests.unit.common.test_resource_options_common.TestResourceOptionObjects.test_registry [0.000374s] ... ok
+{0} keystone.tests.unit.credential.test_backend_sql.SqlCredential.test_backend_credential_sql_encrypted_string [0.037030s] ... ok
+{0} keystone.tests.unit.credential.test_backend_sql.SqlCredential.test_backend_credential_sql_hints_none [0.036234s] ... ok
+{0} keystone.tests.unit.credential.test_backend_sql.SqlCredential.test_backend_credential_sql_no_hints [0.037732s] ... ok
+{0} keystone.tests.unit.credential.test_backend_sql.SqlCredential.test_credential_limits [0.038697s] ... ok
+{0} keystone.tests.unit.endpoint_policy.backends.test_sql.SQLModelTestCase.test_policy_association_model [0.032117s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.ChangePasswordRequiredAfterFirstUse.test_password_expired_after_create [0.048148s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.ChangePasswordRequiredAfterFirstUse.test_password_expired_after_reset [0.145092s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.ChangePasswordRequiredAfterFirstUse.test_password_not_expired_for_ignore_user [0.054285s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.ChangePasswordRequiredAfterFirstUse.test_password_not_expired_when_feature_disabled [0.047623s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.DisableInactiveUserTests.test_authenticate_user_disabled_due_to_inactivity [0.044267s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.DisableInactiveUserTests.test_authenticate_user_not_disabled_due_to_inactivity [0.040140s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.DisableInactiveUserTests.test_enabled_after_create_update_user [0.048082s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.DisableInactiveUserTests.test_get_user_disabled_due_to_inactivity [0.042243s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.DisableInactiveUserTests.test_get_user_not_disabled_due_to_inactivity [0.038349s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.DisableInactiveUserTests.test_ignore_user_inactivity [0.038008s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.DisableInactiveUserTests.test_ignore_user_inactivity_with_user_disabled [0.046608s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.LockingOutUserTests.test_lock_out_for_ignored_user [0.062611s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.LockingOutUserTests.test_locking_out_user_after_max_failed_attempts [0.058439s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.LockingOutUserTests.test_lockout_duration [0.068502s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.LockingOutUserTests.test_lockout_duration_failed_auth_cnt_resets [0.078649s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.LockingOutUserTests.test_set_enabled_unlocks_user [0.058277s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.MinimumPasswordAgeTests.test_user_can_change_password_after_admin_reset [0.060109s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.MinimumPasswordAgeTests.test_user_can_change_password_after_min_age [0.053306s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.MinimumPasswordAgeTests.test_user_cannot_change_password_before_min_age [0.049569s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.PasswordExpiresValidationTests.test_authenticate_with_expired_password [0.039946s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.PasswordExpiresValidationTests.test_authenticate_with_expired_password_for_ignore_user_option [0.046736s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.PasswordExpiresValidationTests.test_authenticate_with_non_expired_password [0.042098s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.PasswordHistoryValidationTests.test_admin_password_reset_is_not_validated_by_password_history [0.152553s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.PasswordHistoryValidationTests.test_disable_password_history_and_repeat_same_password [0.052412s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.PasswordHistoryValidationTests.test_truncate_passwords [0.053490s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.PasswordHistoryValidationTests.test_truncate_passwords_when_max_is_default [0.078195s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.PasswordHistoryValidationTests.test_truncate_passwords_when_max_is_default_and_no_password [0.039650s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.PasswordHistoryValidationTests.test_validate_password_history_but_start_with_password_none [0.054097s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.PasswordHistoryValidationTests.test_validate_password_history_with_invalid_password [0.055457s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.PasswordHistoryValidationTests.test_validate_password_history_with_valid_password [0.071911s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.PasswordHistoryValidationTests.test_validate_password_history_with_valid_password_only_once [0.054425s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.UserPasswordCreatedAtIntTests.test_user_password_created_expired_at_int_matches_created_at [0.035130s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.UserPasswordHashingTestsNoCompat.test_configured_algorithm_used [1.472669s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.UserResourceOptionTests.test_unregistered_resource_option_deleted [0.047597s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.UserResourceOptionTests.test_user_add_delete_resource_option_existing_option_values [0.047372s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.UserResourceOptionTests.test_user_add_update_delete_option_in_resource_option [0.046906s] ... ok
+{0} keystone.tests.unit.identity.test_backend_sql.UserResourceOptionTests.test_user_set_option_in_resource_option [0.041335s] ... ok
+{0} keystone.tests.unit.policy.backends.test_sql.SQLModelTestCase.test_policy_model [0.033132s] ... ok
+{0} keystone.tests.unit.test_backend_endpoint_policy_sql.SqlPolicyAssociationTable.test_policy_association_mapping [0.032574s] ... ok
+{0} keystone.tests.unit.test_backend_endpoint_policy_sql.SqlPolicyAssociationTests.test_policy_to_endpoint_association_crud [0.044759s] ... ok
+{0} keystone.tests.unit.test_backend_endpoint_policy_sql.SqlPolicyAssociationTests.test_policy_to_explicit_endpoint_association [0.044919s] ... ok
+{0} keystone.tests.unit.test_backend_endpoint_policy_sql.SqlPolicyAssociationTests.test_policy_to_region_and_service_association [0.046425s] ... ok
+{0} keystone.tests.unit.test_backend_endpoint_policy_sql.SqlPolicyAssociationTests.test_policy_to_service_association [0.049840s] ... ok
+{0} keystone.tests.unit.test_backend_sql.DataTypeRoundTrips.test_datetimeint_persistence [0.034176s] ... ok
+{0} keystone.tests.unit.test_backend_sql.DataTypeRoundTrips.test_datetimeint_python_none [0.035159s] ... ok
+{0} keystone.tests.unit.test_backend_sql.DataTypeRoundTrips.test_datetimeint_roundtrip [0.032638s] ... ok
+{0} keystone.tests.unit.test_backend_sql.DataTypeRoundTrips.test_json_blob_python_none [0.034288s] ... ok
+{0} keystone.tests.unit.test_backend_sql.DataTypeRoundTrips.test_json_blob_python_none_renders [0.032450s] ... ok
+{0} keystone.tests.unit.test_backend_sql.DataTypeRoundTrips.test_json_blob_roundtrip [0.032605s] ... ok
+{0} keystone.tests.unit.test_backend_sql.DataTypeRoundTrips.test_json_blob_sql_null [0.034383s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_avoid_creating_circular_references_in_regions_update [0.037529s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_cache_layer_delete_service_with_endpoint [0.039109s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_cache_layer_region_crud [0.035289s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_cache_layer_service_crud [0.036153s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_circular_regions_can_be_deleted [0.140297s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_create_endpoint [0.033933s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_create_endpoint_nonexistent_region [0.034971s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_create_endpoint_nonexistent_service [0.032876s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_create_endpoint_region_returns_not_found [0.034133s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_create_region_invalid_id [0.033609s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_create_region_invalid_parent_id [0.033748s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_create_region_invalid_parent_region_returns_not_found [0.033339s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_create_region_with_duplicate_id [0.035150s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_delete_endpoint_returns_not_found [0.032822s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_delete_region_returns_not_found [0.033610s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_delete_region_with_endpoint [0.038361s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_delete_service_returns_not_found [0.034538s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_delete_service_with_endpoint [0.036032s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_get_endpoint_returns_not_found [0.034789s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_get_region_returns_not_found [0.033072s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_get_service_returns_not_found [0.034137s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_get_v3_catalog_endpoint_disabled [0.037821s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_get_v3_catalog_project_non_exist [0.037739s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_get_v3_catalog_with_empty_public_url [0.036479s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_invalidate_cache_when_updating_endpoint [0.037387s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_invalidate_cache_when_updating_region [0.035102s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_invalidate_cache_when_updating_service [0.035363s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_list_endpoints [0.035472s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_list_regions_filtered_by_parent_region_id [0.036583s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_region_crud [0.038639s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_service_crud [0.037550s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_service_filtering [0.037595s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_update_endpoint [0.038306s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_update_endpoint_nonexistent_region [0.035754s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_update_endpoint_nonexistent_service [0.038694s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_update_region_extras [0.034541s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_v3_catalog_domain_scoped_token [0.038248s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_v3_catalog_endpoint_filter_disabled [0.038071s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCatalog.test_v3_catalog_endpoint_filter_enabled [0.036312s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCredential.test_create_credential_is_encrypted_when_stored [0.039632s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCredential.test_list_credentials [0.039657s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCredential.test_list_credentials_for_user [0.039624s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCredential.test_list_credentials_for_user_and_type [0.038482s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlCredential.test_list_credentials_is_decrypted [0.040658s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlDecorators.test_conflict_happend [0.003923s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlDecorators.test_initialization [0.004450s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlDecorators.test_initialization_fail [0.003741s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlDecorators.test_not_conflict_error [0.004689s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlFilterTests.test_filter_sql_injection_attack [0.042962s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlFilterTests.test_filter_value_wider_than_field [0.032722s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlFilterTests.test_groups_for_user_exact_filtered [0.086867s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlFilterTests.test_groups_for_user_inexact_filtered [0.192428s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlFilterTests.test_list_entities_filtered [0.284902s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlFilterTests.test_list_entities_filtered_by_domain [0.122218s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlFilterTests.test_list_users_in_group_exact_filtered [0.102390s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlFilterTests.test_list_users_in_group_inexact_filtered [0.102016s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlFilterTests.test_list_users_inexact_filtered [0.137899s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_add_duplicate_role_grant [0.040456s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_add_role_to_user_and_project_no_user [0.032935s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_add_role_to_user_and_project_returns_not_found [0.035420s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_add_user_to_group [0.040295s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_add_user_to_group_expiring [0.055044s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_add_user_to_group_expiring_list [0.054070s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_add_user_to_group_expiring_mapped [0.171325s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_add_user_to_group_returns_not_found [0.039198s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_arbitrary_attributes_are_returned_from_create_user [0.033777s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_arbitrary_attributes_are_returned_from_get_user [0.039082s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_authenticate [0.039548s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_authenticate_and_get_roles_no_metadata [0.046590s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_authenticate_bad_password [0.038771s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_authenticate_bad_user [0.037481s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_authenticate_if_no_password_set [0.039262s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_cache_layer_domain_crud [0.057629s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_cache_layer_get_user [0.052256s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_cache_layer_get_user_by_name [0.051344s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_cache_layer_group_crud [0.036821s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_cache_layer_project_crud [0.049573s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_cannot_delete_disabled_domain_with_immutable_project [0.041631s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_cannot_delete_immutable_domain [0.035391s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_cannot_delete_immutable_project [0.034444s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_cannot_delete_project_cascade_with_enabled_child [0.045980s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_cannot_delete_project_tags_immutable_project [0.039547s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_cannot_enable_cascade_with_parent_disabled [0.049883s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_cannot_update_immutable_domain [0.038707s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_cannot_update_immutable_project [0.039863s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_cannot_update_immutable_project_while_unsetting_immutable [0.044597s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_cannot_update_project_tags_immutable_project [0.043757s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_check_hierarchy_depth [0.058539s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_check_leaf_projects [0.051591s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_check_project_depth [0.053765s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_check_system_grant_for_group [0.038438s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_check_system_grant_for_group_with_invalid_group_fails [0.160931s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_check_system_grant_for_group_with_invalid_role_fails [0.033788s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_check_system_grant_for_user [0.036338s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_check_system_grant_for_user_with_invalid_role_fails [0.035089s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_check_system_grant_for_user_with_invalid_user_fails [0.034219s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_check_user_in_group [0.042602s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_check_user_in_group_returns_not_found [0.037383s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_check_user_not_in_group [0.039136s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_domain_immutable [0.035143s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_domain_under_regular_project_hierarchy_fails [0.036922s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_domain_with_project_api [0.035487s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_duplicate_group_name_fails [0.033431s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_duplicate_group_name_in_different_domains [0.036471s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_duplicate_project_id_fails [0.035862s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_duplicate_project_name_fails [0.036443s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_duplicate_project_name_in_different_domains [0.037222s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_duplicate_user_name_fails [0.035970s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_duplicate_user_name_in_different_domains [0.037340s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_grant_no_group [0.033386s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_grant_no_user [0.034383s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_group_name_with_trailing_whitespace [0.034092s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_invalid_domain_fails [0.039322s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_leaf_project_with_different_domain [0.036685s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_project_case_sensitivity [0.041924s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_project_doesnt_modify_passed_in_dict [0.035915s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_project_immutable [0.036583s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_project_invalid_domain_id [0.034682s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_project_long_name_fails [0.034487s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_project_name_with_trailing_whitespace [0.033926s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_project_passing_is_domain_flag_false [0.034466s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_project_passing_is_domain_flag_true [0.034095s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_project_tag_is_case_sensitive [0.038082s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_project_tag_with_trailing_whitespace [0.036761s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_project_under_disabled_one [0.036816s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_project_under_domain_hierarchy ... SKIPPED: Work In Progress Test Failed as expected: waiting for sub projects acting as domains support
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_project_with_domain_id_and_without_parent_id [0.037438s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_project_with_domain_id_mismatch_to_parent_domain [0.033466s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_project_with_invalid_parent [0.034812s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_project_with_no_enabled_field [0.034752s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_project_with_parent_id_and_without_domain_id ... SKIPPED: Work In Progress Test Failed as expected: waiting for support for parent_id to imply domain_id
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_project_with_tags [0.035648s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_project_without_is_domain_flag [0.034846s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_subproject_acting_as_domain_fails [0.033001s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_system_grant_for_group [0.037009s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_system_grant_for_group_fails_with_domain_role [0.034670s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_system_grant_for_user [0.036613s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_system_grant_for_user_fails_with_domain_role [0.035628s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_unicode_user_name [0.034402s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_update_delete_unicode_project [0.043585s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_user_case_sensitivity [0.036299s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_user_doesnt_modify_passed_in_dict [0.034798s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_user_missed_password [0.044054s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_user_none_password [0.040242s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_user_with_long_password [0.159408s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_create_user_with_null_password [0.037039s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_del_role_assignment_by_domain_not_found [0.034613s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_del_role_assignment_by_project_not_found [0.034836s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_domain_call_db_time [0.048971s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_domain_with_project_api [0.051926s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_domain_with_user_group_project_links [0.033634s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_group_assignments_group_same_id_as_user [0.040508s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_group_grant_no_group [0.036822s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_group_removes_role_assignments [0.041789s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_group_with_user_project_domain_links [0.052858s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_hierarchical_leaf_project [0.049851s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_hierarchical_not_leaf_project [0.039541s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_large_project_cascade [0.094030s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_project_cascade [0.063234s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_project_clears_default_project_id [0.048511s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_project_returns_not_found [0.033726s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_project_tag_returns_not_found [0.033928s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_project_tags [0.039589s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_project_with_role_assignments [0.042319s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_project_with_roles_clears_default_project_id [0.046457s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_project_with_user_association [0.045755s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_projects_from_ids [0.037774s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_projects_from_ids_with_no_existing_project_id [0.037440s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_role_check_role_grant [0.043136s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_role_returns_not_found [0.034064s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_role_with_system_assignments [0.168639s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_role_with_user_and_group_grants [0.047277s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_system_grant_for_group [0.035595s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_system_grant_for_group_with_invalid_group_fails [0.035436s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_system_grant_for_group_with_invalid_role_fails [0.034863s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_system_grant_for_user [0.038605s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_system_grant_for_user_with_invalid_role_fails [0.035633s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_system_grant_for_user_with_invalid_user_fails [0.036444s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_tag_from_project [0.038013s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_user_assignments_user_same_id_as_group [0.042451s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_user_grant_no_user [0.035204s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_user_returns_not_found [0.034870s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_user_with_group_project_domain_links [0.056539s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_user_with_project_association [0.048697s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_delete_user_with_project_roles [0.048501s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_disable_hierarchical_leaf_project [0.040886s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_disable_hierarchical_not_leaf_project [0.038980s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_domain_crud [0.054173s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_domain_delete_hierarchy [0.062165s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_domain_name_case_sensitivity [0.036881s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_domain_rename_invalidates_get_domain_by_name_cache [0.038845s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_enable_project_with_disabled_parent [0.045912s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_and_remove_correct_role_grant_from_a_mix [0.047643s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_and_remove_role_grant_by_group_and_cross_domain [0.043288s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_and_remove_role_grant_by_group_and_domain [0.045503s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_and_remove_role_grant_by_group_and_project [0.045793s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_and_remove_role_grant_by_user_and_cross_domain [0.042923s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_and_remove_role_grant_by_user_and_domain [0.040906s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_default_domain_by_name [0.035097s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_group_by_name [0.035255s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_group_by_name_returns_not_found [0.034332s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_not_default_domain_by_name [0.035548s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_project [0.032908s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_project_by_name [0.032613s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_project_by_name_for_project_acting_as_a_domain [0.173703s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_project_by_name_returns_not_found [0.033500s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_project_contains_tags [0.038611s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_project_returns_not_found [0.033538s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_project_tag [0.036018s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_project_user_ids_returns_not_found [0.033924s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_projects_in_subtree_as_ids_with_large_tree [0.061703s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_role_assignment_by_domain_not_found [0.035671s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_role_assignment_by_project_not_found [0.035455s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_role_by_trustor_and_project [0.045894s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_role_by_user_and_project [0.048812s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_role_by_user_and_project_with_user_in_group [0.047323s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_role_grant_by_user_and_project [0.037543s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_roles_for_groups_on_domain [0.042100s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_roles_for_groups_on_project [0.049659s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_roles_for_user_and_domain [0.047963s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_roles_for_user_and_domain_returns_not_found [0.040959s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_roles_for_user_and_project_returns_not_found [0.038212s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_user [0.035488s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_user_by_name [0.037757s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_user_by_name_returns_not_found [0.036324s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_user_returns_not_found [0.035515s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_get_user_returns_required_attributes [0.037649s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_grant_crud_throws_exception_if_invalid_role [0.044315s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_group_crud [0.041448s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_hidden_project_domain_root_is_really_hidden [0.050396s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_hierarchical_projects_crud [0.050702s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_is_domain_sub_project_has_parent_domain_id ... SKIPPED: Work In Progress Test Failed as expected: waiting for sub projects acting as domains support
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_domains [0.036305s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_domains_filtered_and_limited [0.089881s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_domains_for_groups [0.044126s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_domains_for_user [0.046495s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_domains_for_user_with_grants [0.050977s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_domains_for_user_with_inherited_grants [0.187595s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_group_role_assignment [0.037105s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_groups [0.035236s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_groups_for_user [0.061381s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_limit_for_domains [0.099530s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_project_parents [0.047603s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_project_parents_invalid_project_id [0.033596s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_project_tags [0.036126s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_project_tags_returns_not_found [0.034200s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_projects [0.036142s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_projects_acting_as_domain [0.042123s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_projects_for_alternate_domain [0.039892s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_projects_for_domain [0.035774s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_projects_for_groups [0.055389s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_projects_for_user [0.045147s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_projects_for_user_with_grants [0.049799s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_projects_in_subtree [0.045058s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_projects_in_subtree_invalid_project_id [0.033421s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_projects_in_subtree_with_circular_reference [0.039938s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_projects_with_multiple_filters [0.037675s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_role_assignment_by_domain [0.051195s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_role_assignment_by_user_with_domain_group_roles [0.057763s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_role_assignment_containing_names_domain_role [0.045174s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_role_assignment_containing_names_global_role [0.044995s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_role_assignment_does_not_contain_names [0.039634s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_role_assignment_fails_with_userid_and_source_groups [0.033970s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_role_assignment_using_sourced_groups [0.055234s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_role_assignment_using_sourced_groups_with_domains [0.058857s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_role_assignments_bad_role [0.034736s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_role_assignments_filtered_by_role [0.040576s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_role_assignments_group_not_found [0.052634s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_role_assignments_unfiltered [0.041977s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_role_assignments_user_not_found [0.034110s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_system_grants_for_group [0.038490s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_system_grants_for_group_returns_empty_list [0.033582s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_system_grants_for_user [0.038707s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_system_grants_for_user_returns_empty_list [0.034194s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_user_ids_for_project [0.181667s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_user_ids_for_project_no_duplicates [0.040279s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_user_project_ids_returns_not_found [0.037325s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_users [0.037400s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_users_call_count [0.068909s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_users_in_group [0.044080s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_users_in_group_returns_not_found [0.033869s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_users_with_all_federated_attributes [0.041996s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_users_with_idp_id [0.044857s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_users_with_idp_id_protocol_id [0.043830s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_users_with_name [0.046305s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_users_with_protocol_id [0.044383s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_users_with_unique_id [0.039822s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_users_with_unique_id_and_idp_id [0.042345s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_list_users_with_unique_id_and_protocol_id [0.042528s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_move_group_between_domains [0.039168s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_move_user_between_domains [0.041447s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_multi_group_grants_on_project_domain [0.057439s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_multi_role_grant_by_user_group_on_project_domain [0.063849s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_new_arbitrary_attributes_are_returned_from_update_user [0.040454s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_password_hashed [0.037184s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_project_add_and_remove_user_role [0.042923s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_project_as_a_domain_uniqueness_constraints [0.041536s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_project_attribute_update [0.047999s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_project_crud [0.046529s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_project_rename_invalidates_get_project_by_name_cache [0.037736s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_project_update_and_project_get_return_same_response [0.038901s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_project_update_missing_attrs_with_a_falsey_value [0.037611s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_project_update_missing_attrs_with_a_value [0.037272s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_remove_foreign_assignments_when_deleting_a_domain [0.063872s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_remove_role_from_user_and_project [0.192777s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_remove_role_grant_from_user_and_project [0.036685s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_remove_user_from_group [0.043924s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_remove_user_from_group_returns_not_found [0.040674s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_remove_user_role_not_assigned [0.034253s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_rename_duplicate_project_name_fails [0.037680s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_rename_duplicate_user_name_fails [0.040758s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_role_grant_by_group_and_cross_domain_project [0.043033s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_role_grant_by_user_and_cross_domain_project [0.044234s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_sql_user_to_dict_null_default_project_id [0.036797s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_storing_null_domain_id_in_project_ref [0.056297s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_update_cascade_only_accepts_enabled [0.035339s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_update_domain_set_immutable [0.040055s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_update_domain_unset_immutable [0.045691s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_update_group_name_with_trailing_whitespace [0.034975s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_update_project_enable [0.048406s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_update_project_enabled_cascade [0.054871s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_update_project_id_does_nothing [0.038549s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_update_project_name_with_trailing_whitespace [0.036303s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_update_project_parent [0.039903s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_update_project_returns_extra [0.036177s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_update_project_returns_not_found [0.034876s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_update_project_set_immutable [0.036751s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_update_project_set_immutable_with_additional_updates [0.038018s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_update_project_tags [0.039094s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_update_project_tags_returns_not_found [0.036704s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_update_project_unset_immutable [0.042689s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_update_role_no_name [0.035561s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_update_role_same_name [0.036176s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_update_user_enable [0.050334s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_update_user_id_fails [0.038772s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_update_user_name [0.042159s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_update_user_returns_extra [0.041806s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_update_user_returns_not_found [0.034484s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_update_user_with_null_password [0.040694s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_update_user_with_stale_data_forces_retry [1.052718s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_updated_arbitrary_attributes_are_returned_from_update_user [0.056599s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_user_crud [0.051697s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlIdentity.test_user_update_and_user_get_return_same_response [0.041408s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlImpliedRoles.test_circular_inferences [0.198906s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlImpliedRoles.test_delete_implied_role_returns_not_found [0.032831s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlImpliedRoles.test_implied_role_crd [0.035789s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlImpliedRoles.test_role_assignments_directed_graph_of_implied_roles [0.057382s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlImpliedRoles.test_role_assignments_domain_specific_with_implied_roles [0.050317s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlImpliedRoles.test_role_assignments_implied_roles_filtered_by_role [0.046370s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlImpliedRoles.test_role_assignments_inherited_implied_roles [0.049565s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlImpliedRoles.test_role_assignments_simple_tree_of_implied_roles [0.050318s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlImpliedRoles.test_role_assignments_simple_tree_of_implied_roles_on_domain [0.048173s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlInheritance.test_crud_inherited_and_direct_assignment_for_group_on_domain [0.039951s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlInheritance.test_crud_inherited_and_direct_assignment_for_group_on_project [0.039112s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlInheritance.test_crud_inherited_and_direct_assignment_for_user_on_domain [0.039673s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlInheritance.test_crud_inherited_and_direct_assignment_for_user_on_project [0.039238s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlInheritance.test_inherited_role_grants_for_group [0.073822s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlInheritance.test_inherited_role_grants_for_user [0.064842s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlInheritance.test_list_assignments_for_tree [0.056479s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlInheritance.test_list_effective_assignments_for_tree [0.060297s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlInheritance.test_list_effective_assignments_for_tree_with_domain_assignments [0.058918s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlInheritance.test_list_effective_assignments_for_tree_with_mixed_assignments [0.070719s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlInheritance.test_list_projects_for_user_with_inherited_grants [0.061884s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlInheritance.test_list_projects_for_user_with_inherited_group_grants [0.076043s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlInheritance.test_list_projects_for_user_with_inherited_group_project_grants [0.062824s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlInheritance.test_list_projects_for_user_with_inherited_user_project_grants [0.056803s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlInheritance.test_list_role_assignment_using_inherited_sourced_groups [0.058477s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlInheritance.test_list_user_ids_for_project_with_inheritance [0.060938s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlInheritance.test_role_assignments_user_domain_to_project_inheritance [0.053814s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlLimit.test_create_domain_limit [0.039997s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlLimit.test_create_domain_limit_duplicate [0.194901s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlLimit.test_create_limit_description_none [0.038227s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlLimit.test_create_limit_with_invalid_region_raises_validation_error [0.037038s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlLimit.test_create_limit_with_invalid_service_raises_validation_error [0.038440s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlLimit.test_create_limit_without_description [0.038114s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlLimit.test_create_limit_without_reference_registered_limit [0.037856s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlLimit.test_create_project_limit [0.040742s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlLimit.test_create_project_limit_duplicate [0.039304s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlLimit.test_default_enforcement_model_is_flat [0.037799s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlLimit.test_delete_limit [0.040680s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlLimit.test_delete_limit_project [0.052796s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlLimit.test_delete_limit_returns_not_found [0.039018s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlLimit.test_get_limit [0.039369s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlLimit.test_get_limit_returns_not_found [0.039426s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlLimit.test_list_limit_by_filter [0.042415s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlLimit.test_list_limit_by_limit [0.041346s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlLimit.test_list_limit_by_multi_filter_with_project_id [0.038395s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlLimit.test_list_limits [0.039785s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlLimit.test_registering_unsupported_enforcement_model_fails [0.038332s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlLimit.test_update_limit [0.041806s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlLimitTests.test_list_groups_filtered_and_limited [0.284715s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlLimitTests.test_list_projects_filtered_and_limited [0.286495s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlLimitTests.test_list_users_filtered_and_limited [0.285230s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlModels.test_federated_user_model [0.034644s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlModels.test_group_model [0.033144s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlModels.test_local_user_model [0.034642s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlModels.test_nonlocal_user_model [0.035147s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlModels.test_password_model [0.034251s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlModels.test_project_model [0.035345s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlModels.test_project_tags_model [0.035620s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlModels.test_revocation_event_model [0.035346s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlModels.test_role_assignment_model [0.035319s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlModels.test_user_group_membership [0.033677s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlModels.test_user_model [0.035246s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlModuleInitialization.test_initialize_module [0.004477s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlPolicy.test_create [0.033007s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlPolicy.test_delete [0.036382s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlPolicy.test_delete_policy_returns_not_found [0.034137s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlPolicy.test_get [0.035078s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlPolicy.test_get_policy_returns_not_found [0.033924s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlPolicy.test_list [0.034627s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlPolicy.test_update [0.196039s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlPolicy.test_update_policy_returns_not_found [0.033561s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlRegisteredLimit.test_create_multi_registered_limits_duplicate [0.037047s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlRegisteredLimit.test_create_registered_limit_crud [0.038026s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlRegisteredLimit.test_create_registered_limit_description_none [0.035977s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlRegisteredLimit.test_create_registered_limit_duplicate [0.038976s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlRegisteredLimit.test_create_registered_limit_invalid_region [0.035701s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlRegisteredLimit.test_create_registered_limit_invalid_service [0.037062s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlRegisteredLimit.test_create_registered_limit_without_description [0.037903s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlRegisteredLimit.test_delete_registered_limit [0.039613s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlRegisteredLimit.test_delete_registered_limit_returns_not_found [0.036994s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlRegisteredLimit.test_delete_registered_limit_when_reference_limit_exist [0.041320s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlRegisteredLimit.test_get_registered_limit [0.037948s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlRegisteredLimit.test_get_registered_limit_returns_not_found [0.037434s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlRegisteredLimit.test_list_registered_limit_by_filter [0.039131s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlRegisteredLimit.test_list_registered_limit_by_limit [0.039292s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlRegisteredLimit.test_list_registered_limits [0.038183s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlRegisteredLimit.test_update_registered_limit [0.038396s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlRegisteredLimit.test_update_registered_limit_duplicate [0.039924s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlRegisteredLimit.test_update_registered_limit_invalid_input_return_bad_request [0.037402s] ... ok
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_one. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/.venv/lib/python3.11/site-packages/pycadf/identifier.py:70: UserWarning: Invalid uuid: region_two. To ensure interoperability, identifiers should be a valid uuid.
+  warnings.warn(('Invalid uuid: %s. To ensure interoperability, '
+{0} keystone.tests.unit.test_backend_sql.SqlRegisteredLimit.test_update_registered_limit_when_reference_limit_exist [0.040943s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlTrust.test_consume_use [0.037262s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlTrust.test_create_trust [0.034095s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlTrust.test_delete_trust [0.038327s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlTrust.test_delete_trust_not_found [0.034283s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlTrust.test_duplicate_trusts_not_allowed [0.035180s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlTrust.test_flush_expired_trusts [0.036111s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlTrust.test_flush_expired_trusts_with_all_id [0.036660s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlTrust.test_flush_expired_trusts_with_date [0.035223s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlTrust.test_flush_expired_trusts_with_no_project_id [0.036337s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlTrust.test_flush_expired_trusts_with_no_trustee_id [0.035334s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlTrust.test_flush_expired_trusts_with_no_trustor_id [0.036003s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlTrust.test_flush_expired_trusts_with_project_id [0.036192s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlTrust.test_flush_expired_trusts_with_trustee_id [0.036333s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlTrust.test_flush_expired_trusts_with_trustor_id [0.036095s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlTrust.test_get_deleted_trust [0.037703s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlTrust.test_get_trust [0.037826s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlTrust.test_list_trust_by_trustee [0.037321s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlTrust.test_list_trust_by_trustor [0.037052s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlTrust.test_list_trusts [0.036874s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlTrust.test_non_expired_non_deleted_trusts [0.038956s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlTrust.test_non_expired_soft_deleted_trusts [0.039201s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlTrust.test_trust_expires_at_int_matches_expires_at [0.033660s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlTrust.test_trust_has_remaining_uses_negative [0.034277s] ... ok
+{0} keystone.tests.unit.test_backend_sql.SqlTrust.test_trust_has_remaining_uses_positive [0.035003s] ... ok
+{0} keystone.tests.unit.test_exception.ExceptionTestCase.test_validation_error [0.000586s] ... ok
+{0} keystone.tests.unit.test_exception.SecurityErrorTestCase.test_validation_error [0.000552s] ... ok
+{0} keystone.tests.unit.test_exception.UnexpectedExceptionTestCase.test_validation_error [0.000453s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionSchemaTests.test_boolean_and_null_classification_accepted [0.000320s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_audit_classification_contains_no_credentials [0.102688s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_audit_records_explicit_false_assignment [0.269791s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_callers_exemption_does_not_exempt_human_target [0.131130s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_disabled_service_still_cannot_change_password [0.096173s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_domain_admin_cannot_supply_classification [0.104006s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_domain_disabled_service_cannot_get_token [0.098272s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_explicit_operator_policy_override [0.100362s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_human_history_and_minimum_age_still_apply [0.108526s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_lock_password_still_applies [0.270152s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_malformed_flag_rejected_on_create_and_update [0.170569s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_malformed_json_does_not_modify_classification [0.099524s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_native_first_use_and_lockout_remain_separate [0.168577s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_null_removes_classification_and_restores_policy [0.122563s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_old_password_still_required [0.099052s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_omitted_false_and_null_remain_human [0.387895s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_password_writes_lock_only_user_row [0.114375s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_project_admin_cannot_supply_classification [0.113117s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_same_request_opt_in_and_opt_out [0.148661s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_service_admin_reset_uses_target_options [0.107504s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_service_create_short_password_is_persisted [0.095482s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_service_password_changes_revoke_tokens [0.142055s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_service_reuses_password_and_ignores_minimum_age [0.291223s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_service_self_change_with_loaded_regex [0.101011s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_stale_cached_false_does_not_reject_service_reset [0.106765s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_stale_cached_false_does_not_reject_service_self_change [0.102282s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_stale_cached_true_cannot_bypass_reset [0.105470s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_stale_cached_true_cannot_bypass_self_change [0.101667s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_strict_schema_limit_survives_regex_exemption [0.092241s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_technical_max_length_and_json_types_still_apply [0.340068s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_unrelated_options_rename_domain_and_cache [0.159067s] ... ok
+{0} keystone.tests.unit.test_policy.GeneratePolicyFileTestCase.test_policy_generator_from_command_line [0.257953s] ... ok
+{0} keystone.tests.unit.test_policy.PolicyFileTestCase.test_modified_policy_reloads [0.010404s] ... ok
+{0} keystone.tests.unit.test_policy.PolicyJsonTestCase.test_all_targets_documented [0.003740s] ... ok
+{0} keystone.tests.unit.test_policy.PolicyJsonTestCase.test_policies_loads [0.008145s] ... ok
+{0} keystone.tests.unit.test_policy.PolicyScopeTypesEnforcementTestCase.test_forbidden_is_raised_if_enforce_scope_is_true [0.008232s] ... ok
+{0} keystone.tests.unit.test_policy.PolicyScopeTypesEnforcementTestCase.test_warning_message_is_logged_if_enforce_scope_is_false [0.008434s] ... ok
+{0} keystone.tests.unit.test_policy.PolicyTestCase.test_early_AND_enforcement [0.007357s] ... ok
+{0} keystone.tests.unit.test_policy.PolicyTestCase.test_early_OR_enforcement [0.007310s] ... ok
+{0} keystone.tests.unit.test_policy.PolicyTestCase.test_enforce_bad_action_throws [0.007571s] ... ok
+{0} keystone.tests.unit.test_policy.PolicyTestCase.test_enforce_good_action [0.007695s] ... ok
+{0} keystone.tests.unit.test_policy.PolicyTestCase.test_enforce_nonexistent_action_throws [0.007364s] ... ok
+{0} keystone.tests.unit.test_policy.PolicyTestCase.test_ignore_case_role_check [0.007517s] ... ok
+{0} keystone.tests.unit.test_policy.PolicyTestCase.test_templatized_enforcement [0.007637s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_add_user_to_group [0.082683s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_admin_password_reset [0.103972s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_admin_password_reset_with_min_password_age_enabled [0.091608s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_admin_password_reset_with_password_lock [0.102603s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_check_user_in_group [0.270952s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_create_group [0.079891s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_create_group_bad_request [0.069911s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_create_user [0.089628s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_create_user_bad_domain_id [0.084864s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_create_user_bad_request [0.073471s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_create_user_password_not_logged [0.084128s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_create_user_with_admin_token_and_domain [0.079256s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_create_user_without_domain [0.272967s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_delete_group [0.084495s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_delete_user [0.100860s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_delete_user_retries_on_deadlock [2.932208s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_get_head_group [0.094092s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_get_head_user [0.082155s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_get_user_does_not_include_extra_attributes [0.052429s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_get_user_includes_required_attributes [0.269208s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_get_user_with_default_project [0.078397s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_list_head_groups [0.084471s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_list_head_groups_for_user [0.124477s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_list_head_users [0.087747s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_list_head_users_in_group [0.100253s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_list_users_no_default_project [0.083483s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_list_users_with_multiple_backends [0.294210s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_remove_user_from_group [0.090850s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_setting_default_project_id_to_domain_failed [0.082408s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_update_ephemeral_user [0.050963s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_update_group [0.079383s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_update_group_domain_id [0.078334s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_update_password_not_logged [0.085107s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_update_user [0.083670s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_update_user_domain_id [0.270762s] ... ok
+{0} keystone.tests.unit.test_v3_identity.IdentityTestCase.test_user_management_normalized_keys [0.109512s] ... ok
+{0} keystone.tests.unit.test_v3_identity.PasswordValidationTestCase.test_changing_password_with_simple_password_strength [0.068127s] ... ok
+{0} keystone.tests.unit.test_v3_identity.PasswordValidationTestCase.test_changing_password_with_strong_password_strength [0.066424s] ... ok
+{0} keystone.tests.unit.test_v3_identity.PasswordValidationTestCase.test_changing_password_with_strong_password_strength_fails [0.075330s] ... ok
+{0} keystone.tests.unit.test_v3_identity.PasswordValidationTestCase.test_create_user_with_invalid_password [0.084289s] ... ok
+{0} keystone.tests.unit.test_v3_identity.PasswordValidationTestCase.test_update_user_with_invalid_password [0.091325s] ... ok
+{0} keystone.tests.unit.test_v3_identity.UserFederatedAttributesTests.test_create_user_fails_when_given_invalid_idp_and_protocols [0.100555s] ... ok
+{0} keystone.tests.unit.test_v3_identity.UserFederatedAttributesTests.test_create_user_with_federated_attributes [0.288453s] ... ok
+{0} keystone.tests.unit.test_v3_identity.UserFederatedAttributesTests.test_get_user_includes_required_federated_attributes [0.086073s] ... ok
+{0} keystone.tests.unit.test_v3_identity.UserFederatedAttributesTests.test_list_users_with_all_federated_attributes [0.088516s] ... ok
+{0} keystone.tests.unit.test_v3_identity.UserFederatedAttributesTests.test_list_users_with_idp_id [0.094741s] ... ok
+{0} keystone.tests.unit.test_v3_identity.UserFederatedAttributesTests.test_list_users_with_idp_id_and_protocol_id [0.096081s] ... ok
+{0} keystone.tests.unit.test_v3_identity.UserFederatedAttributesTests.test_list_users_with_idp_id_and_unique_id [0.088092s] ... ok
+{0} keystone.tests.unit.test_v3_identity.UserFederatedAttributesTests.test_list_users_with_protocol_id [0.278928s] ... ok
+{0} keystone.tests.unit.test_v3_identity.UserFederatedAttributesTests.test_list_users_with_protocol_id_and_unique_id [0.088578s] ... ok
+{0} keystone.tests.unit.test_v3_identity.UserFederatedAttributesTests.test_list_users_with_unique_id [0.087938s] ... ok
+{0} keystone.tests.unit.test_v3_identity.UserFederatedAttributesTests.test_update_user_fails_when_given_invalid_idp_and_protocols [0.097650s] ... ok
+{0} keystone.tests.unit.test_v3_identity.UserFederatedAttributesTests.test_update_user_with_federated_attributes [0.092327s] ... ok
+{0} keystone.tests.unit.test_v3_identity.UserSelfServiceChangingPasswordsTestCase.test_change_password_required_upon_first_use_for_admin_reset [0.077727s] ... ok
+{0} keystone.tests.unit.test_v3_identity.UserSelfServiceChangingPasswordsTestCase.test_change_password_required_upon_first_use_for_create [0.075508s] ... ok
+{0} keystone.tests.unit.test_v3_identity.UserSelfServiceChangingPasswordsTestCase.test_change_password_required_upon_first_use_ignore_user [0.068888s] ... ok
+{0} keystone.tests.unit.test_v3_identity.UserSelfServiceChangingPasswordsTestCase.test_changing_expired_password_succeeds [0.279363s] ... ok
+{0} keystone.tests.unit.test_v3_identity.UserSelfServiceChangingPasswordsTestCase.test_changing_expired_password_with_disabled_user_fails [0.107710s] ... ok
+{0} keystone.tests.unit.test_v3_identity.UserSelfServiceChangingPasswordsTestCase.test_changing_password [0.086569s] ... ok
+{0} keystone.tests.unit.test_v3_identity.UserSelfServiceChangingPasswordsTestCase.test_changing_password_not_logged [0.078494s] ... ok
+{0} keystone.tests.unit.test_v3_identity.UserSelfServiceChangingPasswordsTestCase.test_changing_password_with_disabled_user_fails [0.094619s] ... ok
+{0} keystone.tests.unit.test_v3_identity.UserSelfServiceChangingPasswordsTestCase.test_changing_password_with_incorrect_password_fails [0.069136s] ... ok
+{0} keystone.tests.unit.test_v3_identity.UserSelfServiceChangingPasswordsTestCase.test_changing_password_with_min_password_age [0.093539s] ... ok
+{0} keystone.tests.unit.test_v3_identity.UserSelfServiceChangingPasswordsTestCase.test_changing_password_with_missing_original_password_fails [0.061588s] ... ok
+{0} keystone.tests.unit.test_v3_identity.UserSelfServiceChangingPasswordsTestCase.test_changing_password_with_missing_password_fails [0.061651s] ... ok
+{0} keystone.tests.unit.test_v3_identity.UserSelfServiceChangingPasswordsTestCase.test_changing_password_with_password_lock [0.364677s] ... ok
+{0} keystone.tests.unit.test_v3_identity.UserSelfServiceChangingPasswordsTestCase.test_lockout_exempt [0.078003s] ... ok
+{0} keystone.tests.unit.test_validation.ApplicationCredentialValidatorTestCase.test_validate_app_cred_invalid_roles_fails [0.004942s] ... ok
+{0} keystone.tests.unit.test_validation.ApplicationCredentialValidatorTestCase.test_validate_app_cred_request [0.004077s] ... ok
+{0} keystone.tests.unit.test_validation.ApplicationCredentialValidatorTestCase.test_validate_app_cred_request_without_name_fails [0.004507s] ... ok
+{0} keystone.tests.unit.test_validation.ApplicationCredentialValidatorTestCase.test_validate_app_cred_with_invalid_expires_at_fails [0.003994s] ... ok
+{0} keystone.tests.unit.test_validation.ApplicationCredentialValidatorTestCase.test_validate_app_cred_with_null_expires_at_succeeds [0.004028s] ... ok
+{0} keystone.tests.unit.test_validation.ApplicationCredentialValidatorTestCase.test_validate_app_cred_with_secret_succeeds [0.003891s] ... ok
+{0} keystone.tests.unit.test_validation.ApplicationCredentialValidatorTestCase.test_validate_app_cred_with_unrestricted_flag_succeeds [0.003914s] ... ok
+{0} keystone.tests.unit.test_validation.ChangePasswordValidationTestCase.test_validate_password_change_fails_with_invalid_values [0.000833s] ... ok
+{0} keystone.tests.unit.test_validation.ChangePasswordValidationTestCase.test_validate_password_change_fails_without_all_fields [0.000880s] ... ok
+{0} keystone.tests.unit.test_validation.ChangePasswordValidationTestCase.test_validate_password_change_request_succeeds [0.000661s] ... ok
+{0} keystone.tests.unit.test_validation.CommonValidationTestCase.test_nullable_type_only [0.000677s] ... ok
+{0} keystone.tests.unit.test_validation.CommonValidationTestCase.test_nullable_with_enum [0.000736s] ... ok
+{0} keystone.tests.unit.test_validation.CredentialValidationTestCase.test_validate_credential_ec2_without_project_id_fails [0.000960s] ... ok
+{0} keystone.tests.unit.test_validation.CredentialValidationTestCase.test_validate_credential_non_ec2_without_project_id_succeeds [0.001376s] ... ok
+{0} keystone.tests.unit.test_validation.CredentialValidationTestCase.test_validate_credential_succeeds [0.000841s] ... ok
+{0} keystone.tests.unit.test_validation.CredentialValidationTestCase.test_validate_credential_update_succeeds [0.000979s] ... ok
+{0} keystone.tests.unit.test_validation.CredentialValidationTestCase.test_validate_credential_update_with_extra_parameters_succeeds [0.000863s] ... ok
+{0} keystone.tests.unit.test_validation.CredentialValidationTestCase.test_validate_credential_update_without_parameters_fails [0.001096s] ... ok
+{0} keystone.tests.unit.test_validation.CredentialValidationTestCase.test_validate_credential_with_extra_parameters_succeeds [0.000844s] ... ok
+{0} keystone.tests.unit.test_validation.CredentialValidationTestCase.test_validate_credential_with_project_id_succeeds [0.000985s] ... ok
+{0} keystone.tests.unit.test_validation.CredentialValidationTestCase.test_validate_credential_without_blob_fails [0.001022s] ... ok
+{0} keystone.tests.unit.test_validation.CredentialValidationTestCase.test_validate_credential_without_type_fails [0.001044s] ... ok
+{0} keystone.tests.unit.test_validation.CredentialValidationTestCase.test_validate_credential_without_user_id_fails [0.000956s] ... ok
+{0} keystone.tests.unit.test_validation.DomainValidationTestCase.test_validate_domain_create_fails_with_invalid_name [0.001255s] ... ok
+{0} keystone.tests.unit.test_validation.DomainValidationTestCase.test_validate_domain_create_with_tag_name_too_long [0.001195s] ... ok
+{0} keystone.tests.unit.test_validation.DomainValidationTestCase.test_validate_domain_create_with_tags [0.000858s] ... ok
+{0} keystone.tests.unit.test_validation.DomainValidationTestCase.test_validate_domain_create_with_tags_invalid_char [0.001055s] ... ok
+{0} keystone.tests.unit.test_validation.DomainValidationTestCase.test_validate_domain_create_with_too_many_tags [0.001381s] ... ok
+{0} keystone.tests.unit.test_validation.DomainValidationTestCase.test_validate_domain_request [0.000910s] ... ok
+{0} keystone.tests.unit.test_validation.DomainValidationTestCase.test_validate_domain_request_with_enabled [0.000854s] ... ok
+{0} keystone.tests.unit.test_validation.DomainValidationTestCase.test_validate_domain_request_with_invalid_description_fails [0.000983s] ... ok
+{0} keystone.tests.unit.test_validation.DomainValidationTestCase.test_validate_domain_request_with_invalid_enabled_fails [0.001104s] ... ok
+{0} keystone.tests.unit.test_validation.DomainValidationTestCase.test_validate_domain_request_with_name_too_long [0.000994s] ... ok
+{0} keystone.tests.unit.test_validation.DomainValidationTestCase.test_validate_domain_request_with_valid_description [0.000808s] ... ok
+{0} keystone.tests.unit.test_validation.DomainValidationTestCase.test_validate_domain_request_without_name_fails [0.001143s] ... ok
+{0} keystone.tests.unit.test_validation.DomainValidationTestCase.test_validate_domain_update_fails_with_invalid_name [0.001743s] ... ok
+{0} keystone.tests.unit.test_validation.DomainValidationTestCase.test_validate_domain_update_request [0.000828s] ... ok
+{0} keystone.tests.unit.test_validation.DomainValidationTestCase.test_validate_domain_update_request_with_name_too_long_fails [0.000959s] ... ok
+{0} keystone.tests.unit.test_validation.DomainValidationTestCase.test_validate_domain_update_request_with_no_parameters_fails [0.001154s] ... ok
+{0} keystone.tests.unit.test_validation.DomainValidationTestCase.test_validate_domain_update_with_tag_name_too_long [0.000992s] ... ok
+{0} keystone.tests.unit.test_validation.DomainValidationTestCase.test_validate_domain_update_with_tags [0.000831s] ... ok
+{0} keystone.tests.unit.test_validation.DomainValidationTestCase.test_validate_domain_update_with_tags_invalid_char [0.001032s] ... ok
+{0} keystone.tests.unit.test_validation.DomainValidationTestCase.test_validate_domain_update_with_too_many_tags [0.001381s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointGroupValidationTestCase.test_validate_create_endpoint_group_fails_with_invalid_filters [0.001893s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointGroupValidationTestCase.test_validate_endpoint_group_create_fails_without_filters [0.001363s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointGroupValidationTestCase.test_validate_endpoint_group_create_fails_without_name [0.001225s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointGroupValidationTestCase.test_validate_endpoint_group_create_succeeds_with_req_parameters [0.000906s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointGroupValidationTestCase.test_validate_endpoint_group_create_succeeds_with_valid_filters [0.000830s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointGroupValidationTestCase.test_validate_endpoint_group_request_succeeds [0.000917s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointGroupValidationTestCase.test_validate_endpoint_group_update_fails_with_invalid_filters [0.001673s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointGroupValidationTestCase.test_validate_endpoint_group_update_fails_with_no_parameters [0.001397s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointGroupValidationTestCase.test_validate_endpoint_group_update_request_succeeds [0.000888s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointGroupValidationTestCase.test_validate_endpoint_group_update_succeeds_with_name [0.000802s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointGroupValidationTestCase.test_validate_endpoint_group_update_succeeds_with_valid_filters [0.000866s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointValidationTestCase.test_validate_create_endpoint_fails_with_invalid_enabled [0.001008s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointValidationTestCase.test_validate_endpoint_create_fails_with_invalid_interface [0.000938s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointValidationTestCase.test_validate_endpoint_create_fails_with_invalid_region_id [0.000918s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointValidationTestCase.test_validate_endpoint_create_fails_with_invalid_url [0.003242s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointValidationTestCase.test_validate_endpoint_create_fails_without_interface [0.001188s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointValidationTestCase.test_validate_endpoint_create_fails_without_service_id [0.001045s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointValidationTestCase.test_validate_endpoint_create_fails_without_url [0.001160s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointValidationTestCase.test_validate_endpoint_create_succeeds_with_extra_parameters [0.000851s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointValidationTestCase.test_validate_endpoint_create_succeeds_with_required_parameters [0.000956s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointValidationTestCase.test_validate_endpoint_create_succeeds_with_url [0.001264s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointValidationTestCase.test_validate_endpoint_create_succeeds_with_valid_enabled [0.001315s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointValidationTestCase.test_validate_endpoint_request_succeeds [0.001031s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointValidationTestCase.test_validate_endpoint_update_fails_with_invalid_enabled [0.001121s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointValidationTestCase.test_validate_endpoint_update_fails_with_invalid_interface [0.000903s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointValidationTestCase.test_validate_endpoint_update_fails_with_invalid_region_id [0.001007s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointValidationTestCase.test_validate_endpoint_update_fails_with_invalid_url [0.001353s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointValidationTestCase.test_validate_endpoint_update_fails_with_no_parameters [0.001210s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointValidationTestCase.test_validate_endpoint_update_request_succeeds [0.000906s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointValidationTestCase.test_validate_endpoint_update_succeeds_with_extra_parameters [0.000803s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointValidationTestCase.test_validate_endpoint_update_succeeds_with_url [0.001068s] ... ok
+{0} keystone.tests.unit.test_validation.EndpointValidationTestCase.test_validate_endpoint_update_succeeds_with_valid_enabled [0.000792s] ... ok
+{0} keystone.tests.unit.test_validation.EntityValidationTestCase.test_create_entity_with_all_valid_parameters_validates [0.000866s] ... ok
+{0} keystone.tests.unit.test_validation.EntityValidationTestCase.test_create_entity_with_invalid_email_fails [0.000821s] ... ok
+{0} keystone.tests.unit.test_validation.EntityValidationTestCase.test_create_entity_with_invalid_enabled_format_raises_exception [0.000992s] ... ok
+{0} keystone.tests.unit.test_validation.EntityValidationTestCase.test_create_entity_with_invalid_id_strings [0.000877s] ... ok
+{0} keystone.tests.unit.test_validation.EntityValidationTestCase.test_create_entity_with_invalid_urls_fails [0.001793s] ... ok
+{0} keystone.tests.unit.test_validation.EntityValidationTestCase.test_create_entity_with_name_too_long_raises_exception [0.000919s] ... ok
+{0} keystone.tests.unit.test_validation.EntityValidationTestCase.test_create_entity_with_name_too_short_raises_exception [0.000910s] ... ok
+{0} keystone.tests.unit.test_validation.EntityValidationTestCase.test_create_entity_with_null_id_string [0.000795s] ... ok
+{0} keystone.tests.unit.test_validation.EntityValidationTestCase.test_create_entity_with_null_string_succeeds [0.000871s] ... ok
+{0} keystone.tests.unit.test_validation.EntityValidationTestCase.test_create_entity_with_only_required_valid_parameters_validates [0.000787s] ... ok
+{0} keystone.tests.unit.test_validation.EntityValidationTestCase.test_create_entity_with_unicode_name_validates [0.000922s] ... ok
+{0} keystone.tests.unit.test_validation.EntityValidationTestCase.test_create_entity_with_valid_email_validates [0.000863s] ... ok
+{0} keystone.tests.unit.test_validation.EntityValidationTestCase.test_create_entity_with_valid_enabled_formats_validates [0.000963s] ... ok
+{0} keystone.tests.unit.test_validation.EntityValidationTestCase.test_create_entity_with_valid_id_strings [0.000899s] ... ok
+{0} keystone.tests.unit.test_validation.EntityValidationTestCase.test_create_entity_with_valid_urls_validates [0.001067s] ... ok
+{0} keystone.tests.unit.test_validation.EntityValidationTestCase.test_update_entity_with_a_null_optional_parameter_validates [0.000799s] ... ok
+{0} keystone.tests.unit.test_validation.EntityValidationTestCase.test_update_entity_with_a_required_null_parameter_fails [0.000943s] ... ok
+{0} keystone.tests.unit.test_validation.EntityValidationTestCase.test_update_entity_with_a_valid_optional_parameter_validates [0.000788s] ... ok
+{0} keystone.tests.unit.test_validation.EntityValidationTestCase.test_update_entity_with_a_valid_required_parameter_validates [0.000891s] ... ok
+{0} keystone.tests.unit.test_validation.EntityValidationTestCase.test_update_entity_with_all_parameters_valid_validates [0.000786s] ... ok
+{0} keystone.tests.unit.test_validation.EntityValidationTestCase.test_update_entity_with_invalid_optional_parameter_fails [0.000905s] ... ok
+{0} keystone.tests.unit.test_validation.EntityValidationTestCase.test_update_entity_with_invalid_required_parameter_fails [0.000847s] ... ok
+{0} keystone.tests.unit.test_validation.EntityValidationTestCase.test_update_entity_with_no_parameters_fails [0.000969s] ... ok
+{0} keystone.tests.unit.test_validation.FederationProtocolValidationTestCase.test_validate_protocol_request_fails_with_invalid_mapping_id [0.000889s] ... ok
+{0} keystone.tests.unit.test_validation.FederationProtocolValidationTestCase.test_validate_protocol_request_fails_with_invalid_params [0.000945s] ... ok
+{0} keystone.tests.unit.test_validation.FederationProtocolValidationTestCase.test_validate_protocol_request_no_parameters [0.000838s] ... ok
+{0} keystone.tests.unit.test_validation.FederationProtocolValidationTestCase.test_validate_protocol_request_succeeds [0.001375s] ... ok
+{0} keystone.tests.unit.test_validation.FederationProtocolValidationTestCase.test_validate_protocol_request_succeeds_on_update [0.000852s] ... ok
+{0} keystone.tests.unit.test_validation.FederationProtocolValidationTestCase.test_validate_protocol_request_succeeds_with_nonuuid_mapping_id [0.000926s] ... ok
+{0} keystone.tests.unit.test_validation.FederationProtocolValidationTestCase.test_validate_update_protocol_request_fails_with_invalid_id [0.000944s] ... ok
+{0} keystone.tests.unit.test_validation.FederationProtocolValidationTestCase.test_validate_update_protocol_request_fails_with_invalid_params [0.000945s] ... ok
+{0} keystone.tests.unit.test_validation.FederationProtocolValidationTestCase.test_validate_update_protocol_request_succeeds_with_nonuuid_id [0.000786s] ... ok
+{0} keystone.tests.unit.test_validation.FederationProtocolValidationTestCase.test_validate_update_protocol_with_no_parameters_fails [0.000944s] ... ok
+{0} keystone.tests.unit.test_validation.GroupValidationTestCase.test_validate_group_create_fails_with_invalid_name [0.001267s] ... ok
+{0} keystone.tests.unit.test_validation.GroupValidationTestCase.test_validate_group_create_fails_without_group_name [0.000957s] ... ok
+{0} keystone.tests.unit.test_validation.GroupValidationTestCase.test_validate_group_create_succeeds [0.000882s] ... ok
+{0} keystone.tests.unit.test_validation.GroupValidationTestCase.test_validate_group_create_succeeds_with_all_parameters [0.000820s] ... ok
+{0} keystone.tests.unit.test_validation.GroupValidationTestCase.test_validate_group_create_succeeds_with_extra_parameters [0.000898s] ... ok
+{0} keystone.tests.unit.test_validation.GroupValidationTestCase.test_validate_group_update_fails_with_invalid_name [0.001249s] ... ok
+{0} keystone.tests.unit.test_validation.GroupValidationTestCase.test_validate_group_update_fails_with_no_parameters [0.000916s] ... ok
+{0} keystone.tests.unit.test_validation.GroupValidationTestCase.test_validate_group_update_succeeds [0.000873s] ... ok
+{0} keystone.tests.unit.test_validation.GroupValidationTestCase.test_validate_group_update_succeeds_with_extra_parameters [0.000769s] ... ok
+{0} keystone.tests.unit.test_validation.IdentityProviderValidationTestCase.test_validate_idp_request_fails_with_invalid_params [0.001309s] ... ok
+{0} keystone.tests.unit.test_validation.IdentityProviderValidationTestCase.test_validate_idp_request_no_parameters [0.001201s] ... ok
+{0} keystone.tests.unit.test_validation.IdentityProviderValidationTestCase.test_validate_idp_request_remote_id_nullable [0.000907s] ... ok
+{0} keystone.tests.unit.test_validation.IdentityProviderValidationTestCase.test_validate_idp_request_succeeds [0.000825s] ... ok
+{0} keystone.tests.unit.test_validation.IdentityProviderValidationTestCase.test_validate_idp_request_with_duplicated_remote_id [0.001019s] ... ok
+{0} keystone.tests.unit.test_validation.IdentityProviderValidationTestCase.test_validate_idp_request_with_enabled [0.000829s] ... ok
+{0} keystone.tests.unit.test_validation.IdentityProviderValidationTestCase.test_validate_idp_request_with_invalid_description_fails [0.001463s] ... ok
+{0} keystone.tests.unit.test_validation.IdentityProviderValidationTestCase.test_validate_idp_request_with_invalid_enabled_fails [0.001363s] ... ok
+{0} keystone.tests.unit.test_validation.IdentityProviderValidationTestCase.test_validate_idp_request_with_invalid_remote_id_fails [0.000920s] ... ok
+{0} keystone.tests.unit.test_validation.LimitValidationTestCase.test_validate_domain_limit_create_request_succeeds [0.001342s] ... ok
+{0} keystone.tests.unit.test_validation.LimitValidationTestCase.test_validate_domain_limit_create_request_without_required_fails [0.002289s] ... ok
+{0} keystone.tests.unit.test_validation.LimitValidationTestCase.test_validate_limit_create_request_with_addition_input_fails [0.001566s] ... ok
+{0} keystone.tests.unit.test_validation.LimitValidationTestCase.test_validate_limit_create_request_with_both_project_and_domain [0.001569s] ... ok
+{0} keystone.tests.unit.test_validation.LimitValidationTestCase.test_validate_limit_create_request_with_invalid_domain [0.001335s] ... ok
+{0} keystone.tests.unit.test_validation.LimitValidationTestCase.test_validate_limit_create_request_with_invalid_input [0.002058s] ... ok
+{0} keystone.tests.unit.test_validation.LimitValidationTestCase.test_validate_limit_create_request_without_optional [0.001358s] ... ok
+{0} keystone.tests.unit.test_validation.LimitValidationTestCase.test_validate_limit_request_with_no_parameters [0.001616s] ... ok
+{0} keystone.tests.unit.test_validation.LimitValidationTestCase.test_validate_limit_update_request_succeeds [0.001283s] ... ok
+{0} keystone.tests.unit.test_validation.LimitValidationTestCase.test_validate_limit_update_request_with_addition_input_fails [0.001363s] ... ok
+{0} keystone.tests.unit.test_validation.LimitValidationTestCase.test_validate_limit_update_request_with_invalid_input [0.002443s] ... ok
+{0} keystone.tests.unit.test_validation.LimitValidationTestCase.test_validate_limit_update_request_without_optional [0.001297s] ... ok
+{0} keystone.tests.unit.test_validation.LimitValidationTestCase.test_validate_project_limit_create_request_succeeds [0.001319s] ... ok
+{0} keystone.tests.unit.test_validation.LimitValidationTestCase.test_validate_project_limit_create_request_without_required_fails [0.002229s] ... ok
+{0} keystone.tests.unit.test_validation.LimitValidationTestCase.test_validate_registered_limit_create_request_succeeds [0.001310s] ... ok
+{0} keystone.tests.unit.test_validation.LimitValidationTestCase.test_validate_registered_limit_create_request_with_addition [0.001467s] ... ok
+{0} keystone.tests.unit.test_validation.LimitValidationTestCase.test_validate_registered_limit_create_request_with_invalid_input [0.002017s] ... ok
+{0} keystone.tests.unit.test_validation.LimitValidationTestCase.test_validate_registered_limit_create_request_without_optional [0.001404s] ... ok
+{0} keystone.tests.unit.test_validation.LimitValidationTestCase.test_validate_registered_limit_create_request_without_required [0.001833s] ... ok
+{0} keystone.tests.unit.test_validation.LimitValidationTestCase.test_validate_registered_limit_request_with_no_parameters [0.001503s] ... ok
+{0} keystone.tests.unit.test_validation.LimitValidationTestCase.test_validate_registered_limit_update_request_with_addition [0.001460s] ... ok
+{0} keystone.tests.unit.test_validation.LimitValidationTestCase.test_validate_registered_limit_update_request_with_invalid_input [0.003532s] ... ok
+{0} keystone.tests.unit.test_validation.LimitValidationTestCase.test_validate_registered_limit_update_request_without_region [0.001994s] ... ok
+{0} keystone.tests.unit.test_validation.OAuth1ValidationTestCase.test_validate_authorize_request_token [0.001070s] ... ok
+{0} keystone.tests.unit.test_validation.OAuth1ValidationTestCase.test_validate_authorize_request_token_with_additional_properties [0.001211s] ... ok
+{0} keystone.tests.unit.test_validation.OAuth1ValidationTestCase.test_validate_authorize_request_token_with_id_and_name [0.001184s] ... ok
+{0} keystone.tests.unit.test_validation.OAuth1ValidationTestCase.test_validate_authorize_request_token_with_non_id_or_name [0.001092s] ... ok
+{0} keystone.tests.unit.test_validation.OAuth1ValidationTestCase.test_validate_consumer_request_succeeds [0.001084s] ... ok
+{0} keystone.tests.unit.test_validation.OAuth1ValidationTestCase.test_validate_consumer_request_with_invalid_description_fails [0.001354s] ... ok
+{0} keystone.tests.unit.test_validation.OAuth1ValidationTestCase.test_validate_consumer_request_with_no_parameters [0.001036s] ... ok
+{0} keystone.tests.unit.test_validation.OAuth1ValidationTestCase.test_validate_consumer_request_with_none_desc [0.001083s] ... ok
+{0} keystone.tests.unit.test_validation.OAuth1ValidationTestCase.test_validate_update_consumer_request_fails_with_secret [0.001066s] ... ok
+{0} keystone.tests.unit.test_validation.PasswordValidationTestCase.test_password_validate_with_invalid_password_regex [0.004016s] ... ok
+{0} keystone.tests.unit.test_validation.PasswordValidationTestCase.test_password_validate_with_invalid_strong_password [0.003609s] ... ok
+{0} keystone.tests.unit.test_validation.PasswordValidationTestCase.test_password_validate_with_valid_strong_password [0.003571s] ... ok
+{0} keystone.tests.unit.test_validation.PolicyValidationTestCase.test_validate_policy_create_with_extra_parameters_succeeds [0.001119s] ... ok
+{0} keystone.tests.unit.test_validation.PolicyValidationTestCase.test_validate_policy_create_with_invalid_type_fails [0.001033s] ... ok
+{0} keystone.tests.unit.test_validation.PolicyValidationTestCase.test_validate_policy_succeeds [0.000969s] ... ok
+{0} keystone.tests.unit.test_validation.PolicyValidationTestCase.test_validate_policy_update_succeeds [0.000870s] ... ok
+{0} keystone.tests.unit.test_validation.PolicyValidationTestCase.test_validate_policy_update_with_extra_parameters_succeeds [0.000932s] ... ok
+{0} keystone.tests.unit.test_validation.PolicyValidationTestCase.test_validate_policy_update_with_invalid_type_fails [0.000886s] ... ok
+{0} keystone.tests.unit.test_validation.PolicyValidationTestCase.test_validate_policy_update_without_parameters_fails [0.000912s] ... ok
+{0} keystone.tests.unit.test_validation.PolicyValidationTestCase.test_validate_policy_without_blob_fails [0.000895s] ... ok
+{0} keystone.tests.unit.test_validation.PolicyValidationTestCase.test_validate_policy_without_type_fails [0.001454s] ... ok
+{0} keystone.tests.unit.test_validation.ProjectValidationTestCase.test_validate_project_create_fails_with_invalid_name [0.001282s] ... ok
+{0} keystone.tests.unit.test_validation.ProjectValidationTestCase.test_validate_project_create_request_with_valid_domain_id [0.000828s] ... ok
+{0} keystone.tests.unit.test_validation.ProjectValidationTestCase.test_validate_project_create_with_tag_name_too_long [0.000956s] ... ok
+{0} keystone.tests.unit.test_validation.ProjectValidationTestCase.test_validate_project_create_with_tags [0.001083s] ... ok
+{0} keystone.tests.unit.test_validation.ProjectValidationTestCase.test_validate_project_create_with_tags_invalid_char [0.001315s] ... ok
+{0} keystone.tests.unit.test_validation.ProjectValidationTestCase.test_validate_project_create_with_too_many_tags [0.001357s] ... ok
+{0} keystone.tests.unit.test_validation.ProjectValidationTestCase.test_validate_project_request [0.000900s] ... ok
+{0} keystone.tests.unit.test_validation.ProjectValidationTestCase.test_validate_project_request_with_enabled [0.000808s] ... ok
+{0} keystone.tests.unit.test_validation.ProjectValidationTestCase.test_validate_project_request_with_invalid_description_fails [0.000931s] ... ok
+{0} keystone.tests.unit.test_validation.ProjectValidationTestCase.test_validate_project_request_with_invalid_domain_id_fails [0.000898s] ... ok
+{0} keystone.tests.unit.test_validation.ProjectValidationTestCase.test_validate_project_request_with_invalid_enabled_fails [0.001064s] ... ok
+{0} keystone.tests.unit.test_validation.ProjectValidationTestCase.test_validate_project_request_with_invalid_parent_id_fails [0.000912s] ... ok
+{0} keystone.tests.unit.test_validation.ProjectValidationTestCase.test_validate_project_request_with_name_too_long [0.000924s] ... ok
+{0} keystone.tests.unit.test_validation.ProjectValidationTestCase.test_validate_project_request_with_valid_description [0.000766s] ... ok
+{0} keystone.tests.unit.test_validation.ProjectValidationTestCase.test_validate_project_request_with_valid_parent_id [0.000885s] ... ok
+{0} keystone.tests.unit.test_validation.ProjectValidationTestCase.test_validate_project_request_without_name_fails [0.001053s] ... ok
+{0} keystone.tests.unit.test_validation.ProjectValidationTestCase.test_validate_project_update_fails_with_invalid_name [0.001182s] ... ok
+{0} keystone.tests.unit.test_validation.ProjectValidationTestCase.test_validate_project_update_request [0.000891s] ... ok
+{0} keystone.tests.unit.test_validation.ProjectValidationTestCase.test_validate_project_update_request_with_name_too_long_fails [0.000807s] ... ok
+{0} keystone.tests.unit.test_validation.ProjectValidationTestCase.test_validate_project_update_request_with_no_parameters_fails [0.001106s] ... ok
+{0} keystone.tests.unit.test_validation.ProjectValidationTestCase.test_validate_project_update_with_tag_name_too_long [0.000848s] ... ok
+{0} keystone.tests.unit.test_validation.ProjectValidationTestCase.test_validate_project_update_with_tags [0.001294s] ... ok
+{0} keystone.tests.unit.test_validation.ProjectValidationTestCase.test_validate_project_update_with_tags_invalid_char [0.000968s] ... ok
+{0} keystone.tests.unit.test_validation.ProjectValidationTestCase.test_validate_project_update_with_too_many_tags [0.001510s] ... ok
+{0} keystone.tests.unit.test_validation.RegionValidationTestCase.test_validate_region_create_fails_with_invalid_region_id [0.000933s] ... ok
+{0} keystone.tests.unit.test_validation.RegionValidationTestCase.test_validate_region_create_request_with_parameters [0.000989s] ... ok
+{0} keystone.tests.unit.test_validation.RegionValidationTestCase.test_validate_region_create_succeeds_with_extra_parameters [0.001206s] ... ok
+{0} keystone.tests.unit.test_validation.RegionValidationTestCase.test_validate_region_create_succeeds_with_no_parameters [0.000985s] ... ok
+{0} keystone.tests.unit.test_validation.RegionValidationTestCase.test_validate_region_create_with_uuid [0.000831s] ... ok
+{0} keystone.tests.unit.test_validation.RegionValidationTestCase.test_validate_region_request [0.000865s] ... ok
+{0} keystone.tests.unit.test_validation.RegionValidationTestCase.test_validate_region_update_fails_with_no_parameters [0.000978s] ... ok
+{0} keystone.tests.unit.test_validation.RegionValidationTestCase.test_validate_region_update_succeeds [0.000949s] ... ok
+{0} keystone.tests.unit.test_validation.RegionValidationTestCase.test_validate_region_update_succeeds_with_extra_parameters [0.000868s] ... ok
+{0} keystone.tests.unit.test_validation.RoleValidationTestCase.test_validate_role_create_fails_with_invalid_name [0.001306s] ... ok
+{0} keystone.tests.unit.test_validation.RoleValidationTestCase.test_validate_role_create_request_with_name_too_long_fails [0.000993s] ... ok
+{0} keystone.tests.unit.test_validation.RoleValidationTestCase.test_validate_role_create_without_name_raises_exception [0.000969s] ... ok
+{0} keystone.tests.unit.test_validation.RoleValidationTestCase.test_validate_role_request [0.000897s] ... ok
+{0} keystone.tests.unit.test_validation.RoleValidationTestCase.test_validate_role_request_fails_with_invalid_description [0.000852s] ... ok
+{0} keystone.tests.unit.test_validation.RoleValidationTestCase.test_validate_role_request_with_valid_description [0.000898s] ... ok
+{0} keystone.tests.unit.test_validation.RoleValidationTestCase.test_validate_role_update_fails_with_invalid_name [0.001221s] ... ok
+{0} keystone.tests.unit.test_validation.RoleValidationTestCase.test_validate_role_update_request [0.000796s] ... ok
+{0} keystone.tests.unit.test_validation.RoleValidationTestCase.test_validate_role_update_request_with_name_too_long_fails [0.000913s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceProviderValidationTestCase.test_validate_sp_request [0.000835s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceProviderValidationTestCase.test_validate_sp_request_with_enabled [0.001373s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceProviderValidationTestCase.test_validate_sp_request_with_extra_field_fails [0.001021s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceProviderValidationTestCase.test_validate_sp_request_with_invalid_auth_url_fails [0.000960s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceProviderValidationTestCase.test_validate_sp_request_with_invalid_description_fails [0.000868s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceProviderValidationTestCase.test_validate_sp_request_with_invalid_enabled_fails [0.001162s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceProviderValidationTestCase.test_validate_sp_request_with_invalid_sp_url_fails [0.000877s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceProviderValidationTestCase.test_validate_sp_request_with_valid_description [0.000891s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceProviderValidationTestCase.test_validate_sp_request_without_auth_url_fails [0.001047s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceProviderValidationTestCase.test_validate_sp_request_without_sp_url_fails [0.001144s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceProviderValidationTestCase.test_validate_sp_update_request [0.000785s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceProviderValidationTestCase.test_validate_sp_update_request_with_invalid_auth_url_fails [0.001024s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceProviderValidationTestCase.test_validate_sp_update_request_with_invalid_sp_url_fails [0.000901s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceProviderValidationTestCase.test_validate_sp_update_request_with_no_parameters_fails [0.001196s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceValidationTestCase.test_validate_service_create_fails_when_name_too_long [0.000876s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceValidationTestCase.test_validate_service_create_fails_when_name_too_short [0.000920s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceValidationTestCase.test_validate_service_create_fails_when_type_too_long [0.000884s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceValidationTestCase.test_validate_service_create_fails_when_type_too_short [0.000963s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceValidationTestCase.test_validate_service_create_fails_with_invalid_enabled [0.001052s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceValidationTestCase.test_validate_service_create_fails_without_type [0.000993s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceValidationTestCase.test_validate_service_create_succeeds [0.000820s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceValidationTestCase.test_validate_service_create_succeeds_with_extra_parameters [0.000903s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceValidationTestCase.test_validate_service_create_succeeds_with_required_parameters [0.000789s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceValidationTestCase.test_validate_service_create_succeeds_with_valid_enabled [0.000860s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceValidationTestCase.test_validate_service_update_fails_with_invalid_enabled [0.000966s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceValidationTestCase.test_validate_service_update_fails_with_name_too_long [0.001575s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceValidationTestCase.test_validate_service_update_fails_with_name_too_short [0.000832s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceValidationTestCase.test_validate_service_update_fails_with_no_parameters [0.001106s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceValidationTestCase.test_validate_service_update_fails_with_type_too_long [0.000852s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceValidationTestCase.test_validate_service_update_fails_with_type_too_short [0.000943s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceValidationTestCase.test_validate_service_update_request_succeeds [0.000795s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceValidationTestCase.test_validate_service_update_succeeds_with_extra_parameters [0.000869s] ... ok
+{0} keystone.tests.unit.test_validation.ServiceValidationTestCase.test_validate_service_update_succeeds_with_valid_enabled [0.000796s] ... ok
+{0} keystone.tests.unit.test_validation.TrustValidationTestCase.test_validate_trust_succeeds [0.000590s] ... ok
+{0} keystone.tests.unit.test_validation.TrustValidationTestCase.test_validate_trust_with_all_parameters_succeeds [0.000724s] ... ok
+{0} keystone.tests.unit.test_validation.TrustValidationTestCase.test_validate_trust_with_extra_parameters_succeeds [0.000637s] ... ok
+{0} keystone.tests.unit.test_validation.TrustValidationTestCase.test_validate_trust_with_invalid_expires_at_fails [0.000675s] ... ok
+{0} keystone.tests.unit.test_validation.TrustValidationTestCase.test_validate_trust_with_invalid_impersonation_fails [0.000719s] ... ok
+{0} keystone.tests.unit.test_validation.TrustValidationTestCase.test_validate_trust_with_invalid_role_type_fails [0.001028s] ... ok
+{0} keystone.tests.unit.test_validation.TrustValidationTestCase.test_validate_trust_with_list_of_valid_roles_succeeds [0.000733s] ... ok
+{0} keystone.tests.unit.test_validation.TrustValidationTestCase.test_validate_trust_with_null_remaining_uses_succeeds [0.000597s] ... ok
+{0} keystone.tests.unit.test_validation.TrustValidationTestCase.test_validate_trust_with_period_in_user_id_string [0.000583s] ... ok
+{0} keystone.tests.unit.test_validation.TrustValidationTestCase.test_validate_trust_with_remaining_uses_succeeds [0.000654s] ... ok
+{0} keystone.tests.unit.test_validation.TrustValidationTestCase.test_validate_trust_with_role_types_succeeds [0.000667s] ... ok
+{0} keystone.tests.unit.test_validation.TrustValidationTestCase.test_validate_trust_without_impersonation_fails [0.001256s] ... ok
+{0} keystone.tests.unit.test_validation.TrustValidationTestCase.test_validate_trust_without_trustee_id_fails [0.001285s] ... ok
+{0} keystone.tests.unit.test_validation.TrustValidationTestCase.test_validate_trust_without_trustor_id_fails [0.001193s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_user_create_options_change_password_required_none [0.000938s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_user_create_options_change_password_required_wrong_type [0.000856s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_user_create_options_fails_invalid_option [0.001106s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_user_create_succeeds_with_empty_options [0.000816s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_user_create_with_mfa_rules [0.000929s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_user_create_with_mfa_rules_enabled [0.000815s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_user_create_with_options_change_password_required [0.001319s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_user_create_with_options_lockout_password [0.000812s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_user_create_with_two_options [0.000939s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_user_option_validation_with_invalid_mfa_rules_fails [0.001444s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_user_update_mfa_rules_enabled [0.001354s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_user_update_with_mfa_rules [0.001063s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_user_update_with_options_change_password_required [0.000821s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_user_update_with_options_lockout_password [0.000881s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_user_update_with_two_options [0.000770s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_validate_user_create_fails_with_invalid_enabled_formats [0.001140s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_validate_user_create_fails_with_invalid_name [0.001203s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_validate_user_create_fails_with_invalid_password_type [0.000869s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_validate_user_create_fails_without_name [0.001656s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_validate_user_create_request_succeeds [0.001003s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_validate_user_create_succeeds_with_extra_attributes [0.000991s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_validate_user_create_succeeds_with_null_description [0.000833s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_validate_user_create_succeeds_with_null_password [0.000864s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_validate_user_create_succeeds_with_password_of_zero_length [0.000787s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_validate_user_create_succeeds_with_valid_enabled_formats [0.000893s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_validate_user_create_with_all_valid_parameters_succeeds [0.000812s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_validate_user_update_fails_with_invalid_name [0.001218s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_validate_user_update_fails_with_no_parameters [0.001957s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_validate_user_update_succeeds [0.000838s] ... ok
+{0} keystone.tests.unit.test_validation.UserValidationTestCase.test_validate_user_update_succeeds_with_extra_parameters [0.000906s] ... ok
+
+======
+Totals
+======
+Ran: 1040 tests in 49.5683 sec.
+ - Passed: 1037
+ - Skipped: 3
+ - Expected Fail: 0
+ - Unexpected Success: 0
+ - Failed: 0
+Sum of execute time for each test: 49.3892 sec.
+
+==============
+Worker Balance
+==============
+ - Worker 0 (1040 tests) => 0:00:49.568320

@@ -1,0 +1,60 @@
+test_canonical_namespace_paths (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_canonical_namespace_paths) ... ok
+test_cert_mode_defaults_to_kv (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_cert_mode_defaults_to_kv) ... ok
+test_empty_component_is_rejected (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_empty_component_is_rejected) ... ok
+test_feature_disabled_keeps_legacy_certificate_copy (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_feature_disabled_keeps_legacy_certificate_copy) ... ok
+test_kv_v2_reference (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_kv_v2_reference) ... ok
+test_multi_host_certificate_references (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_multi_host_certificate_references) ... ok
+test_pki_profile_builds_one_logical_bundle (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_pki_profile_builds_one_logical_bundle) ... ok
+test_reference_delimiters_are_rejected (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_reference_delimiters_are_rejected) ... ok
+test_reference_is_exact_without_newline (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_reference_is_exact_without_newline) ... ok
+test_secman_uses_generic_kv_reference (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_secman_uses_generic_kv_reference) ... ok
+test_secret_file_reference_keeps_hashicorp_kv_compatibility (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_secret_file_reference_keeps_hashicorp_kv_compatibility) ... ok
+test_trust_ca_reference_kv_mode_uses_kv_document (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_trust_ca_reference_kv_mode_uses_kv_document) ... ok
+test_trust_ca_reference_pki_mode_rejects_missing_profile (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_trust_ca_reference_pki_mode_rejects_missing_profile) ... ok
+test_trust_ca_reference_pki_mode_uses_backend_chain (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_trust_ca_reference_pki_mode_uses_backend_chain) ... ok
+test_trust_ca_reference_rejects_unknown_mode (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_trust_ca_reference_rejects_unknown_mode) ... ok
+test_all_containerised_rabbit_clients_have_identity_and_mapping (kolla_ansible.tests.unit.test_vault_mtls_merge.VaultMTLSMergeTest.test_all_containerised_rabbit_clients_have_identity_and_mapping) ... ok
+test_all_mtls_feature_flags_have_defaults (kolla_ansible.tests.unit.test_vault_mtls_merge.VaultMTLSMergeTest.test_all_mtls_feature_flags_have_defaults) ... ok
+test_colleague_per_service_generation_is_not_merged (kolla_ansible.tests.unit.test_vault_mtls_merge.VaultMTLSMergeTest.test_colleague_per_service_generation_is_not_merged) ... ok
+test_database_mtls_identity_has_container_mapping (kolla_ansible.tests.unit.test_vault_mtls_merge.VaultMTLSMergeTest.test_database_mtls_identity_has_container_mapping) ... ok
+test_database_vault_identity_is_topology_aware (kolla_ansible.tests.unit.test_vault_mtls_merge.VaultMTLSMergeTest.test_database_vault_identity_is_topology_aware) ... ok
+test_haproxy_backend_client_identity_is_not_frontend_certificate (kolla_ansible.tests.unit.test_vault_mtls_merge.VaultMTLSMergeTest.test_haproxy_backend_client_identity_is_not_frontend_certificate) ... ok
+test_haproxy_mtls_uses_explicit_internal_ca (kolla_ansible.tests.unit.test_vault_mtls_merge.VaultMTLSMergeTest.test_haproxy_mtls_uses_explicit_internal_ca) ... ok
+test_internal_mtls_container_clients_have_client_identity (kolla_ansible.tests.unit.test_vault_mtls_merge.VaultMTLSMergeTest.test_internal_mtls_container_clients_have_client_identity) ... ok
+test_mtls_database_urls_verify_ca_and_identity (kolla_ansible.tests.unit.test_vault_mtls_merge.VaultMTLSMergeTest.test_mtls_database_urls_verify_ca_and_identity) ... FAIL
+test_mtls_prechecks_reject_insecure_or_inconsistent_flags (kolla_ansible.tests.unit.test_vault_mtls_merge.VaultMTLSMergeTest.test_mtls_prechecks_reject_insecure_or_inconsistent_flags) ... ok
+test_no_kv_approle_namespace_is_reintroduced (kolla_ansible.tests.unit.test_vault_mtls_merge.VaultMTLSMergeTest.test_no_kv_approle_namespace_is_reintroduced) ... ok
+test_nova_bootstrap_copies_vault_internal_ca (kolla_ansible.tests.unit.test_vault_mtls_merge.VaultMTLSMergeTest.test_nova_bootstrap_copies_vault_internal_ca) ... FAIL
+test_nova_bootstrap_is_vault_aware (kolla_ansible.tests.unit.test_vault_mtls_merge.VaultMTLSMergeTest.test_nova_bootstrap_is_vault_aware) ... ok
+test_proxysql_does_not_use_unsupported_tls_pseudo_variables (kolla_ansible.tests.unit.test_vault_mtls_merge.VaultMTLSMergeTest.test_proxysql_does_not_use_unsupported_tls_pseudo_variables) ... ok
+test_rabbitmq_mtls_requires_peer_certificate (kolla_ansible.tests.unit.test_vault_mtls_merge.VaultMTLSMergeTest.test_rabbitmq_mtls_requires_peer_certificate) ... ok
+test_rabbitmq_tls_only_mode_is_preserved (kolla_ansible.tests.unit.test_vault_mtls_merge.VaultMTLSMergeTest.test_rabbitmq_tls_only_mode_is_preserved) ... ok
+test_toolbox_client_paths_are_defined (kolla_ansible.tests.unit.test_vault_mtls_merge.VaultMTLSMergeTest.test_toolbox_client_paths_are_defined) ... ok
+test_vault_mtls_never_copies_plaintext_common_key_from_host (kolla_ansible.tests.unit.test_vault_mtls_merge.VaultMTLSMergeTest.test_vault_mtls_never_copies_plaintext_common_key_from_host) ... ok
+
+======================================================================
+FAIL: test_mtls_database_urls_verify_ca_and_identity (kolla_ansible.tests.unit.test_vault_mtls_merge.VaultMTLSMergeTest.test_mtls_database_urls_verify_ca_and_identity)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dmitry/Desktop/debug/kolla-ansible-pvs_1.0.0/kolla_ansible/tests/unit/test_vault_mtls_merge.py", line 133, in test_mtls_database_urls_verify_ca_and_identity
+    self.assertEqual([], offenders)
+AssertionError: Lists differ: [] != [('ansible/roles/cinder/templates/cinder.c[7445 chars]ue')]
+
+Second list contains 93 additional elements.
+First extra element 0:
+('ansible/roles/cinder/templates/cinder.conf.j2', 'ssl_ca={{ openstack_cacert }}')
+
+Diff is 7956 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_nova_bootstrap_copies_vault_internal_ca (kolla_ansible.tests.unit.test_vault_mtls_merge.VaultMTLSMergeTest.test_nova_bootstrap_copies_vault_internal_ca)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dmitry/Desktop/debug/kolla-ansible-pvs_1.0.0/kolla_ansible/tests/unit/test_vault_mtls_merge.py", line 76, in test_nova_bootstrap_copies_vault_internal_ca
+    self.assertIn(
+AssertionError: "vault_certificates_trust_kv_path ~ '/internal-ca') | vault_file_reference(vault_mount_point, 'ca', kolla_secret_backend)" not found in '---\n# Generate configuration for bootstrapping containers.\n\n- name: Ensuring config directories exist\n  become: true\n  file:\n    path: "{{ node_config_directory }}/nova-api-bootstrap"\n    state: "directory"\n    owner: "{{ config_owner_user }}"\n    group: "{{ config_owner_group }}"\n    mode: "0770"\n  run_once: true\n\n- name: Copying over config.json files for nova-api-bootstrap\n  become: true\n  template:\n    src: "nova-api-bootstrap.json.j2"\n    dest: "{{ node_config_directory }}/nova-api-bootstrap/config.json"\n    mode: "0660"\n  run_once: true\n\n- name: Copying over nova.conf for nova-api-bootstrap\n  become: true\n  vars:\n    service_name: "nova-api-bootstrap"\n  merge_configs:\n    sources:\n      - "{{ role_path }}/templates/nova.conf.j2"\n      - "{{ node_custom_config }}/global.conf"\n      - "{{ node_custom_config }}/nova.conf"\n      - "{{ node_custom_config }}/nova/nova-api.conf"\n      - "{{ node_custom_config }}/nova/{{ inventory_hostname }}/nova.conf"\n    dest: "{{ node_config_directory }}/nova-api-bootstrap/nova.conf"\n    mode: "0660"\n  run_once: true\n\n# nova-api-bootstrap has its own config directory, so it is not covered by\n# the normal service-cert-copy invocation for nova_services.  Mirror the CA\n# source here so kolla_set_configs can materialize it for DB mTLS.\n- name: Ensuring CA certificate directory exists for nova-api-bootstrap\n  become: true\n  file:\n    path: "{{ node_config_directory }}/nova-api-bootstrap/ca-certificates"\n    state: directory\n    owner: "{{ config_owner_user }}"\n    group: "{{ config_owner_group }}"\n    mode: "0755"\n  when: kolla_copy_ca_into_containers | bool\n  run_once: true\n\n- name: Copying CA certificates for nova-api-bootstrap\n  become: true\n  copy:\n    src: "{{ kolla_certificates_dir }}/ca/"\n    dest: "{{ node_config_directory }}/nova-api-bootstrap/ca-certificates/"\n    mode: "0644"\n  when:\n    - kolla_copy_ca_into_containers | bool\n    - not enable_vault_file_sources | bool\n  run_once: true\n\n- name: Creating Vault-backed internal CA pointer for nova-api-bootstrap\n  become: true\n  copy:\n    content: "{{ (vault_certificates_trust_kv_path ~ \'/internal-ca\') | trust_ca_reference(vault_mount_point, kolla_secret_backend, kolla_secret_cert_mode, kolla_secret_pki_trust_profile, \'ca\', kolla_secret_pki_trust_field) }}"\n    dest: "{{ node_config_directory }}/nova-api-bootstrap/ca-certificates/internal-ca.crt"\n    owner: "{{ config_owner_user }}"\n    group: "{{ config_owner_group }}"\n    mode: "0644"\n  when:\n    - kolla_copy_ca_into_containers | bool\n    - enable_vault_file_sources | bool\n  run_once: true\n\n# mTLS bootstrap containers need the same host client identity as normal\n# services.  Vault mode writes only pointer files; plaintext is resolved by\n# kolla_set_configs inside the bootstrap container.\n- name: Copying over common mTLS certificate for nova-api-bootstrap\n  become: true\n  copy:\n    src: "{{ kolla_tls_backend_cert }}"\n    dest: "{{ node_config_directory }}/nova-api-bootstrap/common-cert.pem"\n    mode: "0640"\n  when:\n    - kolla_enable_mtls_backend | bool\n    - not enable_vault_file_sources | bool\n  run_once: true\n\n- name: Creating Vault-backed common mTLS certificate pointer for nova-api-bootstrap\n  become: true\n  copy:\n    content: "{{ vault_backend_tls_path | secret_file_reference(vault_mount_point, \'cert\', kolla_secret_backend, kolla_secret_pki_backend_profile) }}"\n    dest: "{{ node_config_directory }}/nova-api-bootstrap/common-cert.pem"\n    owner: "{{ config_owner_user }}"\n    group: "{{ config_owner_group }}"\n    mode: "0640"\n  when:\n    - kolla_enable_mtls_backend | bool\n    - enable_vault_file_sources | bool\n  run_once: true\n\n- name: Copying over common mTLS key for nova-api-bootstrap\n  become: true\n  copy:\n    src: "{{ kolla_tls_backend_key }}"\n    dest: "{{ node_config_directory }}/nova-api-bootstrap/common-key.pem"\n    mode: "0600"\n  when:\n    - kolla_enable_mtls_backend | bool\n    - not enable_vault_file_sources | bool\n  run_once: true\n\n- name: Creating Vault-backed common mTLS key pointer for nova-api-bootstrap\n  become: true\n  copy:\n    content: "{{ vault_backend_tls_path | secret_file_reference(vault_mount_point, \'key\', kolla_secret_backend, kolla_secret_pki_backend_profile) }}"\n    dest: "{{ node_config_directory }}/nova-api-bootstrap/common-key.pem"\n    owner: "{{ config_owner_user }}"\n    group: "{{ config_owner_group }}"\n    mode: "0600"\n  when:\n    - kolla_enable_mtls_backend | bool\n    - enable_vault_file_sources | bool\n  run_once: true\n'
+
+----------------------------------------------------------------------
+Ran 33 tests in 0.121s
+
+FAILED (failures=2)

@@ -1,0 +1,4 @@
+localhost | FAILED! => {
+    "changed": false,
+    "msg": "missing required arguments: domain, name, password"
+}

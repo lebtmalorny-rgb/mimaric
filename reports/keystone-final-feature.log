@@ -1,0 +1,51 @@
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/keystone/tests/unit/test_backend_ldap.py:24: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  import pkg_resources  # type: ignore
+/Users/dmitry/Desktop/debug/password-policy-work/keystone/keystone/tests/unit/test_backend_ldap.py:24: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  import pkg_resources  # type: ignore
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionSchemaTests.test_boolean_and_null_classification_accepted [0.000611s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_audit_classification_contains_no_credentials [0.181497s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_audit_records_explicit_false_assignment [0.100959s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_callers_exemption_does_not_exempt_human_target [0.116752s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_disabled_service_still_cannot_change_password [0.138782s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_domain_admin_cannot_supply_classification [0.100291s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_domain_disabled_service_cannot_get_token [0.096734s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_explicit_operator_policy_override [0.149116s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_human_history_and_minimum_age_still_apply [0.107741s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_lock_password_still_applies [0.094906s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_malformed_flag_rejected_on_create_and_update [0.216082s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_malformed_json_does_not_modify_classification [0.095259s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_native_first_use_and_lockout_remain_separate [0.162605s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_null_removes_classification_and_restores_policy [0.118234s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_old_password_still_required [0.151024s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_omitted_false_and_null_remain_human [0.211674s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_password_writes_lock_only_user_row [0.110684s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_project_admin_cannot_supply_classification [0.165542s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_same_request_opt_in_and_opt_out [0.145647s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_service_admin_reset_uses_target_options [0.105467s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_service_create_short_password_is_persisted [0.152054s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_service_password_changes_revoke_tokens [0.159308s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_service_reuses_password_and_ignores_minimum_age [0.109311s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_service_self_change_with_loaded_regex [0.098259s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_stale_cached_false_does_not_reject_service_reset [0.161675s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_stale_cached_false_does_not_reject_service_self_change [0.098359s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_stale_cached_true_cannot_bypass_reset [0.100309s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_stale_cached_true_cannot_bypass_self_change [0.161854s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_strict_schema_limit_survives_regex_exemption [0.089755s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_technical_max_length_and_json_types_still_apply [0.166962s] ... ok
+{0} keystone.tests.unit.test_password_policy_exemption.PasswordPolicyExemptionTests.test_unrelated_options_rename_domain_and_cache [0.155029s] ... ok
+
+======
+Totals
+======
+Ran: 31 tests in 4.0333 sec.
+ - Passed: 31
+ - Skipped: 0
+ - Expected Fail: 0
+ - Unexpected Success: 0
+ - Failed: 0
+Sum of execute time for each test: 4.0225 sec.
+
+==============
+Worker Balance
+==============
+ - Worker 0 (31 tests) => 0:00:04.033282

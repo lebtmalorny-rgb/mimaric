@@ -1,0 +1,52 @@
+E
+======================================================================
+ERROR: test_user_can_create_users_within_domain (keystone.tests.protection.v3.test_users.DomainAdminTests.test_user_can_create_users_within_domain)
+keystone.tests.protection.v3.test_users.DomainAdminTests.test_user_can_create_users_within_domain
+----------------------------------------------------------------------
+testtools.testresult.real._StringException: pythonlogging:'': {{{
+2026-09-17 15:12:43,822 INFO [keystone.common.fernet_utils] Created a new temporary key: /var/folders/42/58j27lc523g1bm85nfycfc480000gn/T/tmp6rdhu7tu/tmpm8bq3ecp/0.tmp
+2026-09-17 15:12:43,823 INFO [keystone.common.fernet_utils] Become a valid new key: /var/folders/42/58j27lc523g1bm85nfycfc480000gn/T/tmp6rdhu7tu/tmpm8bq3ecp/0
+2026-09-17 15:12:43,823 INFO [keystone.common.fernet_utils] Starting key rotation with 1 key files: ['/var/folders/42/58j27lc523g1bm85nfycfc480000gn/T/tmp6rdhu7tu/tmpm8bq3ecp/0']
+2026-09-17 15:12:43,823 INFO [keystone.common.fernet_utils] Created a new temporary key: /var/folders/42/58j27lc523g1bm85nfycfc480000gn/T/tmp6rdhu7tu/tmpm8bq3ecp/0.tmp
+2026-09-17 15:12:43,823 INFO [keystone.common.fernet_utils] Current primary key is: 0
+2026-09-17 15:12:43,823 INFO [keystone.common.fernet_utils] Next primary key will be: 1
+2026-09-17 15:12:43,823 INFO [keystone.common.fernet_utils] Promoted key 0 to be the primary: 1
+2026-09-17 15:12:43,823 INFO [keystone.common.fernet_utils] Become a valid new key: /var/folders/42/58j27lc523g1bm85nfycfc480000gn/T/tmp6rdhu7tu/tmpm8bq3ecp/0
+2026-09-17 15:12:43,823 INFO [keystone.common.fernet_utils] Created a new temporary key: /var/folders/42/58j27lc523g1bm85nfycfc480000gn/T/tmp6rdhu7tu/tmphhz0b02f/0.tmp
+2026-09-17 15:12:43,824 INFO [keystone.common.fernet_utils] Become a valid new key: /var/folders/42/58j27lc523g1bm85nfycfc480000gn/T/tmp6rdhu7tu/tmphhz0b02f/0
+2026-09-17 15:12:43,824 INFO [keystone.common.fernet_utils] Starting key rotation with 1 key files: ['/var/folders/42/58j27lc523g1bm85nfycfc480000gn/T/tmp6rdhu7tu/tmphhz0b02f/0']
+2026-09-17 15:12:43,824 INFO [keystone.common.fernet_utils] Created a new temporary key: /var/folders/42/58j27lc523g1bm85nfycfc480000gn/T/tmp6rdhu7tu/tmphhz0b02f/0.tmp
+2026-09-17 15:12:43,824 INFO [keystone.common.fernet_utils] Current primary key is: 0
+2026-09-17 15:12:43,824 INFO [keystone.common.fernet_utils] Next primary key will be: 1
+2026-09-17 15:12:43,824 INFO [keystone.common.fernet_utils] Promoted key 0 to be the primary: 1
+2026-09-17 15:12:43,824 INFO [keystone.common.fernet_utils] Become a valid new key: /var/folders/42/58j27lc523g1bm85nfycfc480000gn/T/tmp6rdhu7tu/tmphhz0b02f/0
+2026-09-17 15:12:43,860 INFO [keystone.cmd.bootstrap] Created domain default
+2026-09-17 15:12:43,865 INFO [keystone.cmd.bootstrap] Created project admin
+2026-09-17 15:12:43,868 WARNING [keystone.common.password_hashing] Truncating password to algorithm specific maximum length 72 characters.
+2026-09-17 15:12:44,041 INFO [keystone.cmd.bootstrap] Created user admin
+2026-09-17 15:12:44,042 INFO [keystone.cmd.bootstrap] Created role reader
+2026-09-17 15:12:44,043 INFO [keystone.cmd.bootstrap] Created role member
+2026-09-17 15:12:44,045 INFO [keystone.cmd.bootstrap] Created implied role where f682d7e52e514a4f8659fddbb30f5a26 implies 23473a3f69e94108b11a4f849753c349
+2026-09-17 15:12:44,045 INFO [keystone.cmd.bootstrap] Created role manager
+2026-09-17 15:12:44,046 INFO [keystone.cmd.bootstrap] Created implied role where 80bc4bdf413244328533a55eb3bf2ad7 implies f682d7e52e514a4f8659fddbb30f5a26
+2026-09-17 15:12:44,047 INFO [keystone.cmd.bootstrap] Created role admin
+2026-09-17 15:12:44,048 INFO [keystone.cmd.bootstrap] Created implied role where caff80c1b8ea49a9b8358d6ed800186a implies 80bc4bdf413244328533a55eb3bf2ad7
+2026-09-17 15:12:44,049 INFO [keystone.cmd.bootstrap] Created role service
+2026-09-17 15:12:44,050 INFO [keystone.cmd.bootstrap] Granted role admin on project admin to user admin.
+2026-09-17 15:12:44,050 INFO [keystone.cmd.bootstrap] Granted role admin on the system to user admin.
+2026-09-17 15:12:44,052 INFO [keystone.cmd.bootstrap] Created public endpoint http://localhost/identity/
+}}}
+
+Traceback (most recent call last):
+  File "/private/tmp/keystone-password-policy-baseline/keystone/tests/protection/v3/test_users.py", line 731, in setUp
+    self._override_policy()
+  File "/private/tmp/keystone-password-policy-baseline/keystone/tests/protection/v3/test_users.py", line 772, in _override_policy
+    'identity:create_user': up.SYSTEM_ADMIN_OR_DOMAIN_ADMIN,
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'keystone.common.policies.user' has no attribute 'SYSTEM_ADMIN_OR_DOMAIN_ADMIN'
+
+
+----------------------------------------------------------------------
+Ran 1 test in 0.361s
+
+FAILED (errors=1)

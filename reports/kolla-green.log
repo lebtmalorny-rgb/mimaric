@@ -1,0 +1,27 @@
+test_always_rotates_and_sets_options_together (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_always_rotates_and_sets_options_together) ... /Users/dmitry/Desktop/debug/password-policy-work/kolla-ansible/.venv/lib/python3.11/site-packages/openstack/proxy.py:234: RemovedInSDK60Warning: The 'service_type' parameter is unnecesary and will be removed in a future release.
+  warnings.warn(
+ok
+test_always_rotates_even_when_options_are_current (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_always_rotates_even_when_options_are_current) ... ok
+test_api_refusal_is_not_silently_retried_as_unexempt_user (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_api_refusal_is_not_silently_retried_as_unexempt_user) ... ok
+test_check_mode_existing_user_does_not_write (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_check_mode_existing_user_does_not_write) ... ok
+test_check_mode_new_user_does_not_write (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_check_mode_new_user_does_not_write) ... ok
+test_create_exemption_and_password_in_same_request (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_create_exemption_and_password_in_same_request) ... ok
+test_domain_service_update_preserves_existing_default_project (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_domain_service_update_preserves_existing_default_project) ... ok
+test_domain_service_user_can_be_created_without_project (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_domain_service_user_can_be_created_without_project) ... ok
+test_duplicate_user_response_fails_before_write (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_duplicate_user_response_fails_before_write) ... ok
+test_existing_user_preserves_mfa_without_password_reset (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_existing_user_preserves_mfa_without_password_reset) ... ok
+test_on_create_rerun_has_no_writes (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_on_create_rerun_has_no_writes) ... ok
+test_project_in_wrong_domain_fails_before_write (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_project_in_wrong_domain_fails_before_write) ... ok
+test_same_name_in_different_domain_never_updates_other_user (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_same_name_in_different_domain_never_updates_other_user) ... ok
+test_user_lookup_is_by_name_and_domain (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_user_lookup_is_by_name_and_domain) ... ok
+test_existing_toolbox_call_is_unchanged (kolla_ansible.tests.unit.test_service_password_policy.ToolboxPolicyTest.test_existing_toolbox_call_is_unchanged) ... ok
+test_magnum_trustee_uses_exempt_registration (kolla_ansible.tests.unit.test_service_password_policy.ToolboxPolicyTest.test_magnum_trustee_uses_exempt_registration) ... ok
+test_module_path_is_accepted_by_ansible_argument_spec (kolla_ansible.tests.unit.test_service_password_policy.ToolboxPolicyTest.test_module_path_is_accepted_by_ansible_argument_spec) ... ok
+test_optional_module_path_passed_as_one_argv_argument (kolla_ansible.tests.unit.test_service_password_policy.ToolboxPolicyTest.test_optional_module_path_passed_as_one_argv_argument) ... ok
+test_registration_keeps_credentials_tls_and_no_log (kolla_ansible.tests.unit.test_service_password_policy.ToolboxPolicyTest.test_registration_keeps_credentials_tls_and_no_log) ... ok
+test_role_defaults_to_stock_registration (kolla_ansible.tests.unit.test_service_password_policy.ToolboxPolicyTest.test_role_defaults_to_stock_registration) ... ok
+
+----------------------------------------------------------------------
+Ran 20 tests in 0.050s
+
+OK

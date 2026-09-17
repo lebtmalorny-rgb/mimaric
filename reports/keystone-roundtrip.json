@@ -1,0 +1,12 @@
+{
+  "component": "keystone",
+  "base": "537e65b2b1d4b8e0fe1faa09c8f882a6b2899b21",
+  "head": "323e6fadc43b342afb9315c0efef837c8dd10320",
+  "compared_files": 1478,
+  "mismatches": [],
+  "apply_check": "PASS",
+  "roundtrip": "PASS",
+  "sdist_changed_files_verified": 10,
+  "sdist_matches_final_source": true,
+  "sdist_version": "27.1.1.dev1+passwordpolicy.1"
+}

@@ -1,0 +1,10 @@
+{
+  "user": {
+    "options": {
+      "password_policy_exempt": true,
+      "ignore_change_password_upon_first_use": true,
+      "ignore_lockout_failure_attempts": true,
+      "ignore_password_expiry": true
+    }
+  }
+}

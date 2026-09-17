@@ -1,0 +1,4 @@
+---
+# Replace both UUID placeholders with the reviewed deployment identity and
+# administrative project. Merge into your existing policy; do not overwrite it.
+"identity:manage_password_policy_exemption": "(role:admin and system_scope:all) or (role:admin and user_id:DEPLOYMENT_USER_UUID and project_id:ADMIN_PROJECT_UUID)"

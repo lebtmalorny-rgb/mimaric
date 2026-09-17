@@ -1,0 +1,11 @@
+{
+  "component": "kolla",
+  "pristine_source": "kolla-ansible-pvs_1.0.0_14.09.zip",
+  "zip_sha256": "bbb7bfb1398cbe07a12e374cae56f03e9e5c192798cf3ff7842aa75d8c2d7e44",
+  "patched_commit": "0f9aac2d479087808283ddb7fa382b6a8a1db00c",
+  "compared_files": 1917,
+  "mismatches": [],
+  "archive_symlinks_preserved": true,
+  "apply_check": "PASS",
+  "roundtrip": "PASS"
+}

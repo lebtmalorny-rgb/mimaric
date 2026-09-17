@@ -1,0 +1,162 @@
+test_always_rotates_and_sets_options_together (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_always_rotates_and_sets_options_together) ... FAIL
+test_always_rotates_even_when_options_are_current (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_always_rotates_even_when_options_are_current) ... FAIL
+test_api_refusal_is_not_silently_retried_as_unexempt_user (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_api_refusal_is_not_silently_retried_as_unexempt_user) ... FAIL
+test_check_mode_existing_user_does_not_write (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_check_mode_existing_user_does_not_write) ... FAIL
+test_check_mode_new_user_does_not_write (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_check_mode_new_user_does_not_write) ... FAIL
+test_create_exemption_and_password_in_same_request (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_create_exemption_and_password_in_same_request) ... FAIL
+test_duplicate_user_response_fails_before_write (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_duplicate_user_response_fails_before_write) ... FAIL
+test_existing_user_preserves_mfa_without_password_reset (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_existing_user_preserves_mfa_without_password_reset) ... FAIL
+test_on_create_rerun_has_no_writes (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_on_create_rerun_has_no_writes) ... FAIL
+test_project_in_wrong_domain_fails_before_write (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_project_in_wrong_domain_fails_before_write) ... FAIL
+test_same_name_in_different_domain_never_updates_other_user (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_same_name_in_different_domain_never_updates_other_user) ... FAIL
+test_user_lookup_is_by_name_and_domain (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_user_lookup_is_by_name_and_domain) ... FAIL
+test_existing_toolbox_call_is_unchanged (kolla_ansible.tests.unit.test_service_password_policy.ToolboxPolicyTest.test_existing_toolbox_call_is_unchanged) ... ok
+test_module_path_is_accepted_by_ansible_argument_spec (kolla_ansible.tests.unit.test_service_password_policy.ToolboxPolicyTest.test_module_path_is_accepted_by_ansible_argument_spec) ... FAIL
+test_optional_module_path_passed_as_one_argv_argument (kolla_ansible.tests.unit.test_service_password_policy.ToolboxPolicyTest.test_optional_module_path_passed_as_one_argv_argument) ... FAIL
+test_registration_keeps_credentials_tls_and_no_log (kolla_ansible.tests.unit.test_service_password_policy.ToolboxPolicyTest.test_registration_keeps_credentials_tls_and_no_log) ... FAIL
+test_role_defaults_to_stock_registration (kolla_ansible.tests.unit.test_service_password_policy.ToolboxPolicyTest.test_role_defaults_to_stock_registration) ... FAIL
+
+======================================================================
+FAIL: test_always_rotates_and_sets_options_together (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_always_rotates_and_sets_options_together)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dmitry/Desktop/debug/password-policy-work/kolla-ansible/kolla_ansible/tests/unit/test_service_password_policy.py", line 37, in setUp
+    self.assertTrue(MODULE.is_file(), 'Service registration module missing')
+AssertionError: False is not true : Service registration module missing
+
+======================================================================
+FAIL: test_always_rotates_even_when_options_are_current (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_always_rotates_even_when_options_are_current)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dmitry/Desktop/debug/password-policy-work/kolla-ansible/kolla_ansible/tests/unit/test_service_password_policy.py", line 37, in setUp
+    self.assertTrue(MODULE.is_file(), 'Service registration module missing')
+AssertionError: False is not true : Service registration module missing
+
+======================================================================
+FAIL: test_api_refusal_is_not_silently_retried_as_unexempt_user (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_api_refusal_is_not_silently_retried_as_unexempt_user)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dmitry/Desktop/debug/password-policy-work/kolla-ansible/kolla_ansible/tests/unit/test_service_password_policy.py", line 37, in setUp
+    self.assertTrue(MODULE.is_file(), 'Service registration module missing')
+AssertionError: False is not true : Service registration module missing
+
+======================================================================
+FAIL: test_check_mode_existing_user_does_not_write (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_check_mode_existing_user_does_not_write)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dmitry/Desktop/debug/password-policy-work/kolla-ansible/kolla_ansible/tests/unit/test_service_password_policy.py", line 37, in setUp
+    self.assertTrue(MODULE.is_file(), 'Service registration module missing')
+AssertionError: False is not true : Service registration module missing
+
+======================================================================
+FAIL: test_check_mode_new_user_does_not_write (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_check_mode_new_user_does_not_write)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dmitry/Desktop/debug/password-policy-work/kolla-ansible/kolla_ansible/tests/unit/test_service_password_policy.py", line 37, in setUp
+    self.assertTrue(MODULE.is_file(), 'Service registration module missing')
+AssertionError: False is not true : Service registration module missing
+
+======================================================================
+FAIL: test_create_exemption_and_password_in_same_request (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_create_exemption_and_password_in_same_request)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dmitry/Desktop/debug/password-policy-work/kolla-ansible/kolla_ansible/tests/unit/test_service_password_policy.py", line 37, in setUp
+    self.assertTrue(MODULE.is_file(), 'Service registration module missing')
+AssertionError: False is not true : Service registration module missing
+
+======================================================================
+FAIL: test_duplicate_user_response_fails_before_write (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_duplicate_user_response_fails_before_write)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dmitry/Desktop/debug/password-policy-work/kolla-ansible/kolla_ansible/tests/unit/test_service_password_policy.py", line 37, in setUp
+    self.assertTrue(MODULE.is_file(), 'Service registration module missing')
+AssertionError: False is not true : Service registration module missing
+
+======================================================================
+FAIL: test_existing_user_preserves_mfa_without_password_reset (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_existing_user_preserves_mfa_without_password_reset)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dmitry/Desktop/debug/password-policy-work/kolla-ansible/kolla_ansible/tests/unit/test_service_password_policy.py", line 37, in setUp
+    self.assertTrue(MODULE.is_file(), 'Service registration module missing')
+AssertionError: False is not true : Service registration module missing
+
+======================================================================
+FAIL: test_on_create_rerun_has_no_writes (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_on_create_rerun_has_no_writes)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dmitry/Desktop/debug/password-policy-work/kolla-ansible/kolla_ansible/tests/unit/test_service_password_policy.py", line 37, in setUp
+    self.assertTrue(MODULE.is_file(), 'Service registration module missing')
+AssertionError: False is not true : Service registration module missing
+
+======================================================================
+FAIL: test_project_in_wrong_domain_fails_before_write (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_project_in_wrong_domain_fails_before_write)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dmitry/Desktop/debug/password-policy-work/kolla-ansible/kolla_ansible/tests/unit/test_service_password_policy.py", line 37, in setUp
+    self.assertTrue(MODULE.is_file(), 'Service registration module missing')
+AssertionError: False is not true : Service registration module missing
+
+======================================================================
+FAIL: test_same_name_in_different_domain_never_updates_other_user (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_same_name_in_different_domain_never_updates_other_user)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dmitry/Desktop/debug/password-policy-work/kolla-ansible/kolla_ansible/tests/unit/test_service_password_policy.py", line 37, in setUp
+    self.assertTrue(MODULE.is_file(), 'Service registration module missing')
+AssertionError: False is not true : Service registration module missing
+
+======================================================================
+FAIL: test_user_lookup_is_by_name_and_domain (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_user_lookup_is_by_name_and_domain)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dmitry/Desktop/debug/password-policy-work/kolla-ansible/kolla_ansible/tests/unit/test_service_password_policy.py", line 37, in setUp
+    self.assertTrue(MODULE.is_file(), 'Service registration module missing')
+AssertionError: False is not true : Service registration module missing
+
+======================================================================
+FAIL: test_module_path_is_accepted_by_ansible_argument_spec (kolla_ansible.tests.unit.test_service_password_policy.ToolboxPolicyTest.test_module_path_is_accepted_by_ansible_argument_spec)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dmitry/Desktop/debug/password-policy-work/kolla-ansible/kolla_ansible/tests/unit/test_service_password_policy.py", line 196, in test_module_path_is_accepted_by_ansible_argument_spec
+    self.assertEqual(dict(type='str'),
+AssertionError: {'type': 'str'} != None
+
+======================================================================
+FAIL: test_optional_module_path_passed_as_one_argv_argument (kolla_ansible.tests.unit.test_service_password_policy.ToolboxPolicyTest.test_optional_module_path_passed_as_one_argv_argument)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dmitry/Desktop/debug/password-policy-work/kolla-ansible/kolla_ansible/tests/unit/test_service_password_policy.py", line 178, in test_optional_module_path_passed_as_one_argv_argument
+    self.assertEqual(
+AssertionError: Lists differ: ['ans[40 chars]_user', '--module-path', '/var/lib/kolla/config_files/library'] != ['ans[40 chars]_user']
+
+First list contains 2 additional elements.
+First extra element 4:
+'--module-path'
+
++ ['ansible', 'localhost', '-m', 'kolla_service_user']
+- ['ansible',
+-  'localhost',
+-  '-m',
+-  'kolla_service_user',
+-  '--module-path',
+-  '/var/lib/kolla/config_files/library']
+
+======================================================================
+FAIL: test_registration_keeps_credentials_tls_and_no_log (kolla_ansible.tests.unit.test_service_password_policy.ToolboxPolicyTest.test_registration_keeps_credentials_tls_and_no_log)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dmitry/Desktop/debug/password-policy-work/kolla-ansible/kolla_ansible/tests/unit/test_service_password_policy.py", line 209, in test_registration_keeps_credentials_tls_and_no_log
+    self.assertIs(True, task.get('no_log'))
+AssertionError: True is not None
+
+======================================================================
+FAIL: test_role_defaults_to_stock_registration (kolla_ansible.tests.unit.test_service_password_policy.ToolboxPolicyTest.test_role_defaults_to_stock_registration)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dmitry/Desktop/debug/password-policy-work/kolla-ansible/kolla_ansible/tests/unit/test_service_password_policy.py", line 202, in test_role_defaults_to_stock_registration
+    self.assertIs(False, defaults.get(
+AssertionError: False is not None
+
+----------------------------------------------------------------------
+Ran 17 tests in 0.011s
+
+FAILED (failures=16)

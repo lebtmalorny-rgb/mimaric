@@ -1,0 +1,716 @@
+ ansible/group_vars/all.yml                         |   4 +
+ ansible/library/kolla_toolbox.py                   |   8 +
+ ansible/roles/magnum/defaults/main.yml             |  12 +
+ ansible/roles/magnum/tasks/register.yml            |  10 +-
+ .../roles/service-ks-register/defaults/main.yml    |   5 +-
+ .../files/kolla_service_user.py                    | 148 +++++++++++
+ ansible/roles/service-ks-register/tasks/main.yml   |   9 +-
+ .../service-ks-register/tasks/password-policy.yml  |  12 +
+ .../tests/unit/test_service_password_policy.py     | 282 +++++++++++++++++++++
+ 9 files changed, 487 insertions(+), 3 deletions(-)
+diff --git a/ansible/group_vars/all.yml b/ansible/group_vars/all.yml
+index 387c113..e857e90 100644
+--- a/ansible/group_vars/all.yml
++++ b/ansible/group_vars/all.yml
+@@ -1236,16 +1236,20 @@ keystone_public_url: "{{ keystone_external_fqdn | kolla_url(public_protocol, key
+ 
+ keystone_admin_user: "admin"
+ keystone_admin_project: "admin"
+ 
+ # Whether or not to apply changes to service user passwords when services are
+ # reconfigured
+ update_keystone_service_user_passwords: true
+ 
++# Requires the Keystone password_policy_exempt patch and a dedicated operator
++# policy. Applies to service identities only, never to personal admin users.
++keystone_service_password_policy_exempt: false
++
+ default_project_domain_name: "Default"
+ default_project_domain_id: "default"
+ 
+ default_user_domain_name: "Default"
+ default_user_domain_id: "default"
+ 
+ # Keystone fernet token expiry in seconds. Default is 1 day.
+ fernet_token_expiry: 86400
+diff --git a/ansible/library/kolla_toolbox.py b/ansible/library/kolla_toolbox.py
+index 5f42819..26ba396 100644
+--- a/ansible/library/kolla_toolbox.py
++++ b/ansible/library/kolla_toolbox.py
+@@ -36,16 +36,21 @@ options:
+     required: True
+     type: str
+     choices: ['docker', 'podman']
+   module_name:
+     description:
+       - The module name to invoke
+     required: True
+     type: str
++  module_path:
++    description:
++      - Optional Ansible module directory inside the toolbox container.
++    required: False
++    type: str
+   module_args:
+     description:
+       - The module args use by the module
+     required: False
+     type: dict
+   module_extra_vars:
+     description:
+       - The extra variables used by the module
+@@ -235,16 +240,18 @@ class KollaToolboxWorker():
+         args_formatted = self._format_module_args(
+             self.module.params.get('module_args'))
+ 
+         extra_vars = self.module.params.get('module_extra_vars')
+         extra_vars_formatted = self._format_module_args(extra_vars) if extra_vars else []
+ 
+         command = ['ansible', 'localhost']
+         command.extend(['-m', self.module.params.get('module_name')])
++        if self.module.params.get('module_path'):
++            command.extend(['--module-path', self.module.params['module_path']])
+         if args_formatted:
+             command.extend(['-a', ' '.join(args_formatted)])
+         if extra_vars_formatted:
+             command.extend(['-e', ' '.join(extra_vars_formatted)])
+         if self.module.check_mode:
+             command.append('--check')
+ 
+         return command
+@@ -357,16 +364,17 @@ def create_container_client(module: AnsibleModule):
+ 
+ 
+ def create_ansible_module() -> AnsibleModule:
+     argument_spec = dict(
+         container_engine=dict(type='str',
+                               choices=['podman', 'docker'],
+                               required=True),
+         module_name=dict(type='str', required=True),
++        module_path=dict(type='str'),
+         module_args=dict(type='dict', default=dict()),
+         module_extra_vars=dict(type='dict', default=dict()),
+         api_version=dict(type='str', default='auto'),
+         timeout=dict(type='int', default=180),
+         user=dict(type='str'),
+     )
+ 
+     return AnsibleModule(argument_spec=argument_spec,
+diff --git a/ansible/roles/magnum/defaults/main.yml b/ansible/roles/magnum/defaults/main.yml
+index 028aff4..ab53252 100644
+--- a/ansible/roles/magnum/defaults/main.yml
++++ b/ansible/roles/magnum/defaults/main.yml
+@@ -147,16 +147,28 @@ magnum_public_endpoint: "{{ magnum_public_base_endpoint }}/v1"
+ 
+ magnum_logging_debug: "{{ openstack_logging_debug }}"
+ 
+ magnum_keystone_user: "magnum"
+ magnum_trustee_domain_admin: "magnum_trustee_domain_admin"
+ magnum_trustee_domain: "magnum"
+ 
+ openstack_magnum_auth: "{{ openstack_auth }}"
++magnum_ks_register_mtls: >-
++  {{
++    (
++      openstack_interface in ['internal', 'admin']
++      and kolla_enable_mtls_internal | bool
++    )
++    or
++    (
++      openstack_interface == 'public'
++      and kolla_enable_mtls_external | bool
++    )
++  }}
+ 
+ magnum_api_workers: "{{ openstack_service_workers }}"
+ magnum_conductor_workers: "{{ openstack_service_workers }}"
+ 
+ ####################
+ # Kolla
+ ####################
+ magnum_git_repository: "{{ kolla_dev_repos_git }}/{{ project_name }}"
+diff --git a/ansible/roles/magnum/tasks/register.yml b/ansible/roles/magnum/tasks/register.yml
+index 8d1d4aa..acfd886 100644
+--- a/ansible/roles/magnum/tasks/register.yml
++++ b/ansible/roles/magnum/tasks/register.yml
+@@ -12,43 +12,51 @@
+     container_engine: "{{ kolla_container_engine }}"
+     module_name: "openstack.cloud.identity_domain"
+     module_args:
+       name: "{{ magnum_trustee_domain }}"
+       description: "Owns users and projects created by magnum"
+       auth: "{{ openstack_magnum_auth }}"
+       endpoint_type: "{{ openstack_interface }}"
+       cacert: "{{ openstack_cacert }}"
++      client_cert: "{{ kolla_toolbox_client_cert if magnum_ks_register_mtls | bool else omit }}"
++      client_key: "{{ kolla_toolbox_client_key if magnum_ks_register_mtls | bool else omit }}"
+       region_name: "{{ openstack_region_name }}"
+   register: trustee_domain
+   run_once: True
+ 
+ - name: Creating Magnum trustee user
+   become: true
++  no_log: true
+   kolla_toolbox:
+     container_engine: "{{ kolla_container_engine }}"
+-    module_name: "openstack.cloud.identity_user"
++    module_name: "{{ 'kolla_service_user' if keystone_service_password_policy_exempt | bool else 'openstack.cloud.identity_user' }}"
++    module_path: "{{ container_config_directory ~ '/ansible/library' if keystone_service_password_policy_exempt | bool else omit }}"
+     module_args:
+       name: "{{ magnum_trustee_domain_admin }}"
+       domain: "{{ magnum_trustee_domain }}"
+       password: "{{ magnum_keystone_password }}"
+       update_password: "{{ 'always' if update_keystone_service_user_passwords | bool else 'on_create' }}"
+       auth: "{{ openstack_magnum_auth }}"
+       endpoint_type: "{{ openstack_interface }}"
+       cacert: "{{ openstack_cacert }}"
++      client_cert: "{{ kolla_toolbox_client_cert if magnum_ks_register_mtls | bool else omit }}"
++      client_key: "{{ kolla_toolbox_client_key if magnum_ks_register_mtls | bool else omit }}"
+       region_name: "{{ openstack_region_name }}"
+   run_once: True
+ 
+ - name: Creating Magnum trustee user role
+   become: true
+   kolla_toolbox:
+     container_engine: "{{ kolla_container_engine }}"
+     module_name: "openstack.cloud.role_assignment"
+     module_args:
+       domain: "{{ trustee_domain.domain.id }}"
+       user: "{{ magnum_trustee_domain_admin }}"
+       role: "admin"
+       auth: "{{ openstack_magnum_auth }}"
+       endpoint_type: "{{ openstack_interface }}"
+       cacert: "{{ openstack_cacert }}"
++      client_cert: "{{ kolla_toolbox_client_cert if magnum_ks_register_mtls | bool else omit }}"
++      client_key: "{{ kolla_toolbox_client_key if magnum_ks_register_mtls | bool else omit }}"
+       region_name: "{{ openstack_region_name }}"
+   run_once: True
+   when: not ansible_check_mode
+diff --git a/ansible/roles/service-ks-register/defaults/main.yml b/ansible/roles/service-ks-register/defaults/main.yml
+index 219452f..c45218c 100644
+--- a/ansible/roles/service-ks-register/defaults/main.yml
++++ b/ansible/roles/service-ks-register/defaults/main.yml
+@@ -1,15 +1,18 @@
+ ---
+ service_ks_register_region_name: "{{ openstack_region_name }}"
+ service_ks_register_auth: {}
+ service_ks_cacert: "{{ openstack_cacert }}"
+ service_ks_register_interface: "{{ openstack_interface }}"
+ service_ks_register_endpoint_region: "{{ openstack_region_name }}"
+ service_ks_register_domain: "default"
++# Enable only after installing the Keystone password_policy_exempt patch and
++# granting the deployment identity identity:manage_password_policy_exemption.
++keystone_service_password_policy_exempt: false
+ # A list of services to register with Keystone. Each service definition should
+ # provide the following fields:
+ # 'name'
+ # 'description'
+ # 'type'
+ # 'endpoints'
+ # The 'endpoints' field should be a list, with each item having the following
+ # fields:
+@@ -44,9 +47,9 @@ service_ks_register_mtls: >-
+       service_ks_register_interface in ['internal', 'admin']
+       and kolla_enable_mtls_internal | bool
+     )
+     or
+     (
+       service_ks_register_interface == 'public'
+       and kolla_enable_mtls_external | bool
+     )
+-  }}
+\ No newline at end of file
++  }}
+diff --git a/ansible/roles/service-ks-register/files/kolla_service_user.py b/ansible/roles/service-ks-register/files/kolla_service_user.py
+new file mode 100644
+index 0000000..ace6fe0
+--- /dev/null
++++ b/ansible/roles/service-ks-register/files/kolla_service_user.py
+@@ -0,0 +1,148 @@
++#!/usr/bin/python
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++
++DOCUMENTATION = r'''
++---
++module: kolla_service_user
++short_description: Register a service user with password policy exclusions
++description:
++  - Requires Keystone with the password_policy_exempt resource option patch.
++  - Sends the password and exclusions in one request on creation or rotation.
++  - Preserves unrelated user options, including multi-factor authentication.
++author: Kolla operators
++extends_documentation_fragment:
++  - openstack.cloud.openstack
++options:
++  name:
++    description: Exact user name in the selected domain.
++    type: str
++    required: true
++  domain:
++    description: Name or ID of the identity domain.
++    type: str
++    required: true
++  default_project:
++    description: Name or ID of the service project in the same domain.
++    type: str
++    required: false
++  password:
++    description: Service password, redacted from module output.
++    type: str
++    required: true
++  update_password:
++    description: Whether to rotate the password of an existing user.
++    type: str
++    choices: [on_create, always]
++    default: on_create
++'''
++
++EXAMPLES = r'''
++- name: Register Nova service identity
++  kolla_service_user:
++    name: nova
++    domain: default
++    default_project: service
++    password: "{{ nova_keystone_password }}"
++    auth: "{{ openstack_keystone_auth }}"
++  no_log: true
++'''
++
++RETURN = r'''
++user_id:
++  description: ID of the service identity, or null for a check-mode creation.
++  type: str
++  returned: always
++'''
++
++from ansible_collections.openstack.cloud.plugins.module_utils.openstack import (  # noqa: E402,E501
++    OpenStackModule,
++)
++
++
++SERVICE_OPTIONS = {
++    'password_policy_exempt': True,
++    'ignore_change_password_upon_first_use': True,
++    'ignore_lockout_failure_attempts': True,
++    'ignore_password_expiry': True,
++}
++
++
++def ensure_service_user(identity, name, domain, default_project, password,
++                        update_password='on_create', check_mode=False):
++    domain_ref = identity.find_domain(domain, ignore_missing=False)
++    project = None
++    if default_project is not None:
++        project = identity.find_project(default_project, ignore_missing=False,
++                                        domain_id=domain_ref.id)
++        if project.domain_id != domain_ref.id:
++            raise ValueError('The service project belongs to another domain')
++
++    # A name is not a user ID. Avoid find_user's ID shortcut, which could match
++    # an unrelated identity whose ID happens to equal the requested name.
++    users = list(identity.users(name=name, domain_id=domain_ref.id))
++    if any(user.domain_id != domain_ref.id or user.name != name
++           for user in users):
++        raise ValueError('User lookup returned a different name or domain')
++    if len(users) > 1:
++        raise ValueError('Multiple users returned for the service identity')
++
++    if not users:
++        if check_mode:
++            return dict(changed=True, user_id=None)
++        attributes = dict(
++            name=name, domain_id=domain_ref.id, password=password,
++            options=dict(SERVICE_OPTIONS), is_enabled=True)
++        if project is not None:
++            attributes['default_project_id'] = project.id
++        user = identity.create_user(**attributes)
++        return dict(changed=True, user_id=user.id)
++
++    user = users[0]
++    options = dict(user.options or {})
++    options.update(SERVICE_OPTIONS)
++    updates = {}
++    if options != user.options:
++        updates['options'] = options
++    if project is not None and user.default_project_id != project.id:
++        updates['default_project_id'] = project.id
++    if not user.is_enabled:
++        updates['is_enabled'] = True
++    if update_password == 'always':
++        updates['password'] = password
++    if updates and not check_mode:
++        identity.update_user(user, **updates)
++    return dict(changed=bool(updates), user_id=user.id)
++
++
++class ServiceUserModule(OpenStackModule):
++    argument_spec = dict(
++        name=dict(required=True),
++        domain=dict(required=True),
++        default_project=dict(),
++        password=dict(required=True, no_log=True),
++        update_password=dict(default='on_create',
++                             choices=['on_create', 'always']),
++    )
++    module_kwargs = dict(supports_check_mode=True)
++
++    def run(self):
++        try:
++            return ensure_service_user(
++                self.conn.identity, check_mode=self.check_mode,
++                **{key: self.params[key] for key in self.argument_spec})
++        except ValueError as error:
++            self.fail_json(msg=str(error))
++        except self.sdk.exceptions.SDKException as error:
++            # HTTP response bodies can contain submitted values; never return
++            # the body or password in task results, even with Kolla debug on.
++            self.fail_json(msg='Keystone service user registration failed',
++                           status_code=getattr(error, 'status_code', None))
++
++
++def main():
++    ServiceUserModule()()
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/ansible/roles/service-ks-register/tasks/main.yml b/ansible/roles/service-ks-register/tasks/main.yml
+index 854101a..03720e2 100644
+--- a/ansible/roles/service-ks-register/tasks/main.yml
++++ b/ansible/roles/service-ks-register/tasks/main.yml
+@@ -65,20 +65,27 @@
+           client_cert: "{{ kolla_toolbox_client_cert if service_ks_register_mtls | bool else omit }}"
+           client_key: "{{ kolla_toolbox_client_key if service_ks_register_mtls | bool else omit }}"
+       with_items: "{{ service_ks_register_users | map(attribute='project') | unique | list }}"
+       register: service_ks_register_result
+       until: service_ks_register_result is success
+       retries: "{{ service_ks_register_retries }}"
+       delay: "{{ service_ks_register_delay }}"
+ 
++    - import_tasks: password-policy.yml
++      when:
++        - keystone_service_password_policy_exempt | bool
++        - service_ks_register_users | length > 0
++
+     - name: "{{ project_name }} | Creating users"
++      no_log: true
+       kolla_toolbox:
+         container_engine: "{{ kolla_container_engine }}"
+-        module_name: openstack.cloud.identity_user
++        module_name: "{{ 'kolla_service_user' if keystone_service_password_policy_exempt | bool else 'openstack.cloud.identity_user' }}"
++        module_path: "{{ container_config_directory ~ '/ansible/library' if keystone_service_password_policy_exempt | bool else omit }}"
+         module_args:
+           default_project: "{{ item.project }}"
+           name: "{{ item.user }}"
+           password: "{{ item.password }}"
+           update_password: "{{ 'always' if update_keystone_service_user_passwords | bool else 'on_create' }}"
+           domain: "{{ service_ks_register_domain }}"
+           region_name: "{{ service_ks_register_region_name }}"
+           auth: "{{ service_ks_register_auth }}"
+diff --git a/ansible/roles/service-ks-register/tasks/password-policy.yml b/ansible/roles/service-ks-register/tasks/password-policy.yml
+new file mode 100644
+index 0000000..26af629
+--- /dev/null
++++ b/ansible/roles/service-ks-register/tasks/password-policy.yml
+@@ -0,0 +1,12 @@
++---
++- name: Create toolbox directory for service registration module
++  file:
++    path: "{{ node_config_directory }}/kolla-toolbox/ansible/library"
++    state: directory
++    mode: "0755"
++
++- name: Copy service registration module into toolbox config mount
++  copy:
++    src: kolla_service_user.py
++    dest: "{{ node_config_directory }}/kolla-toolbox/ansible/library/kolla_service_user.py"
++    mode: "0644"
+diff --git a/kolla_ansible/tests/unit/test_service_password_policy.py b/kolla_ansible/tests/unit/test_service_password_policy.py
+new file mode 100644
+index 0000000..d73975d
+--- /dev/null
++++ b/kolla_ansible/tests/unit/test_service_password_policy.py
+@@ -0,0 +1,282 @@
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++
++import importlib.util
++from pathlib import Path
++import unittest
++from unittest import mock
++
++from keystoneauth1 import session
++from keystoneauth1 import token_endpoint
++from openstack import connection
++import requests_mock
++import yaml
++
++
++ROOT = Path(__file__).resolve().parents[3]
++ROLE = ROOT / 'ansible/roles/service-ks-register'
++MODULE = ROLE / 'files/kolla_service_user.py'
++ENDPOINT = 'https://identity.example.test/v3'
++OPTIONS = {
++    'password_policy_exempt': True,
++    'ignore_change_password_upon_first_use': True,
++    'ignore_lockout_failure_attempts': True,
++    'ignore_password_expiry': True,
++}
++
++
++def load_module(name, path):
++    spec = importlib.util.spec_from_file_location(name, path)
++    module = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(module)
++    return module
++
++
++class ServiceUserTest(unittest.TestCase):
++    def setUp(self):
++        self.assertTrue(MODULE.is_file(),
++                        'Service registration module missing')
++        self.module = load_module('kolla_service_user_test', MODULE)
++        self.http = requests_mock.Mocker()
++        self.http.start()
++        self.addCleanup(self.http.stop)
++        auth = token_endpoint.Token(ENDPOINT, 'test-token')
++        self.connection = connection.Connection(
++            session=session.Session(auth=auth),
++            identity_endpoint_override=ENDPOINT, identity_api_version='3')
++        self.http.get(ENDPOINT, json={'version': {
++            'id': 'v3.14', 'status': 'stable',
++            'links': [{'rel': 'self', 'href': ENDPOINT + '/'}]}})
++        self.http.get(ENDPOINT + '/domains/domain-id', json={'domain': {
++            'id': 'domain-id', 'name': 'Default', 'enabled': True}})
++        self.http.get(ENDPOINT + '/projects/project-id', json={'project': {
++            'id': 'project-id', 'name': 'service', 'domain_id': 'domain-id'}})
++        self.http.get(ENDPOINT + '/users', json={'users': []})
++        self.identity = self.connection.identity
++        self.params = dict(name='nova', domain='domain-id',
++                           default_project='project-id', password='x',
++                           update_password='on_create', check_mode=False)
++
++    def run_registration(self, **overrides):
++        return self.module.ensure_service_user(
++            self.identity, **dict(self.params, **overrides))
++
++    def existing(self, options=None, **extra):
++        ref = dict(id='user-id', name='nova', domain_id='domain-id',
++                   default_project_id='project-id', enabled=True,
++                   options=OPTIONS if options is None else options)
++        ref.update(extra)
++        self.http.get(ENDPOINT + '/users', json={'users': [ref]})
++        self.http.patch(ENDPOINT + '/users/user-id', json={'user': ref})
++
++    def writes(self):
++        return [r for r in self.http.request_history
++                if r.method in ('POST', 'PATCH', 'DELETE')]
++
++    def test_create_exemption_and_password_in_same_request(self):
++        self.http.post(ENDPOINT + '/users', status_code=201,
++                       json={'user': {'id': 'new-user-id'}})
++        result = self.run_registration()
++        self.assertTrue(result['changed'])
++        self.assertEqual('new-user-id', result['user_id'])
++        writes = self.writes()
++        self.assertEqual(1, len(writes))
++        self.assertEqual('POST', writes[0].method)
++        body = writes[0].json()['user']
++        self.assertEqual('x', body['password'])
++        self.assertEqual(OPTIONS, body['options'])
++        self.assertEqual('domain-id', body['domain_id'])
++        self.assertEqual('project-id', body['default_project_id'])
++        self.assertNotIn('password', result)
++
++    def test_existing_user_preserves_mfa_without_password_reset(self):
++        mfa = {'multi_factor_auth_enabled': True,
++               'multi_factor_auth_rules': [['password', 'totp']]}
++        self.existing(mfa)
++        self.assertTrue(self.run_registration()['changed'])
++        body = self.writes()[0].json()['user']
++        self.assertEqual(dict(mfa, **OPTIONS), body['options'])
++        self.assertNotIn('password', body)
++
++    def test_on_create_rerun_has_no_writes(self):
++        self.existing()
++        self.assertFalse(self.run_registration()['changed'])
++        self.assertEqual([], self.writes())
++
++    def test_always_rotates_and_sets_options_together(self):
++        self.existing({'password_policy_exempt': False})
++        result = self.run_registration(update_password='always')
++        self.assertTrue(result['changed'])
++        self.assertEqual(1, len(self.writes()))
++        body = self.writes()[0].json()['user']
++        self.assertEqual('x', body['password'])
++        self.assertEqual(OPTIONS, body['options'])
++
++    def test_always_rotates_even_when_options_are_current(self):
++        self.existing()
++        self.run_registration(update_password='always')
++        self.assertEqual('x', self.writes()[0].json()['user']['password'])
++
++    def test_check_mode_new_user_does_not_write(self):
++        result = self.run_registration(check_mode=True)
++        self.assertTrue(result['changed'])
++        self.assertIsNone(result['user_id'])
++        self.assertEqual([], self.writes())
++
++    def test_check_mode_existing_user_does_not_write(self):
++        self.existing({})
++        self.assertTrue(self.run_registration(check_mode=True)['changed'])
++        self.assertEqual([], self.writes())
++
++    def test_same_name_in_different_domain_never_updates_other_user(self):
++        self.existing({}, domain_id='other-domain')
++        with self.assertRaisesRegex(ValueError, 'domain'):
++            self.run_registration()
++        self.assertEqual([], self.writes())
++
++    def test_user_lookup_is_by_name_and_domain(self):
++        self.existing()
++        self.run_registration()
++        queries = [r.qs for r in self.http.request_history
++                   if r.path == '/v3/users']
++        self.assertEqual([{'name': ['nova'], 'domain_id': ['domain-id']}],
++                         queries)
++
++    def test_project_in_wrong_domain_fails_before_write(self):
++        self.http.get(ENDPOINT + '/projects/project-id', json={'project': {
++            'id': 'project-id', 'name': 'service', 'domain_id': 'other'}})
++        with self.assertRaisesRegex(ValueError, 'domain'):
++            self.run_registration()
++        self.assertEqual([], self.writes())
++
++    def test_domain_service_user_can_be_created_without_project(self):
++        self.http.post(ENDPOINT + '/users', status_code=201,
++                       json={'user': {'id': 'trustee-id'}})
++        result = self.run_registration(default_project=None)
++        self.assertTrue(result['changed'])
++        body = self.writes()[0].json()['user']
++        self.assertNotIn('default_project_id', body)
++        self.assertEqual(OPTIONS, body['options'])
++
++    def test_domain_service_update_preserves_existing_default_project(self):
++        self.existing({})
++        self.run_registration(default_project=None)
++        self.assertNotIn('default_project_id',
++                         self.writes()[0].json()['user'])
++
++    def test_duplicate_user_response_fails_before_write(self):
++        ref = dict(name='nova', domain_id='domain-id')
++        self.http.get(ENDPOINT + '/users', json={'users': [
++            dict(ref, id='one'), dict(ref, id='two')]})
++        with self.assertRaisesRegex(ValueError, 'Multiple'):
++            self.run_registration()
++        self.assertEqual([], self.writes())
++
++    def test_api_refusal_is_not_silently_retried_as_unexempt_user(self):
++        self.http.post(ENDPOINT + '/users', status_code=403,
++                       json={'error': {'message': 'Forbidden'}})
++        with self.assertRaises(Exception) as error:
++            self.run_registration()
++        self.assertEqual(403, error.exception.status_code)
++        self.assertEqual(1, len(self.writes()))
++
++
++class ToolboxPolicyTest(unittest.TestCase):
++    def setUp(self):
++        self.module = load_module(
++            'kolla_toolbox_policy_test',
++            ROOT / 'ansible/library/kolla_toolbox.py')
++
++    def test_optional_module_path_passed_as_one_argv_argument(self):
++        module = mock.Mock()
++        module.params = dict(module_name='kolla_service_user', module_args={},
++                             module_path='/var/lib/kolla/config_files/library')
++        module.check_mode = False
++        worker = self.module.KollaToolboxWorker(module, None, None)
++        self.assertEqual(
++            ['ansible', 'localhost', '-m', 'kolla_service_user',
++             '--module-path', '/var/lib/kolla/config_files/library'],
++            worker._generate_command())
++
++    def test_existing_toolbox_call_is_unchanged(self):
++        module = mock.Mock()
++        module.params = dict(module_name='openstack.cloud.identity_user',
++                             module_args={})
++        module.check_mode = True
++        worker = self.module.KollaToolboxWorker(module, None, None)
++        self.assertEqual(['ansible', 'localhost', '-m',
++                          'openstack.cloud.identity_user', '--check'],
++                         worker._generate_command())
++
++    def test_module_path_is_accepted_by_ansible_argument_spec(self):
++        with mock.patch.object(self.module, 'AnsibleModule') as ansible:
++            self.module.create_ansible_module()
++        self.assertEqual(dict(type='str'),
++                         ansible.call_args.kwargs['argument_spec'].get(
++                             'module_path'))
++
++    def test_role_defaults_to_stock_registration(self):
++        defaults = yaml.safe_load((ROLE / 'defaults/main.yml').read_text())
++        self.assertIs(False, defaults.get(
++            'keystone_service_password_policy_exempt'))
++
++    def test_registration_keeps_credentials_tls_and_no_log(self):
++        tasks = yaml.safe_load(
++            (ROLE / 'tasks/main.yml').read_text())[0]['block']
++        task = next(t for t in tasks if t.get('name', '').endswith(
++            '| Creating users'))
++        self.assertIs(True, task.get('no_log'))
++        self.assertIn('keystone_service_password_policy_exempt',
++                      task['kolla_toolbox']['module_name'])
++        self.assertIn('module_path', task['kolla_toolbox'])
++        args = task['kolla_toolbox']['module_args']
++        for key in ('auth', 'cacert', 'client_cert', 'client_key',
++                    'region_name', 'interface', 'update_password'):
++            self.assertIn(key, args)
++
++    def test_magnum_trustee_uses_exempt_registration(self):
++        tasks = yaml.safe_load((ROOT / 'ansible/roles/magnum/tasks/'
++                               'register.yml').read_text())
++        task = next(t for t in tasks if t.get('name') ==
++                    'Creating Magnum trustee user')
++        self.assertIs(True, task.get('no_log'))
++        self.assertIn('keystone_service_password_policy_exempt',
++                      task['kolla_toolbox']['module_name'])
++        self.assertIn('module_path', task['kolla_toolbox'])
++
++    def test_magnum_keystone_calls_forward_endpoint_mtls(self):
++        tasks = yaml.safe_load((ROOT / 'ansible/roles/magnum/tasks/'
++                               'register.yml').read_text())
++        expected = {
++            'client_cert': (
++                '{{ kolla_toolbox_client_cert if '
++                'magnum_ks_register_mtls | bool else omit }}'),
++            'client_key': (
++                '{{ kolla_toolbox_client_key if '
++                'magnum_ks_register_mtls | bool else omit }}'),
++        }
++        for name in ('Creating Magnum trustee domain',
++                     'Creating Magnum trustee user',
++                     'Creating Magnum trustee user role'):
++            with self.subTest(task=name):
++                task = next(t for t in tasks if t.get('name') == name)
++                args = task['kolla_toolbox']['module_args']
++                self.assertEqual(expected['client_cert'],
++                                 args.get('client_cert'))
++                self.assertEqual(expected['client_key'],
++                                 args.get('client_key'))
++
++    def test_magnum_mtls_predicate_matches_service_registration(self):
++        service_defaults = yaml.safe_load(
++            (ROLE / 'defaults/main.yml').read_text())
++        magnum_defaults = yaml.safe_load(
++            (ROOT / 'ansible/roles/magnum/defaults/main.yml').read_text())
++        service_predicate = service_defaults[
++            'service_ks_register_mtls'].replace(
++                'service_ks_register_interface', 'openstack_interface')
++        self.assertEqual(service_predicate,
++                         magnum_defaults.get('magnum_ks_register_mtls'))
++
++
++if __name__ == '__main__':
++    unittest.main()

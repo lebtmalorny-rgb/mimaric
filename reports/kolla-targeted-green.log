@@ -1,0 +1,42 @@
+test_always_rotates_and_sets_options_together (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_always_rotates_and_sets_options_together) ... /Users/dmitry/Desktop/debug/password-policy-work/kolla-ansible/.venv/lib/python3.11/site-packages/openstack/proxy.py:234: RemovedInSDK60Warning: The 'service_type' parameter is unnecesary and will be removed in a future release.
+  warnings.warn(
+ok
+test_always_rotates_even_when_options_are_current (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_always_rotates_even_when_options_are_current) ... ok
+test_api_refusal_is_not_silently_retried_as_unexempt_user (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_api_refusal_is_not_silently_retried_as_unexempt_user) ... ok
+test_check_mode_existing_user_does_not_write (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_check_mode_existing_user_does_not_write) ... ok
+test_check_mode_new_user_does_not_write (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_check_mode_new_user_does_not_write) ... ok
+test_create_exemption_and_password_in_same_request (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_create_exemption_and_password_in_same_request) ... ok
+test_domain_service_update_preserves_existing_default_project (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_domain_service_update_preserves_existing_default_project) ... ok
+test_domain_service_user_can_be_created_without_project (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_domain_service_user_can_be_created_without_project) ... ok
+test_duplicate_user_response_fails_before_write (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_duplicate_user_response_fails_before_write) ... ok
+test_existing_user_preserves_mfa_without_password_reset (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_existing_user_preserves_mfa_without_password_reset) ... ok
+test_on_create_rerun_has_no_writes (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_on_create_rerun_has_no_writes) ... ok
+test_project_in_wrong_domain_fails_before_write (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_project_in_wrong_domain_fails_before_write) ... ok
+test_same_name_in_different_domain_never_updates_other_user (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_same_name_in_different_domain_never_updates_other_user) ... ok
+test_user_lookup_is_by_name_and_domain (kolla_ansible.tests.unit.test_service_password_policy.ServiceUserTest.test_user_lookup_is_by_name_and_domain) ... ok
+test_existing_toolbox_call_is_unchanged (kolla_ansible.tests.unit.test_service_password_policy.ToolboxPolicyTest.test_existing_toolbox_call_is_unchanged) ... ok
+test_magnum_trustee_uses_exempt_registration (kolla_ansible.tests.unit.test_service_password_policy.ToolboxPolicyTest.test_magnum_trustee_uses_exempt_registration) ... ok
+test_module_path_is_accepted_by_ansible_argument_spec (kolla_ansible.tests.unit.test_service_password_policy.ToolboxPolicyTest.test_module_path_is_accepted_by_ansible_argument_spec) ... ok
+test_optional_module_path_passed_as_one_argv_argument (kolla_ansible.tests.unit.test_service_password_policy.ToolboxPolicyTest.test_optional_module_path_passed_as_one_argv_argument) ... ok
+test_registration_keeps_credentials_tls_and_no_log (kolla_ansible.tests.unit.test_service_password_policy.ToolboxPolicyTest.test_registration_keeps_credentials_tls_and_no_log) ... ok
+test_role_defaults_to_stock_registration (kolla_ansible.tests.unit.test_service_password_policy.ToolboxPolicyTest.test_role_defaults_to_stock_registration) ... ok
+test_canonical_namespace_paths (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_canonical_namespace_paths) ... ok
+test_cert_mode_defaults_to_kv (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_cert_mode_defaults_to_kv) ... ok
+test_empty_component_is_rejected (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_empty_component_is_rejected) ... ok
+test_feature_disabled_keeps_legacy_certificate_copy (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_feature_disabled_keeps_legacy_certificate_copy) ... ok
+test_kv_v2_reference (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_kv_v2_reference) ... ok
+test_multi_host_certificate_references (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_multi_host_certificate_references) ... ok
+test_pki_profile_builds_one_logical_bundle (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_pki_profile_builds_one_logical_bundle) ... ok
+test_reference_delimiters_are_rejected (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_reference_delimiters_are_rejected) ... ok
+test_reference_is_exact_without_newline (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_reference_is_exact_without_newline) ... ok
+test_secman_uses_generic_kv_reference (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_secman_uses_generic_kv_reference) ... ok
+test_secret_file_reference_keeps_hashicorp_kv_compatibility (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_secret_file_reference_keeps_hashicorp_kv_compatibility) ... ok
+test_trust_ca_reference_kv_mode_uses_kv_document (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_trust_ca_reference_kv_mode_uses_kv_document) ... ok
+test_trust_ca_reference_pki_mode_rejects_missing_profile (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_trust_ca_reference_pki_mode_rejects_missing_profile) ... ok
+test_trust_ca_reference_pki_mode_uses_backend_chain (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_trust_ca_reference_pki_mode_uses_backend_chain) ... ok
+test_trust_ca_reference_rejects_unknown_mode (kolla_ansible.tests.unit.test_vault_file_sources.VaultFileSourcesTest.test_trust_ca_reference_rejects_unknown_mode) ... ok
+
+----------------------------------------------------------------------
+Ran 35 tests in 0.085s
+
+OK

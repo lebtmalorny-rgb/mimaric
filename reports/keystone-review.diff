@@ -1,0 +1,1125 @@
+ doc/source/admin/resource-options.rst              |  68 +++
+ doc/source/getting-started/policy_mapping.rst      |   2 +
+ keystone/api/users.py                              |  10 +
+ keystone/common/policies/user.py                   |  15 +
+ keystone/identity/backends/resource_options.py     |   7 +
+ keystone/identity/backends/sql.py                  |  42 +-
+ keystone/identity/core.py                          |  60 ++-
+ keystone/identity/schema.py                        |   8 +-
+ .../tests/unit/test_password_policy_exemption.py   | 503 +++++++++++++++++++++
+ ...password-policy-exemption-4bf467dde2ba4413.yaml |  18 +
+ 10 files changed, 715 insertions(+), 18 deletions(-)
+diff --git a/doc/source/admin/resource-options.rst b/doc/source/admin/resource-options.rst
+index 0fa3ec2..4e1d0ac 100644
+--- a/doc/source/admin/resource-options.rst
++++ b/doc/source/admin/resource-options.rst
+@@ -214,16 +214,84 @@ authenticate.
+                ]
+            }
+        }
+    }
+ 
+ 
+ See :ref:`multi_factor_authentication` for further details.
+ 
++.. _password_policy_exempt:
++
++password_policy_exempt
++----------------------
++
++Type: ``Boolean``
++
++For SQL users, explicitly classify a service identity as exempt from the
++``password_regex``, ``unique_last_password_count``, and
++``minimum_password_age`` checks. Only JSON ``true`` enables this option;
++``false`` or absence applies the ordinary password policy. JSON ``null``
++removes the option. Strings and numbers are not accepted as Boolean values.
++The SQL resource option identifier is ``PPEX``; no database migration is needed.
++
++Creating or updating a user while supplying this option (including ``false``
++and ``null``) additionally requires
++``identity:manage_password_policy_exemption``. Its default rule is
++``role:admin and system_scope:all`` without a deprecated admin fallback.
++Ordinary user-create/update authorization is still required. Deployments may
++explicitly override this rule for a dedicated deployment identity, for example::
++
++    identity:manage_password_policy_exemption: "role:admin and user_id:DEPLOYMENT_USER_ID and project_id:DEPLOYMENT_PROJECT_ID"
++
++The policy supports system, domain and project scopes to allow such explicit
++operator overrides; the default check only allows system administrators.
++Treat permission to set this option as a security administration privilege.
++
++The classification belongs to the target user, not its name, roles, domain or
++caller. When updating a password and options together, password validation
++uses the resulting options. Unspecified options are retained. Removing the
++exemption and supplying a password in the same request immediately applies the
++ordinary regex. Existing passwords are not retrospectively revalidated.
++Accepted classification assignments (including unchanged values and null
++removal) are recorded with their resulting classification in the identity log,
++with target and initiator identifiers, and in the existing CADF create/update
++notification reason when ``notification_format = cadf``. Passwords are never
++included. SQL password writes read the classification inside their transaction;
++updates and self-service changes lock the user row before reading the options.
++A stale manager cache cannot grant a password-policy exemption. Other identity
++drivers retain manager-side regex validation unless they explicitly implement
++the ``password_policy_validation_in_driver`` capability.
++
++This option does not disable first-use changes, password expiry or lockout.
++For a service identity requiring all these exceptions, send the password and
++all four options together at creation or update:
++
++.. code-block:: json
++
++   {
++       "user": {
++           "name": "service-identity",
++           "domain_id": "SERVICE_DOMAIN_ID",
++           "password": "SERVICE_PASSWORD_FROM_SECRET_STORE",
++           "options": {
++               "password_policy_exempt": true,
++               "ignore_change_password_upon_first_use": true,
++               "ignore_password_expiry": true,
++               "ignore_lockout_failure_attempts": true
++           }
++       }
++   }
++
++Self-service password changes still authenticate the original password and
++respect ``lock_password``. Password types, technical length limits, account
++state checks, revocation and cache invalidation continue to apply. The SQL
++backend skips history/minimum-age validation for exempt identities; external
++identity stores retain their own password controls.
++
+ Role Options
+ ============
+ 
+ The following options are available on role resources. If left undefined, they
+ are assumed to be false or disabled.
+ 
+ immutable
+ ---------
+diff --git a/doc/source/getting-started/policy_mapping.rst b/doc/source/getting-started/policy_mapping.rst
+index fab79be..4ef2e68 100644
+--- a/doc/source/getting-started/policy_mapping.rst
++++ b/doc/source/getting-started/policy_mapping.rst
+@@ -60,16 +60,18 @@ identity:create_project_tag                                PUT /v3/projects/{pro
+ identity:update_project_tags                               PUT /v3/projects/{project_id}/tags
+ identity:delete_project_tag                                DELETE /v3/projects/{project_id}/tags/{tag_name}
+ identity:delete_project_tags                               DELETE /v3/projects/{project_id}/tags
+ 
+ identity:get_user                                          GET /v3/users/{user_id}
+ identity:list_users                                        GET /v3/users
+ identity:create_user                                       POST /v3/users
+ identity:update_user                                       PATCH /v3/users/{user_id}
++identity:manage_password_policy_exemption                  POST /v3/users
++                                                           PATCH /v3/users/{user_id}
+ identity:delete_user                                       DELETE /v3/users/{user_id}
+ 
+ identity:get_group                                         GET /v3/groups/{group_id}
+ identity:list_groups                                       GET /v3/groups
+ identity:list_groups_for_user                              GET /v3/users/{user_id}/groups
+ identity:create_group                                      POST /v3/groups
+ identity:update_group                                      PATCH /v3/groups/{group_id}
+ identity:delete_group                                      DELETE /v3/groups/{group_id}
+diff --git a/keystone/api/users.py b/keystone/api/users.py
+index 2661402..7b908ea 100644
+--- a/keystone/api/users.py
++++ b/keystone/api/users.py
+@@ -268,16 +268,21 @@ class UserResource(ks_flask.ResourceBase):
+         PATCH /v3/users/{user_id}
+         """
+         ENFORCER.enforce_call(
+             action='identity:update_user',
+             build_target=_build_user_target_enforcement,
+         )
+         PROVIDERS.identity_api.get_user(user_id)
+         user_data = self.request_body_json.get('user', {})
++        if 'password_policy_exempt' in user_data.get('options', {}):
++            ENFORCER.enforce_call(
++                action='identity:manage_password_policy_exemption',
++                build_target=_build_user_target_enforcement,
++            )
+         self._require_matching_id(user_data)
+         ref = PROVIDERS.identity_api.update_user(
+             user_id, user_data, initiator=self.audit_initiator
+         )
+         return self.wrap_member(ref)
+ 
+     @validation.request_query_schema(None)
+     @validation.request_body_schema(None)
+@@ -357,16 +362,21 @@ class UsersResource(ks_flask.ResourceBase):
+ 
+         POST /v3/users
+         """
+         user_data = self.request_body_json.get('user', {})
+         target = {'user': user_data}
+         ENFORCER.enforce_call(
+             action='identity:create_user', target_attr=target
+         )
++        if 'password_policy_exempt' in user_data.get('options', {}):
++            ENFORCER.enforce_call(
++                action='identity:manage_password_policy_exemption',
++                target_attr=target,
++            )
+         user_data = self._normalize_dict(user_data)
+         user_data = self._normalize_domain_id(user_data)
+         ref = PROVIDERS.identity_api.create_user(
+             user_data, initiator=self.audit_initiator
+         )
+         return self.wrap_member(ref), http.client.CREATED
+ 
+ 
+diff --git a/keystone/common/policies/user.py b/keystone/common/policies/user.py
+index 1f96349..4d01fb1 100644
+--- a/keystone/common/policies/user.py
++++ b/keystone/common/policies/user.py
+@@ -71,16 +71,31 @@ deprecated_update_user = policy.DeprecatedRule(
+ deprecated_delete_user = policy.DeprecatedRule(
+     name=base.IDENTITY % 'delete_user',
+     check_str=base.RULE_ADMIN_REQUIRED,
+     deprecated_reason=DEPRECATED_REASON,
+     deprecated_since=versionutils.deprecated.STEIN,
+ )
+ 
+ user_policies = [
++    policy.DocumentedRuleDefault(
++        name=base.IDENTITY % 'manage_password_policy_exemption',
++        check_str='role:admin and system_scope:all',
++        # Explicit operator overrides may authorize domain/project callers.
++        # The default check still requires a system-scoped administrator.
++        scope_types=['system', 'domain', 'project'],
++        description=(
++            'Set or remove the password-policy exemption on a user. '
++            'Also requires the ordinary user create or update permission.'
++        ),
++        operations=[
++            {'path': '/v3/users', 'method': 'POST'},
++            {'path': '/v3/users/{user_id}', 'method': 'PATCH'},
++        ],
++    ),
+     policy.DocumentedRuleDefault(
+         name=base.IDENTITY % 'get_user',
+         check_str=ADMIN_OR_SYSTEM_READER_OR_DOMAIN_READER_OR_USER,
+         scope_types=['system', 'domain', 'project'],
+         description='Show user details.',
+         operations=[
+             {'path': '/v3/users/{user_id}', 'method': 'GET'},
+             {'path': '/v3/users/{user_id}', 'method': 'HEAD'},
+diff --git a/keystone/identity/backends/resource_options.py b/keystone/identity/backends/resource_options.py
+index cae390e..f97624a 100644
+--- a/keystone/identity/backends/resource_options.py
++++ b/keystone/identity/backends/resource_options.py
+@@ -53,16 +53,22 @@ def _mfa_rules_validator_list_of_lists_of_strings_no_duplicates(value):
+             if element in string_set:
+                 # Element of sublist is duplicated, ValueError
+                 raise ValueError(msg)
+             # add element to the sublist element tracker
+             string_set.add(element)
+ 
+ 
+ USER_OPTIONS_REGISTRY = resource_options.ResourceOptionRegistry('USER')
++PASSWORD_POLICY_EXEMPT_OPT = resource_options.ResourceOption(
++    option_id='PPEX',
++    option_name='password_policy_exempt',
++    validator=resource_options.boolean_validator,
++    json_schema_validation=parameter_types.boolean,
++)
+ IGNORE_CHANGE_PASSWORD_OPT = resource_options.ResourceOption(
+     option_id='1000',
+     option_name='ignore_change_password_upon_first_use',
+     validator=resource_options.boolean_validator,
+     json_schema_validation=parameter_types.boolean,
+ )
+ IGNORE_PASSWORD_EXPIRY_OPT = resource_options.ResourceOption(
+     option_id='1001',
+@@ -116,16 +122,17 @@ MFA_ENABLED_OPT = resource_options.ResourceOption(
+     json_schema_validation=parameter_types.boolean,
+ )
+ 
+ 
+ # NOTE(notmorgan): wrap this in a function for testing purposes.
+ # This is called on import by design.
+ def register_user_options():
+     for opt in [
++        PASSWORD_POLICY_EXEMPT_OPT,
+         IGNORE_CHANGE_PASSWORD_OPT,
+         IGNORE_PASSWORD_EXPIRY_OPT,
+         IGNORE_LOCKOUT_ATTEMPT_OPT,
+         LOCK_PASSWORD_OPT,
+         IGNORE_USER_INACTIVITY_OPT,
+         MFA_RULES_OPT,
+         MFA_ENABLED_OPT,
+     ]:
+diff --git a/keystone/identity/backends/sql.py b/keystone/identity/backends/sql.py
+index cea1c2a..4101115 100644
+--- a/keystone/identity/backends/sql.py
++++ b/keystone/identity/backends/sql.py
+@@ -18,31 +18,52 @@ from oslo_db import api as oslo_db_api
+ from oslo_db.sqlalchemy import utils as sqlalchemyutils
+ from oslo_utils import timeutils
+ import sqlalchemy
+ 
+ from keystone.common import driver_hints
+ from keystone.common import password_hashing
+ from keystone.common import resource_options
+ from keystone.common import sql
++from keystone.common.validation import validators
+ import keystone.conf
+ from keystone import exception
+ from keystone.i18n import _
+ from keystone.identity.backends import base
+ from keystone.identity.backends import resource_options as options
+ from keystone.identity.backends import sql_model as model
+ 
+ CONF = keystone.conf.CONF
+ 
+ 
+ def _stale_data_exception_checker(exc):
+     return isinstance(exc, sqlalchemy.orm.exc.StaleDataError)
+ 
+ 
+ class Identity(base.IdentityDriverBase):
++    # The manager delegates regex enforcement only to drivers that explicitly
++    # provide this capability. Other identity drivers keep manager validation.
++    password_policy_validation_in_driver = True
++
++    @staticmethod
++    def _password_policy_exempt(user_ref):
++        exemption = user_ref.get_resource_option(
++            options.PASSWORD_POLICY_EXEMPT_OPT.option_id
++        )
++        return exemption is not None and exemption.option_value is True
++
++    def _get_user_for_update(self, session, user_id):
++        # Lock only the parent row before loading options/passwords. Selecting
++        # the full User model here would join nullable child tables, which
++        # PostgreSQL cannot lock and MySQL could lock in a different order.
++        query = session.query(model.User.id).filter_by(id=user_id)
++        if query.with_for_update().one_or_none() is None:
++            raise exception.UserNotFound(user_id=user_id)
++        return self._get_user(session, user_id)
++
+     # NOTE(henry-nash): Override the __init__() method so as to take a
+     # config parameter to enable sql to be used as a domain-specific driver.
+     def __init__(self, conf=None):
+         self.conf = conf
+         super().__init__()
+ 
+     @property
+     def is_sql(self):
+@@ -136,16 +157,20 @@ class Identity(base.IdentityDriverBase):
+             if self._change_password_required(user_ref):
+                 user_ref.password_ref.expires_at = timeutils.utcnow()
+             user_ref.created_at = timeutils.utcnow()
+             session.add(user_ref)
+             # Set resource options passed on creation
+             resource_options.resource_options_ref_to_mapper(
+                 user_ref, model.UserOption
+             )
++            if 'password' in user and not self._password_policy_exempt(
++                user_ref
++            ):
++                validators.validate_password(user['password'])
+             return base.filter_user(user_ref.to_dict())
+ 
+     def _change_password_required(self, user):
+         if not CONF.security_compliance.change_password_upon_first_use:
+             return False
+         ignore_option = user.get_resource_option(
+             options.IGNORE_CHANGE_PASSWORD_OPT.option_id
+         )
+@@ -256,17 +281,17 @@ class Identity(base.IdentityDriverBase):
+ 
+     @sql.handle_conflicts(conflict_type='user')
+     # Explicitly retry on StaleDataErrors, which can happen if two clients
+     # update the same user's password and the second client has stale password
+     # information.
+     @oslo_db_api.wrap_db_retry(exception_checker=_stale_data_exception_checker)
+     def update_user(self, user_id, user):
+         with sql.session_for_write() as session:
+-            user_ref = self._get_user(session, user_id)
++            user_ref = self._get_user_for_update(session, user_id)
+             old_user_dict = user_ref.to_dict()
+             for k in user:
+                 old_user_dict[k] = user[k]
+             new_user = model.User.from_dict(old_user_dict)
+             for attr in model.User.attributes:
+                 if attr not in model.User.readonly_attributes:
+                     setattr(user_ref, attr, getattr(new_user, attr))
+             # Move the "_resource_options" attribute over to the real user_ref
+@@ -279,16 +304,18 @@ class Identity(base.IdentityDriverBase):
+             )
+ 
+             # Move options into the proper attribute mapper construct
+             resource_options.resource_options_ref_to_mapper(
+                 user_ref, model.UserOption
+             )
+ 
+             if 'password' in user:
++                if not self._password_policy_exempt(user_ref):
++                    validators.validate_password(user['password'])
+                 user_ref.password = user['password']
+                 if self._change_password_required(user_ref):
+                     expires_now = timeutils.utcnow()
+                     user_ref.password_ref.expires_at = expires_now
+ 
+             user_ref.extra = new_user.extra
+             return base.filter_user(user_ref.to_dict(include_extra_dict=True))
+ 
+@@ -301,25 +328,30 @@ class Identity(base.IdentityDriverBase):
+                     password, password_ref.password_hash
+                 ):
+                     raise exception.PasswordHistoryValidationError(
+                         unique_count=unique_cnt
+                     )
+ 
+     def change_password(self, user_id, new_password):
+         with sql.session_for_write() as session:
+-            user_ref = session.get(model.User, user_id)
++            user_ref = self._get_user_for_update(session, user_id)
+             lock_pw_opt = user_ref.get_resource_option(
+                 options.LOCK_PASSWORD_OPT.option_id
+             )
+             if lock_pw_opt is not None and lock_pw_opt.option_value is True:
+                 raise exception.PasswordSelfServiceDisabled()
+-            if user_ref.password_ref and user_ref.password_ref.self_service:
+-                self._validate_minimum_password_age(user_ref)
+-            self._validate_password_history(new_password, user_ref)
++            if not self._password_policy_exempt(user_ref):
++                validators.validate_password(new_password)
++                if (
++                    user_ref.password_ref
++                    and user_ref.password_ref.self_service
++                ):
++                    self._validate_minimum_password_age(user_ref)
++                self._validate_password_history(new_password, user_ref)
+             user_ref.password = new_password
+             user_ref.password_ref.self_service = True
+ 
+     def _validate_minimum_password_age(self, user_ref):
+         min_age_days = CONF.security_compliance.minimum_password_age
+         min_age = user_ref.password_created_at + datetime.timedelta(
+             days=min_age_days
+         )
+diff --git a/keystone/identity/core.py b/keystone/identity/core.py
+index 96de14a..2ba11cc 100644
+--- a/keystone/identity/core.py
++++ b/keystone/identity/core.py
+@@ -1143,41 +1143,77 @@ class Manager(manager.Manager):
+             user_ref = user.copy()
+             del user['federated']
+             self._validate_federated_objects(user_ref['federated'])
+             user = driver.create_user(user['id'], user)
+             self._create_federated_objects(user_ref, user_ref['federated'])
+             user['federated'] = user_ref['federated']
+             return user
+ 
++    @staticmethod
++    def _audit_password_policy_exemption(
++        user_id, requested_options, new_options, initiator
++    ):
++        if 'password_policy_exempt' not in requested_options:
++            return None
++        new = new_options.get('password_policy_exempt') is True
++        operation = (
++            'removed'
++            if requested_options['password_policy_exempt'] is None
++            else 'assigned'
++        )
++        # Audit accepted assignments, including unchanged values. The previous
++        # value in the manager cache may belong to an earlier SQL transaction.
++        # Never include credentials or the full request in log or CADF.
++        message = f'password_policy_exempt {operation}; effective={new}'
++        LOG.info(
++            'User %(user_id)s: %(change)s; initiator %(initiator)s',
++            {
++                'user_id': user_id,
++                'change': message,
++                'initiator': getattr(initiator, 'id', None),
++            },
++        )
++        return reason.Reason(message, '200')
++
+     @domains_configured
+     @exception_translated('user')
+     def create_user(self, user_ref, initiator=None):
+         user = user_ref.copy()
+-        if 'password' in user:
+-            validators.validate_password(user['password'])
+         user['name'] = user['name'].strip()
+         user.setdefault('enabled', True)
+         domain_id = user['domain_id']
+         PROVIDERS.resource_api.get_domain(domain_id)
+ 
+         self._assert_default_project_id_is_not_domain(
+             user_ref.get('default_project_id')
+         )
+ 
+         # For creating a user, the domain is in the object itself
+         domain_id = user_ref['domain_id']
+         driver = self._select_identity_driver(domain_id)
++        if 'password' in user and not getattr(
++            driver, 'password_policy_validation_in_driver', False
++        ):
++            validators.validate_password(user['password'])
+         user = self._clear_domain_id_if_domain_unaware(driver, user)
+         # Generate a local ID - in the future this might become a function of
+         # the underlying driver so that it could conform to rules set down by
+         # that particular driver type.
+         user['id'] = uuid.uuid4().hex
+         ref = self._create_user_with_federated_objects(user, driver)
+-        notifications.Audit.created(self._USER, user['id'], initiator)
++        audit_reason = self._audit_password_policy_exemption(
++            user['id'],
++            user.get('options', {}),
++            ref.get('options', {}),
++            initiator,
++        )
++        notifications.Audit.created(
++            self._USER, user['id'], initiator, reason=audit_reason
++        )
+         return self._set_domain_id_and_mapping(
+             ref, domain_id, driver, mapping.EntityType.USER
+         )
+ 
+     @domains_configured
+     @exception_translated('user')
+     @MEMOIZE
+     def get_user(self, user_id):
+@@ -1338,18 +1374,16 @@ class Manager(manager.Manager):
+             return user
+ 
+     @domains_configured
+     @exception_translated('user')
+     def update_user(self, user_id, user_ref, initiator=None):
+         old_user_ref = self.get_user(user_id)
+         user = user_ref.copy()
+         self._require_matching_domain_id(user, old_user_ref)
+-        if 'password' in user:
+-            validators.validate_password(user['password'])
+         if 'name' in user:
+             user['name'] = user['name'].strip()
+         if 'id' in user:
+             if user_id != user['id']:
+                 raise exception.ValidationError(_('Cannot change user ID'))
+             # Since any ID in the user dict is now irrelevant, remove its so as
+             # the driver layer won't be confused by the fact the this is the
+             # public ID not the local ID
+@@ -1357,25 +1391,34 @@ class Manager(manager.Manager):
+ 
+         self._assert_default_project_id_is_not_domain(
+             user_ref.get('default_project_id')
+         )
+ 
+         domain_id, driver, entity_id = self._get_domain_driver_and_entity_id(
+             user_id
+         )
++        if 'password' in user and not getattr(
++            driver, 'password_policy_validation_in_driver', False
++        ):
++            validators.validate_password(user['password'])
+         user = self._clear_domain_id_if_domain_unaware(driver, user)
+         self.get_user.invalidate(self, old_user_ref['id'])
+         self.get_user_by_name.invalidate(
+             self, old_user_ref['name'], old_user_ref['domain_id']
+         )
+ 
+         ref = self._update_user_with_federated_objects(user, driver, entity_id)
+ 
+-        notifications.Audit.updated(self._USER, user_id, initiator)
++        audit_reason = self._audit_password_policy_exemption(
++            user_id, user.get('options', {}), ref.get('options', {}), initiator
++        )
++        notifications.Audit.updated(
++            self._USER, user_id, initiator, reason=audit_reason
++        )
+ 
+         enabled_change = (user.get('enabled') is False) and user[
+             'enabled'
+         ] != old_user_ref.get('enabled')
+         if enabled_change or user.get('password') is not None:
+             self._persist_revocation_event_for_user(user_id)
+             reason = (
+                 f'Invalidating the token cache because user {user_id} was '
+@@ -1684,17 +1727,20 @@ class Manager(manager.Manager):
+         except exception.PasswordExpired:
+             # If a password has expired, we want users to be able to change it
+             pass
+ 
+         domain_id, driver, entity_id = self._get_domain_driver_and_entity_id(
+             user_id
+         )
+         try:
+-            validators.validate_password(new_password)
++            if not getattr(
++                driver, 'password_policy_validation_in_driver', False
++            ):
++                validators.validate_password(new_password)
+             driver.change_password(entity_id, new_password)
+         except exception.PasswordValidationError as ex:
+             audit_reason = reason.Reason(str(ex), str(ex.code))
+             notifications.Audit.updated(
+                 self._USER, user_id, initiator, reason=audit_reason
+             )
+             raise
+ 
+diff --git a/keystone/identity/schema.py b/keystone/identity/schema.py
+index f8688ba..5e3cddc 100644
+--- a/keystone/identity/schema.py
++++ b/keystone/identity/schema.py
+@@ -289,20 +289,16 @@ _password_change_properties = {
+     'original_password': {'type': 'string'},
+     'password': {'type': 'string'},
+ }
+ if getattr(CONF, 'strict_password_check', None):
+     _password_change_properties['password']['maxLength'] = (
+         CONF.identity.max_password_length
+     )
+ 
+-if getattr(CONF, 'security_compliance', None):
+-    if getattr(CONF.security_compliance, 'password_regex', None):
+-        _password_change_properties['password']['pattern'] = (
+-            CONF.security_compliance.password_regex
+-        )
+-
++# Regex validation needs the target user's effective options. The identity
++# manager or SQL write transaction applies it after loading that user.
+ password_change = {
+     'type': 'object',
+     'properties': _password_change_properties,
+     'required': ['original_password', 'password'],
+     'additionalProperties': False,
+ }
+diff --git a/keystone/tests/unit/test_password_policy_exemption.py b/keystone/tests/unit/test_password_policy_exemption.py
+new file mode 100644
+index 0000000..7fbed92
+--- /dev/null
++++ b/keystone/tests/unit/test_password_policy_exemption.py
+@@ -0,0 +1,503 @@
++# Licensed under the Apache License, Version 2.0 (the "License"); you may
++# not use this file except in compliance with the License. You may obtain
++# a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
++# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
++# License for the specific language governing permissions and limitations
++# under the License.
++
++"""Password policy classification through HTTP, manager and real SQL storage."""
++
++import datetime
++import importlib
++import logging
++import unittest
++from unittest import mock
++import uuid
++
++import fixtures
++import freezegun
++import jsonschema
++from oslo_policy import policy as oslo_policy
++from sqlalchemy.dialects import mysql
++from sqlalchemy.dialects import postgresql
++from sqlalchemy import event
++
++from keystone.common import provider_api
++from keystone.common.rbac_enforcer import policy
++from keystone.common import sql
++from keystone import exception
++from keystone.identity.backends import sql_model
++from keystone.identity import schema
++from keystone import notifications
++from keystone.tests import unit
++from keystone.tests.unit import test_v3
++
++PROVIDERS = provider_api.ProviderAPIs
++FLAG = 'password_policy_exempt'
++
++
++class PasswordPolicyExemptionTests(test_v3.RestfulTestCase):
++    def setUp(self):
++        super().setUp()
++        PROVIDERS.assignment_api.create_system_grant_for_user(
++            self.user_id, self.role_id
++        )
++        self.system_token = self.get_system_scoped_token()
++        self.project_token = self.get_scoped_token()
++        self.config_fixture.config(
++            group='security_compliance', password_regex=r'^[!-~]{8,}\Z'
++        )
++        # Reproduce startup with a configured regex: a late override alone
++        # misses the import-time schema guard on the self-service route.
++        old_schema = schema.password_change
++        importlib.reload(schema)
++        self.addCleanup(setattr, schema, 'password_change', old_schema)
++
++    def authenticate(self, user_id, password):
++        with self.make_request():
++            return PROVIDERS.identity_api.authenticate(user_id, password)
++
++    def create(
++        self,
++        password='ValidPass1!',
++        options=None,
++        token=None,
++        status=201,
++        **fields,
++    ):
++        ref = unit.new_user_ref(domain_id=self.domain_id, password=password)
++        ref.update(fields)
++        if options is not None:
++            ref['options'] = options
++        response = self.post(
++            '/users',
++            body={'user': ref},
++            token=token or self.system_token,
++            expected_status=status,
++        )
++        return response.json.get('user')
++
++    def update(self, user, status=200, token=None, **fields):
++        return self.patch(
++            '/users/' + user['id'],
++            body={'user': fields},
++            token=token or self.system_token,
++            expected_status=status,
++        )
++
++    def change(self, user, old, new, status=204):
++        return self.post(
++            '/users/' + user['id'] + '/password',
++            body={'user': {'original_password': old, 'password': new}},
++            noauth=True,
++            expected_status=status,
++        )
++
++    def test_service_create_short_password_is_persisted(self):
++        user = self.create('x', {FLAG: True})
++        self.assertIs(True, user['options'][FLAG])
++        with sql.session_for_read() as session:
++            ref = session.get(sql_model.User, user['id'])
++            self.assertIs(True, ref.get_resource_option('PPEX').option_value)
++        self.authenticate(user['id'], 'x')
++
++    def test_service_admin_reset_uses_target_options(self):
++        user = self.create(options={FLAG: True})
++        self.update(user, password='x')
++        self.authenticate(user['id'], 'x')
++
++    def test_service_self_change_with_loaded_regex(self):
++        user = self.create(options={FLAG: True})
++        self.change(user, 'ValidPass1!', 'x')
++        self.authenticate(user['id'], 'x')
++
++    def test_same_request_opt_in_and_opt_out(self):
++        user = self.create()
++        self.update(user, password='x', options={FLAG: True})
++        self.update(user, status=400, password='y', options={FLAG: False})
++        self.update(user, password='NewValid2!', options={FLAG: False})
++        self.update(user, status=400, password='z')
++        self.change(user, 'NewValid2!', 'z', status=400)
++
++    def test_null_removes_classification_and_restores_policy(self):
++        user = self.create(options={FLAG: True})
++        self.update(user, status=400, password='x', options={FLAG: None})
++        response = self.update(user, options={FLAG: None})
++        self.assertNotIn(FLAG, response.json['user']['options'])
++        self.update(user, status=400, password='x')
++
++    def test_omitted_false_and_null_remain_human(self):
++        for options in (None, {}, {FLAG: False}, {FLAG: None}):
++            with self.subTest(options=options):
++                self.create('x', options, status=400)
++                user = self.create(options=options)
++                self.update(user, password='x', status=400)
++                self.change(user, 'ValidPass1!', 'x', status=400)
++
++    def test_malformed_flag_rejected_on_create_and_update(self):
++        user = self.create()
++        for value in ('true', 'false', 1, 0, [], {}):
++            with self.subTest(value=value):
++                self.create(options={FLAG: value}, status=400)
++                self.update(user, options={FLAG: value}, status=400)
++
++    def test_project_admin_cannot_supply_classification(self):
++        user = self.create(options={FLAG: True})
++        for value in (True, False, None):
++            with self.subTest(value=value):
++                self.create(
++                    options={FLAG: value}, token=self.project_token, status=403
++                )
++                self.update(
++                    user,
++                    options={FLAG: value},
++                    token=self.project_token,
++                    status=403,
++                )
++        # Existing ordinary user administration remains authorized.
++        self.update(user, password='x', token=self.project_token)
++
++    def test_domain_admin_cannot_supply_classification(self):
++        PROVIDERS.assignment_api.create_grant(
++            role_id=self.role_id,
++            user_id=self.user_id,
++            domain_id=self.domain_id,
++        )
++        token = self.get_domain_scoped_token()
++        user = self.create()
++        self.create(options={FLAG: True}, token=token, status=403)
++        self.update(user, options={FLAG: False}, token=token, status=403)
++
++    def test_callers_exemption_does_not_exempt_human_target(self):
++        self.update(self.user, options={FLAG: True})
++        user = self.create()
++        self.update(user, password='x', status=400)
++        self.create('x', status=400)
++
++    def test_service_reuses_password_and_ignores_minimum_age(self):
++        self.config_fixture.config(
++            group='security_compliance',
++            unique_last_password_count=3,
++            minimum_password_age=1,
++        )
++        user = self.create(options={FLAG: True})
++        self.change(user, 'ValidPass1!', 'x')
++        self.change(user, 'x', 'ValidPass1!')
++        self.change(user, 'ValidPass1!', 'x')
++
++    def test_human_history_and_minimum_age_still_apply(self):
++        self.config_fixture.config(
++            group='security_compliance', unique_last_password_count=3
++        )
++        user = self.create()
++        self.change(user, 'ValidPass1!', 'NewValid2!')
++        self.change(user, 'NewValid2!', 'ValidPass1!', status=400)
++        self.config_fixture.config(
++            group='security_compliance', minimum_password_age=1
++        )
++        self.change(user, 'NewValid2!', 'ThirdValid3!', status=400)
++
++    def test_old_password_still_required(self):
++        user = self.create(options={FLAG: True})
++        self.change(user, 'incorrect', 'x', status=401)
++        self.authenticate(user['id'], 'ValidPass1!')
++
++    def test_lock_password_still_applies(self):
++        user = self.create(options={FLAG: True, 'lock_password': True})
++        self.change(user, 'ValidPass1!', 'x', status=400)
++
++    def test_technical_max_length_and_json_types_still_apply(self):
++        self.config_fixture.config(strict_password_check=True)
++        self.config_fixture.config(group='identity', max_password_length=64)
++        user = self.create(options={FLAG: True})
++        self.create('a' * 65, {FLAG: True}, status=403)
++        self.update(user, password='a' * 65, status=403)
++        self.change(user, 'ValidPass1!', 'a' * 65, status=403)
++        for value in (True, 123, [], {}):
++            self.create(value, {FLAG: True}, status=400)
++            self.update(user, password=value, status=400)
++            self.change(user, 'ValidPass1!', value, status=400)
++
++    def test_password_writes_lock_only_user_row(self):
++        user = self.create(options={FLAG: True})
++        statements = []
++        with sql.session_for_read() as session:
++            engine = session.get_bind()
++
++        def capture(conn, statement, multiparams, params, execution_options):
++            if getattr(statement, '_for_update_arg', None) is not None:
++                statements.append(statement)
++
++        event.listen(engine, 'before_execute', capture)
++        self.addCleanup(event.remove, engine, 'before_execute', capture)
++        self.update(user, password='x')
++        self.change(user, 'x', 'y')
++        self.assertEqual(2, len(statements))
++        for statement in statements:
++            for dialect in (mysql.dialect(), postgresql.dialect()):
++                rendered = str(statement.compile(dialect=dialect))
++                self.assertIn('FOR UPDATE', rendered)
++                self.assertNotIn('JOIN', rendered)
++                self.assertIn('user', rendered)
++
++    def test_stale_cached_true_cannot_bypass_reset(self):
++        user = self.create(options={FLAG: True})
++        self.assertIs(
++            True, PROVIDERS.identity_api.get_user(user['id'])['options'][FLAG]
++        )
++        driver = PROVIDERS.identity_api._select_identity_driver(self.domain_id)
++        # A second worker changes SQL state without clearing this local cache.
++        driver.update_user(user['id'], {'options': {FLAG: False}})
++        self.assertIs(
++            True, PROVIDERS.identity_api.get_user(user['id'])['options'][FLAG]
++        )
++        self.update(user, password='x', status=400)
++
++    def test_stale_cached_true_cannot_bypass_self_change(self):
++        user = self.create(options={FLAG: True})
++        PROVIDERS.identity_api.get_user(user['id'])
++        driver = PROVIDERS.identity_api._select_identity_driver(self.domain_id)
++        driver.update_user(user['id'], {'options': {FLAG: False}})
++        self.assertIs(
++            True, PROVIDERS.identity_api.get_user(user['id'])['options'][FLAG]
++        )
++        self.change(user, 'ValidPass1!', 'x', status=400)
++
++    def test_stale_cached_false_does_not_reject_service_reset(self):
++        user = self.create(options={FLAG: False})
++        PROVIDERS.identity_api.get_user(user['id'])
++        driver = PROVIDERS.identity_api._select_identity_driver(self.domain_id)
++        driver.update_user(user['id'], {'options': {FLAG: True}})
++        self.assertIs(
++            False, PROVIDERS.identity_api.get_user(user['id'])['options'][FLAG]
++        )
++        self.update(user, password='x')
++
++    def test_stale_cached_false_does_not_reject_service_self_change(self):
++        user = self.create(options={FLAG: False})
++        PROVIDERS.identity_api.get_user(user['id'])
++        driver = PROVIDERS.identity_api._select_identity_driver(self.domain_id)
++        driver.update_user(user['id'], {'options': {FLAG: True}})
++        self.assertIs(
++            False, PROVIDERS.identity_api.get_user(user['id'])['options'][FLAG]
++        )
++        self.change(user, 'ValidPass1!', 'x')
++
++    def test_strict_schema_limit_survives_regex_exemption(self):
++        self.config_fixture.config(strict_password_check=True)
++        self.config_fixture.config(group='identity', max_password_length=64)
++        importlib.reload(schema)
++        user = self.create(options={FLAG: True})
++        self.change(user, 'ValidPass1!', 'a' * 65, status=400)
++
++    def test_unrelated_options_rename_domain_and_cache(self):
++        user = self.create(
++            options={FLAG: True, 'ignore_password_expiry': True}
++        )
++        PROVIDERS.identity_api.get_user(user['id'])  # populate cache
++        name = uuid.uuid4().hex
++        self.update(
++            user, name=name, options={'multi_factor_auth_enabled': False}
++        )
++        ref = PROVIDERS.identity_api.get_user_by_name(name, self.domain_id)
++        self.assertEqual(user['id'], ref['id'])
++        self.assertIs(True, ref['options'][FLAG])
++        self.assertIs(True, ref['options']['ignore_password_expiry'])
++        self.update(user, options={FLAG: False})
++        self.assertIs(
++            False, PROVIDERS.identity_api.get_user(user['id'])['options'][FLAG]
++        )
++        self.update(user, password='x', status=400)
++        other = unit.new_domain_ref()
++        PROVIDERS.resource_api.create_domain(other['id'], other)
++        human = self.create(name=name, domain_id=other['id'])
++        self.update(human, password='x', status=400)
++        self.update(user, domain_id=other['id'], status=400)
++        self.update(user, id=human['id'], status=400)
++
++    def test_native_first_use_and_lockout_remain_separate(self):
++        self.config_fixture.config(
++            group='security_compliance',
++            change_password_upon_first_use=True,
++            lockout_failure_attempts=4,
++            lockout_duration=600,
++            password_expires_days=1,
++        )
++        options = {
++            FLAG: True,
++            'ignore_change_password_upon_first_use': True,
++            'ignore_lockout_failure_attempts': True,
++            'ignore_password_expiry': True,
++        }
++        service = self.create('x', options)
++        for i in range(5):
++            self.assertRaises(
++                AssertionError, self.authenticate, service['id'], 'wrong'
++            )
++        self.authenticate(service['id'], 'x')
++        # The new flag alone does not disable native first-use expiry.
++        other = self.create('x', {FLAG: True})
++        self.assertRaises(
++            exception.PasswordExpired, self.authenticate, other['id'], 'x'
++        )
++        self.change(other, 'x', 'y')
++        for i in range(4):
++            self.assertRaises(
++                AssertionError, self.authenticate, other['id'], 'wrong'
++            )
++        self.assertRaises(
++            exception.Unauthorized, self.authenticate, other['id'], 'y'
++        )
++        human = self.create()
++        self.change(human, 'ValidPass1!', 'NewValid2!')
++        for i in range(4):
++            self.assertRaises(
++                AssertionError, self.authenticate, human['id'], 'wrong'
++            )
++        self.assertRaises(
++            exception.Unauthorized,
++            self.authenticate,
++            human['id'],
++            'NewValid2!',
++        )
++
++    def test_explicit_operator_policy_override(self):
++        self.config_fixture.config(group='oslo_policy', enforce_scope=True)
++        rules = oslo_policy.Rules.from_dict(
++            {
++                'identity:manage_password_policy_exemption': (
++                    f'role:admin and user_id:{self.user_id} and '
++                    f'project_id:{self.project_id}'
++                )
++            }
++        )
++        policy._ENFORCER._enforcer.load_rules()
++        policy._ENFORCER._enforcer.set_rules(rules, overwrite=False)
++        user = self.create('x', {FLAG: True}, token=self.project_token)
++        self.update(user, options={FLAG: None}, token=self.project_token)
++        self.update(user, password='x', status=400)
++
++    def test_audit_classification_contains_no_credentials(self):
++        self.config_fixture.config(notification_format='cadf')
++        log_capture = self.useFixture(
++            fixtures.FakeLogger(
++                name='keystone.identity.core', level=logging.INFO
++            )
++        )
++        # Replace only the notification transport, retaining real CADF events.
++        with mock.patch.object(notifications._get_notifier(), 'info') as send:
++            user = self.create(options={FLAG: True})
++            self.update(user, options={FLAG: None})
++        events = [
++            call.args[2]
++            for call in send.call_args_list
++            if FLAG in str(call.args[2])
++        ]
++        self.assertEqual(2, len(events))
++        for event in events:
++            self.assertIn(user['id'], str(event))
++            self.assertNotIn('ValidPass1!', str(event))
++            self.assertIn('reason', event)
++        log_events = [
++            line
++            for line in log_capture.output.splitlines()
++            if FLAG + ' ' in line
++        ]
++        self.assertEqual(2, len(log_events))
++        for line in log_events:
++            self.assertIn(user['id'], line)
++            self.assertNotIn('ValidPass1!', line)
++            self.assertIn('initiator', line)
++
++    def test_audit_records_explicit_false_assignment(self):
++        self.config_fixture.config(notification_format='cadf')
++        with mock.patch.object(notifications._get_notifier(), 'info') as send:
++            user = self.create(options={FLAG: False})
++            self.update(user, options={FLAG: False})
++        events = [
++            call.args[2]
++            for call in send.call_args_list
++            if FLAG in str(call.args[2])
++        ]
++        self.assertEqual(2, len(events))
++        for event in events:
++            self.assertIn('False', str(event['reason']))
++            self.assertNotIn('ValidPass1!', str(event))
++
++    def test_disabled_service_still_cannot_change_password(self):
++        user = self.create(options={FLAG: True}, enabled=False)
++        self.change(user, 'ValidPass1!', 'x', status=401)
++
++    def test_malformed_json_does_not_modify_classification(self):
++        user = self.create(options={FLAG: True})
++        self.public_app.patch(
++            '/v3/users/' + user['id'],
++            params='{"user":{"options":',
++            headers={'X-Auth-Token': self.system_token},
++            content_type='application/json',
++            status=400,
++        )
++        self.assertIs(
++            True, PROVIDERS.identity_api.get_user(user['id'])['options'][FLAG]
++        )
++
++    def test_service_password_changes_revoke_tokens(self):
++        with freezegun.freeze_time() as clock:
++            user = self.create(options={FLAG: True})
++            for administrative, old, new in (
++                (False, 'ValidPass1!', 'x'),
++                (True, 'x', 'y'),
++            ):
++                auth = self.build_authentication_request(
++                    user_id=user['id'], password=old
++                )
++                response = self.v3_create_token(auth)
++                token = response.headers['X-Subject-Token']
++                clock.tick(datetime.timedelta(seconds=2))
++                if administrative:
++                    self.update(user, password=new)
++                else:
++                    self.change(user, old, new)
++                self.v3_create_token(
++                    self.build_authentication_request(token=token),
++                    expected_status=404,
++                )
++                self.authenticate(user['id'], new)
++                clock.tick(datetime.timedelta(seconds=2))
++
++    def test_domain_disabled_service_cannot_get_token(self):
++        domain = unit.new_domain_ref()
++        PROVIDERS.resource_api.create_domain(domain['id'], domain)
++        user = self.create(options={FLAG: True}, domain_id=domain['id'])
++        PROVIDERS.resource_api.update_domain(domain['id'], {'enabled': False})
++        self.v3_create_token(
++            self.build_authentication_request(
++                user_id=user['id'], password='ValidPass1!'
++            ),
++            expected_status=401,
++        )
++
++
++class PasswordPolicyExemptionSchemaTests(unittest.TestCase):
++    def test_boolean_and_null_classification_accepted(self):
++        for value in (True, False, None):
++            with self.subTest(value=value):
++                validator = jsonschema.Draft7Validator(
++                    schema.user_create_request
++                )
++                self.assertTrue(
++                    validator.is_valid(
++                        {
++                            'user': {
++                                'name': 'service',
++                                'password': 'x',
++                                'options': {FLAG: value},
++                            }
++                        }
++                    )
++                )
+diff --git a/releasenotes/notes/password-policy-exemption-4bf467dde2ba4413.yaml b/releasenotes/notes/password-policy-exemption-4bf467dde2ba4413.yaml
+new file mode 100644
+index 0000000..af4f346
+--- /dev/null
++++ b/releasenotes/notes/password-policy-exemption-4bf467dde2ba4413.yaml
+@@ -0,0 +1,18 @@
++---
++features:
++  - |
++    The Boolean user option ``password_policy_exempt`` explicitly exempts the
++    target identity from password regex checks and SQL self-service password
++    history and minimum-age checks. Password and classification may be sent in
++    the same create or update request. The option uses existing resource-option
++    storage and requires no database migration. It is independent of the native
++    first-use, expiry and lockout exception options.
++security:
++  - |
++    Supplying ``password_policy_exempt`` on user creation or update additionally
++    requires ``identity:manage_password_policy_exemption``, whose default is
++    ``role:admin and system_scope:all`` with no deprecated fallback. The check
++    also protects false values and null removal. Classification assignments are
++    audited without credentials. SQL password checks use transaction-local
++    resource options under a user-row lock instead of cached classification. Old-password authentication, password locks,
++    technical limits and token revocation are preserved.

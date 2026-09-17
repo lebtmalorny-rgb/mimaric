@@ -1,0 +1,154 @@
+> MODULE kolla_service_user (/Users/dmitry/Desktop/debug/password-policy-work/kolla-ansible/ansible/roles/service-ks-register/files/kolla_service_user.py)
+
+  Requires Keystone with the password_policy_exempt resource option
+  patch.
+  Sends the password and exclusions in one request on creation or
+  rotation.
+  Preserves unrelated user options, including multi-factor
+  authentication.
+
+OPTIONS (= indicates it is required):
+
+- api_timeout  How long should the socket layer wait before timing
+                out for API calls. If this is omitted, nothing will be
+                passed to the requests library.
+        default: null
+        type: int
+
+- auth    Dictionary containing auth information as needed by the
+           cloud's auth plugin strategy. For the default `password`
+           plugin, this would contain `auth_url`, `username`,
+           `password`, `project_name` and any information about
+           domains (for example, `user_domain_name` or
+           `project_domain_name`) if the cloud supports them. For
+           other plugins, this param will need to contain whatever
+           parameters that auth plugin requires. This parameter is not
+           needed if a named cloud is provided or OpenStack OS_*
+           environment variables are present.
+        default: null
+        type: dict
+
+- auth_type  Name of the auth plugin to use. If the cloud uses
+              something other than password authentication, the name
+              of the plugin should be indicated here and the contents
+              of the `auth` parameter should be updated accordingly.
+        default: null
+        type: str
+
+- ca_cert  A path to a CA Cert bundle that can be used as part of
+            verifying SSL API requests.
+        aliases: [cacert]
+        default: null
+        type: str
+
+- client_cert  A path to a client certificate to use as part of the
+                SSL transaction.
+        aliases: [cert]
+        default: null
+        type: str
+
+- client_key  A path to a client key to use as part of the SSL
+               transaction.
+        aliases: [key]
+        default: null
+        type: str
+
+- cloud   Named cloud or cloud config to operate against. If `cloud`
+           is a string, it references a named cloud config as defined
+           in an OpenStack clouds.yaml file. Provides default values
+           for `auth` and `auth_type`. This parameter is not needed if
+           `auth` is provided or if OpenStack OS_* environment
+           variables are present. If `cloud` is a dict, it contains a
+           complete cloud configuration like would be in a section of
+           clouds.yaml.
+        default: null
+        type: raw
+
+= default_project  Name or ID of the service project in the same
+                    domain.
+        type: str
+
+= domain  Name or ID of the identity domain.
+        type: str
+
+- interface  Endpoint URL type to fetch from the service catalog.
+        aliases: [endpoint_type]
+        choices: [admin, internal, public]
+        default: public
+        type: str
+
+= name    Exact user name in the selected domain.
+        type: str
+
+= password  Service password, redacted from module output.
+        type: str
+
+- region_name  Name of the region.
+        default: null
+        type: str
+
+- sdk_log_level  Log level of the OpenStackSDK
+        choices: [INFO, DEBUG]
+        default: INFO
+        type: str
+
+- sdk_log_path  Path to the logfile of the OpenStackSDK. If empty no
+                 log is written
+        default: null
+        type: str
+
+- timeout  How long should ansible wait for the requested resource.
+        default: 180
+        type: int
+
+- update_password  Whether to rotate the password of an existing
+                    user.
+        choices: [on_create, always]
+        default: on_create
+        type: str
+
+- validate_certs  Whether or not SSL API requests should be verified.
+                   Before Ansible 2.3 this defaulted to `true'.
+        aliases: [verify]
+        default: null
+        type: bool
+
+- wait    Should ansible wait until the requested resource is
+           complete.
+        default: true
+        type: bool
+
+NOTES:
+      * The standard OpenStack environment variables, such as
+        `OS_USERNAME' may be used instead of providing explicit
+        values.
+      * Auth information is driven by openstacksdk, which means
+        that values can come from a yaml config file in
+        /etc/ansible/openstack.yaml, /etc/openstack/clouds.yaml
+        or ~/.config/openstack/clouds.yaml, then from standard
+        environment variables, then finally by explicit
+        parameters in plays. More information can be found at
+        https://docs.openstack.org/openstacksdk/
+
+REQUIREMENTS:  python >= 3.6, openstacksdk >= 1.0.0
+
+
+AUTHOR: Kolla operators
+
+EXAMPLES:
+- name: Register Nova service identity
+  kolla_service_user:
+    name: nova
+    domain: default
+    default_project: service
+    password: "{{ nova_keystone_password }}"
+    auth: "{{ openstack_keystone_auth }}"
+  no_log: true
+
+RETURN VALUES:
+
+- user_id  ID of the service identity, or null for a check-mode
+            creation.
+        returned: always
+        type: str
+

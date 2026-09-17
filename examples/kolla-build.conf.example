@@ -1,0 +1,4 @@
+# Use your existing 2025.1 Kolla builder and other build options/patches.
+[keystone-base]
+type = local
+location = /absolute/path/password-policy-patches/keystone-password-policy-source.tar.gz

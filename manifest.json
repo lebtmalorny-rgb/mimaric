@@ -1,0 +1,47 @@
+{
+  "release": "2025.1-password-policy-1",
+  "keystone": {
+    "base": "537e65b2b1d4b8e0fe1faa09c8f882a6b2899b21",
+    "head": "323e6fadc43b342afb9315c0efef837c8dd10320",
+    "source_version": "27.1.1.dev1+passwordpolicy.1"
+  },
+  "kolla": {
+    "base_snapshot": "54f4ee851cc2fc5db1068a8c5807f2b8e8e2c475",
+    "head": "0f9aac2d479087808283ddb7fa382b6a8a1db00c",
+    "original_zip_sha256": "bbb7bfb1398cbe07a12e374cae56f03e9e5c192798cf3ff7842aa75d8c2d7e44"
+  },
+  "verification": {
+    "keystone_selected_suite": {
+      "passed": 1037,
+      "skipped": 3,
+      "failed": 0
+    },
+    "keystone_post_import_feature": {
+      "passed": 31,
+      "failed": 0
+    },
+    "kolla_targeted": {
+      "passed": 37,
+      "failed": 0
+    },
+    "patch_roundtrips": "PASS",
+    "sdist_matches_final_source": true,
+    "linux_image_built": false,
+    "cluster_deployed": false,
+    "baseline_failures_documented": true
+  },
+  "artifacts": {
+    "keystone-password-policy-exempt.patch": {
+      "sha256": "8c93b5c127b1e0101204c8a936552fe3f334eaab84dcd54aef9bf183dc603877",
+      "bytes": 41257
+    },
+    "kolla-service-password-policy.patch": {
+      "sha256": "fecc43a60e85f9fe9dc1dccfa86a6c443d51bc6a9b69fdf81637a880555c8e3a",
+      "bytes": 26343
+    },
+    "keystone-password-policy-source.tar.gz": {
+      "sha256": "4b587836f362d903a5ace0147f7e4876ccc06607e109f619262879f03e3384fd",
+      "bytes": 1686660
+    }
+  }
+}

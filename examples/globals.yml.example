@@ -1,0 +1,9 @@
+---
+# Enable after all Keystone workers understand PPEX and the operator policy
+# is installed. Preserve your existing image/registry settings.
+keystone_tag: "2025.1-password-policy-1"
+keystone_service_password_policy_exempt: true
+
+# During initial classification only: avoid rotating existing service passwords.
+# Restore your normal rotation setting afterwards.
+update_keystone_service_user_passwords: false
