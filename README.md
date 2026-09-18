@@ -1,6 +1,6 @@
 # Документация OpenStack / PVS
 
-Ветка `docs/all-markdown` содержит только Markdown. Собраны документы из всех веток `mimaric` и локальные материалы по подготовке PVS. Одинаковые файлы объединены; отличающиеся редакции сохранены отдельно.
+Ветка `docs/all-markdown` содержит документацию в Markdown и версию руководства по OpenStack CLI в DOCX. Собраны документы из всех веток `mimaric` и локальные материалы по подготовке PVS. Одинаковые файлы объединены; отличающиеся редакции сохранены отдельно.
 
 ## Основные документы
 
@@ -13,6 +13,7 @@
 | TLS и mTLS | [TLS/mTLS](TLS_MTLS_WORKFLOWS_FROM_ANSIBLE.md) |
 | Cinder: NFS, Huawei и подготовка backend | [Cinder](CINDER_BACKENDS_FROM_ANSIBLE.md) |
 | Glance, общее хранилище и отказоустойчивость | [Glance и storage HA](GLANCE_CINDER_SHARED_STORAGE_AND_HA.md) |
+| Администрирование OpenStack CLI, включая Mistral, Masakari, Watcher и Ironic | [Руководство Markdown](OPENSTACK_CLI_ADMIN_GUIDE_2025.1.md) · [Версия DOCX](OPENSTACK_CLI_ADMIN_GUIDE_2025.1.docx) |
 | OpenStack CLI и Horizon 2025.1 | [Сравнение CLI/Horizon](docs/openstack-cli-horizon-2025.1/README.md) |
 | PowerOps | [Обзор](docs/POWEROPS-OVERVIEW.md) |
 | FRR и anycast VIP | [PowerOps FRR](docs/POWEROPS-FRR-VIP-ANYCAST.md) |
@@ -34,7 +35,7 @@
 
 ## Как читать ссылки и примеры
 
-Код, патчи, CSV/TSV, JSON и другие приложения в эту ветку не включены. Ссылки на существующие приложения ведут на зафиксированные исходные коммиты. Для запуска команд используйте соответствующую ветку кода или архивный тег из реестра; checkout этой ветки предоставляет только документы.
+Код, патчи, CSV/TSV, JSON и другие технические приложения в эту ветку не включены. Руководство по OpenStack CLI доступно в Markdown и DOCX. Ссылки на существующие приложения ведут на зафиксированные исходные коммиты. Для запуска команд используйте соответствующую ветку кода или архивный тег из реестра; checkout этой ветки предоставляет только документы.
 
 Пути `kolla-ansible-pvs_1.0.0/...` относятся к исходному архиву `kolla-ansible-pvs_1.0.0_14.09.zip`, который предоставляется отдельно. Старые документы и планы сохраняют свой исходный контекст и не подтверждают состояние работающего кластера.
 
